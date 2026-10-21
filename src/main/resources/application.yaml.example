@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: AIoTLibTQB
+
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://root:root@localhost:27017/aiot_identity_db?authSource=admin}
+      auto-index-creation: true
+
+server:
+  address: 0.0.0.0
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+
+jwt:
+  # Secret key HMAC-SHA512 tối thiểu 64 ký tự (cần thay thế bằng key bí mật thực tế của môi trường)
+  secret-key: ${JWT_SECRET:YOUR_SECURE_HMAC_SHA512_SECRET_KEY_AT_LEAST_64_CHARACTERS_LONG_HERE}
+  expiration-hours: ${JWT_EXPIRATION_HOURS:1}
+  refreshable-hours: ${JWT_REFRESHABLE_HOURS:24}
+  issuer: ${JWT_ISSUER:AIoTLibTQB.com}
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:8081}
+
+mqtt:
+  broker-url: ${MQTT_BROKER_URL:tcp://localhost:1883}
+  client-id: ${MQTT_CLIENT_ID:aiot_backend_consumer}
+  username: ${MQTT_USERNAME:aiot_backend}
+  password: ${MQTT_PASSWORD:your_mqtt_broker_password_here}
+  default-telemetry-topic: ${MQTT_TELEMETRY_TOPIC:devices/+/telemetry}
+  default-status-topic: ${MQTT_STATUS_TOPIC:devices/+/status}
+
+app:
+  security:
+    initial-admin-password: ${INITIAL_ADMIN_PASSWORD:}

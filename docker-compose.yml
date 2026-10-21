@@ -1,0 +1,70 @@
+
+services:
+
+  mongodb:
+    image: mongo:8.0
+    container_name: aiot_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+      MONGO_INITDB_DATABASE: aiot_identity_db
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - aiot_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: aiot_mongo_express
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: root
+      ME_CONFIG_MONGODB_URL: mongodb://root:root@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+    ports:
+      - "8081:8081"
+    networks:
+      - aiot_network
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: aiot_mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/config/password.txt:/mosquitto/config/password.txt:ro
+      - ./mosquitto/config/acl.conf:/mosquitto/config/acl.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - aiot_network
+
+volumes:
+  mongo_data:
+    name: aiot_mongo_data
+  mosquitto_data:
+    name: aiot_mosquitto_data
+  mosquitto_log:
+    name: aiot_mosquitto_log
+
+networks:
+  aiot_network:
+    name: aiot_network
+    driver: bridge
+
