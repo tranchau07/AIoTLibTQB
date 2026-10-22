@@ -58,4 +58,13 @@ class TelemetryControllerTest {
         assertThat(response.getResult().getDataPoints()).hasSize(1);
         verify(telemetryService, times(1)).getBucketsByRoomId(roomId, interval, start, end);
     }
+
+    @Test
+    @DisplayName("GET /api/v1/telemetry/overview/summary - Trả về kết quả summary khi cache rỗng")
+    void getOverviewSummary_returnsEmptySummary() {
+        ApiResponse<com.example.AIoTLibTQB.dto.response.TelemetrySummaryResponse> response = telemetryController.getOverviewSummary();
+        assertThat(response).isNotNull();
+        assertThat(response.getResult()).isNotNull();
+        assertThat(response.getResult().getTotalRooms()).isEqualTo(0);
+    }
 }

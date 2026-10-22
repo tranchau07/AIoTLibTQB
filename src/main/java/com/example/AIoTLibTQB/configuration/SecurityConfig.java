@@ -58,6 +58,8 @@ public class SecurityConfig {
 
                     .requestMatchers(HttpMethod.POST, PUBLIC_POST_ENDPOINTS).permitAll()
 
+                    .requestMatchers("/ws-aiot/**").permitAll()
+
                     .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2

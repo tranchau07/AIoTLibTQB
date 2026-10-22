@@ -6,6 +6,7 @@ import com.example.AIoTLibTQB.document.TelemetryMetadata;
 import com.example.AIoTLibTQB.document.TelemetryRecord;
 import com.example.AIoTLibTQB.dto.mqtt.StatusPayload;
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
+import com.example.AIoTLibTQB.dto.response.TelemetryResponse;
 import com.example.AIoTLibTQB.repository.DeviceRepository;
 import com.example.AIoTLibTQB.repository.TelemetryRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -55,6 +56,14 @@ public class MqttMessageDispatcherService {
 
     public void setDeviceWatchdogService(DeviceWatchdogService deviceWatchdogService) {
         this.deviceWatchdogService = deviceWatchdogService;
+    }
+
+    @Autowired(required = false)
+    @lombok.experimental.NonFinal
+    LatestTelemetryCache latestTelemetryCache;
+
+    public void setLatestTelemetryCache(LatestTelemetryCache latestTelemetryCache) {
+        this.latestTelemetryCache = latestTelemetryCache;
     }
 
     private static final Duration LAST_SEEN_THROTTLE_WINDOW = Duration.ofSeconds(30);
@@ -252,6 +261,19 @@ public class MqttMessageDispatcherService {
                     return;
                 }
                 telemetryRepository.save(record);
+                if (latestTelemetryCache != null && device.getRoomId() != null) {
+                    TelemetryResponse response = TelemetryResponse.builder()
+                            .id(record.getId())
+                            .timestamp(record.getTimestamp())
+                            .metadata(record.getMetadata())
+                            .acoustics(record.getAcoustics())
+                            .airQuality(record.getAirQuality())
+                            .environment(record.getEnvironment())
+                            .comfortScore(record.getComfortScore())
+                            .wifiRssi(record.getWifiRssi())
+                            .build();
+                    latestTelemetryCache.putRoomTelemetry(device.getRoomId(), response);
+                }
                 log.debug("Saved telemetry record for device: hardwareId={}, roomId={}, ts={}",
                         hardwareId, device.getRoomId(), timestamp);
             } catch (InterruptedException e) {
