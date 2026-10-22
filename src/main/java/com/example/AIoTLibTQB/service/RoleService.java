@@ -78,7 +78,17 @@ public class RoleService {
     }
 
     public void delete(String name) {
+        Query query = Query.query(Criteria.where("roles.name").is(name));
+        Update update = new Update().pull("roles", Query.query(Criteria.where("name").is(name)));
+        UpdateResult result = mongoTemplate.updateMulti(query, update, User.class);
+        if (result != null) {
+            log.info("Revoked role '{}' from {} user(s) via updateMulti", name, result.getModifiedCount());
+        }
         roleRepository.deleteById(name);
+    }
+
+    public void deleteRole(String name) {
+        delete(name);
     }
 
     private void syncRoleInUsers(Role updatedRole) {

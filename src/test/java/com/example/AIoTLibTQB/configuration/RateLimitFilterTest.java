@@ -1,4 +1,4 @@
-package com.example.AIoTLibTQB.configuration;
+﻿package com.example.AIoTLibTQB.configuration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
@@ -26,8 +26,8 @@ class RateLimitFilterTest {
         FilterChain filterChain = mock(FilterChain.class);
 
         for (int i = 0; i < 10; i++) {
-            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/login");
-            request.setServletPath("/api/auth/login");
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+            request.setServletPath("/api/v1/auth/login");
             request.setRemoteAddr("192.168.1.50");
             MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -40,21 +40,21 @@ class RateLimitFilterTest {
     }
 
     @Test
-    @DisplayName("Request thứ 11 vào /api/auth/login → bị chặn với HTTP 429 Too Many Requests")
+    @DisplayName("Request thứ 11 vào /api/v1/auth/login → bị chặn với HTTP 429 Too Many Requests")
     void login_eleventhRequest_blockedWith429() throws Exception {
         FilterChain filterChain = mock(FilterChain.class);
 
         for (int i = 0; i < 10; i++) {
-            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/login");
-            request.setServletPath("/api/auth/login");
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+            request.setServletPath("/api/v1/auth/login");
             request.setRemoteAddr("10.0.0.99");
             MockHttpServletResponse response = new MockHttpServletResponse();
 
             rateLimitFilter.doFilterInternal(request, response, filterChain);
         }
 
-        MockHttpServletRequest request11 = new MockHttpServletRequest("POST", "/api/auth/login");
-        request11.setServletPath("/api/auth/login");
+        MockHttpServletRequest request11 = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+        request11.setServletPath("/api/v1/auth/login");
         request11.setRemoteAddr("10.0.0.99");
         MockHttpServletResponse response11 = new MockHttpServletResponse();
 
@@ -68,21 +68,21 @@ class RateLimitFilterTest {
     }
 
     @Test
-    @DisplayName("Endpoint login có dấu gạch chéo cuối (/api/auth/login/) vẫn bị áp dụng rate limit")
+    @DisplayName("Endpoint login có dấu gạch chéo cuối (/api/v1/auth/login/) vẫn bị áp dụng rate limit")
     void login_withTrailingSlash_isRateLimited() throws Exception {
         FilterChain filterChain = mock(FilterChain.class);
 
         for (int i = 0; i < 10; i++) {
-            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/login/");
-            request.setServletPath("/api/auth/login/");
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/login/");
+            request.setServletPath("/api/v1/auth/login/");
             request.setRemoteAddr("10.0.0.88");
             MockHttpServletResponse response = new MockHttpServletResponse();
 
             rateLimitFilter.doFilterInternal(request, response, filterChain);
         }
 
-        MockHttpServletRequest request11 = new MockHttpServletRequest("POST", "/api/auth/login/");
-        request11.setServletPath("/api/auth/login/");
+        MockHttpServletRequest request11 = new MockHttpServletRequest("POST", "/api/v1/auth/login/");
+        request11.setServletPath("/api/v1/auth/login/");
         request11.setRemoteAddr("10.0.0.88");
         MockHttpServletResponse response11 = new MockHttpServletResponse();
 
@@ -99,16 +99,16 @@ class RateLimitFilterTest {
 
         // IP 1 gửi 10 request
         for (int i = 0; i < 10; i++) {
-            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/login");
-            request.setServletPath("/api/auth/login");
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+            request.setServletPath("/api/v1/auth/login");
             request.setRemoteAddr("192.168.1.101");
             MockHttpServletResponse response = new MockHttpServletResponse();
             rateLimitFilter.doFilterInternal(request, response, filterChain);
         }
 
         // IP 2 gửi request lần đầu → phải thành công dù IP 1 đã hết quota
-        MockHttpServletRequest requestIp2 = new MockHttpServletRequest("POST", "/api/auth/login");
-        requestIp2.setServletPath("/api/auth/login");
+        MockHttpServletRequest requestIp2 = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+        requestIp2.setServletPath("/api/v1/auth/login");
         requestIp2.setRemoteAddr("192.168.1.102");
         MockHttpServletResponse responseIp2 = new MockHttpServletResponse();
 
@@ -125,8 +125,8 @@ class RateLimitFilterTest {
 
         // Kẻ tấn công từ public IP 203.0.113.5 cố tình giả mạo header X-Forwarded-For khác nhau
         for (int i = 0; i < 10; i++) {
-            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/auth/login");
-            request.setServletPath("/api/auth/login");
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+            request.setServletPath("/api/v1/auth/login");
             request.setRemoteAddr("203.0.113.5"); // Public IP, không phải trusted proxy
             request.addHeader("X-Forwarded-For", "1.2.3." + i);
             MockHttpServletResponse response = new MockHttpServletResponse();
@@ -135,8 +135,8 @@ class RateLimitFilterTest {
         }
 
         // Request thứ 11 với header X-Forwarded-For mới vẫn phải bị chặn vì IP thật là 203.0.113.5
-        MockHttpServletRequest request11 = new MockHttpServletRequest("POST", "/api/auth/login");
-        request11.setServletPath("/api/auth/login");
+        MockHttpServletRequest request11 = new MockHttpServletRequest("POST", "/api/v1/auth/login");
+        request11.setServletPath("/api/v1/auth/login");
         request11.setRemoteAddr("203.0.113.5");
         request11.addHeader("X-Forwarded-For", "9.9.9.9");
         MockHttpServletResponse response11 = new MockHttpServletResponse();
@@ -147,13 +147,13 @@ class RateLimitFilterTest {
     }
 
     @Test
-    @DisplayName("Endpoint khác (GET /api/users) không bị áp rate limit")
+    @DisplayName("Endpoint khác (GET /api/v1/users) không bị áp rate limit")
     void otherEndpoints_notRateLimited() throws Exception {
         FilterChain filterChain = mock(FilterChain.class);
 
         for (int i = 0; i < 15; i++) {
-            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/users");
-            request.setServletPath("/api/users");
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/users");
+            request.setServletPath("/api/v1/users");
             request.setRemoteAddr("192.168.1.50");
             MockHttpServletResponse response = new MockHttpServletResponse();
 

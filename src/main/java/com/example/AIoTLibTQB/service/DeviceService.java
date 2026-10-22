@@ -19,7 +19,11 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import com.example.AIoTLibTQB.document.User;
 import com.example.AIoTLibTQB.dto.request.DeviceUpdateRequest;
+import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
@@ -31,7 +35,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class DeviceService {
 
@@ -40,6 +43,23 @@ public class DeviceService {
     AuthenticationService authenticationService;
     UserRepository userRepository;
     DiscoveredDeviceService discoveredDeviceService;
+    @NonFinal
+    DeviceMetadataCache deviceMetadataCache;
+
+    public DeviceService(
+            DeviceRepository deviceRepository,
+            PasswordEncoder passwordEncoder,
+            AuthenticationService authenticationService,
+            UserRepository userRepository,
+            DiscoveredDeviceService discoveredDeviceService,
+            @Autowired(required = false) DeviceMetadataCache deviceMetadataCache) {
+        this.deviceRepository = deviceRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.authenticationService = authenticationService;
+        this.userRepository = userRepository;
+        this.discoveredDeviceService = discoveredDeviceService;
+        this.deviceMetadataCache = deviceMetadataCache;
+    }
 
     private static final long ONLINE_THRESHOLD_MINUTES = 5L;
 
@@ -89,6 +109,56 @@ public class DeviceService {
         return deviceRepository.findAll().stream()
                 .map(this::toDeviceResponse)
                 .collect(Collectors.toList());
+    }
+
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
+    public PageResponse<DeviceResponse> getAll(Pageable pageable, String zoneId, String roomId) {
+        if (zoneId != null && !zoneId.isBlank()) {
+            List<Device> devices = deviceRepository.findByZoneId(zoneId);
+            if (roomId != null && !roomId.isBlank()) {
+                devices = devices.stream()
+                        .filter(d -> roomId.equals(d.getRoomId()))
+                        .collect(Collectors.toList());
+            }
+            return toPageResponse(devices, pageable);
+        }
+
+        if (roomId != null && !roomId.isBlank()) {
+            List<Device> devices = deviceRepository.findByRoomId(roomId);
+            return toPageResponse(devices, pageable);
+        }
+
+        Page<Device> page = deviceRepository.findAll(pageable);
+        List<DeviceResponse> content = page.getContent().stream()
+                .map(this::toDeviceResponse)
+                .collect(Collectors.toList());
+
+        return PageResponse.<DeviceResponse>builder()
+                .content(content)
+                .page(page.getNumber())
+                .size(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .last(page.isLast())
+                .build();
+    }
+
+    private PageResponse<DeviceResponse> toPageResponse(List<Device> list, Pageable pageable) {
+        int start = (int) pageable.getOffset();
+        int end = Math.min(start + pageable.getPageSize(), list.size());
+        List<Device> sub = (start <= list.size()) ? list.subList(start, end) : List.of();
+        List<DeviceResponse> content = sub.stream().map(this::toDeviceResponse).collect(Collectors.toList());
+        int totalPages = pageable.getPageSize() == 0 ? 1 : (int) Math.ceil((double) list.size() / pageable.getPageSize());
+        boolean isLast = (long) (pageable.getPageNumber() + 1) * pageable.getPageSize() >= list.size();
+
+        return PageResponse.<DeviceResponse>builder()
+                .content(content)
+                .page(pageable.getPageNumber())
+                .size(pageable.getPageSize())
+                .totalElements(list.size())
+                .totalPages(totalPages)
+                .last(isLast)
+                .build();
     }
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE')")
@@ -148,22 +218,31 @@ public class DeviceService {
             device.setFirmwareVersion(request.getFirmwareVersion());
         }
 
-        return toDeviceResponse(deviceRepository.save(device));
+        Device saved = deviceRepository.save(device);
+        if (deviceMetadataCache != null && saved.getHardwareId() != null) {
+            deviceMetadataCache.invalidate(saved.getHardwareId());
+        }
+        return toDeviceResponse(saved);
     }
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
     public DeviceResponse toggleStatus(String id, boolean active) {
         Device device = findById(id);
         device.setActive(active);
-        return toDeviceResponse(deviceRepository.save(device));
+        Device saved = deviceRepository.save(device);
+        if (deviceMetadataCache != null && saved.getHardwareId() != null) {
+            deviceMetadataCache.invalidate(saved.getHardwareId());
+        }
+        return toDeviceResponse(saved);
     }
 
     @PreAuthorize("hasAuthority('ADMIN')")
     public void delete(String id) {
-        if (!deviceRepository.existsById(id)) {
-            throw new AppException(ErrorCode.DEVICE_NOT_EXISTED);
-        }
+        Device device = findById(id);
         deviceRepository.deleteById(id);
+        if (deviceMetadataCache != null && device.getHardwareId() != null) {
+            deviceMetadataCache.invalidate(device.getHardwareId());
+        }
     }
 
     public void updateLastSeen(String deviceId) {

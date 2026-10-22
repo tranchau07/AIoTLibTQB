@@ -28,6 +28,8 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -38,7 +40,8 @@ import java.util.regex.Pattern;
 public class MqttMessageDispatcherService {
 
     ObjectMapper objectMapper;
-    DeviceRepository deviceRepository;
+    DeviceMetadataCache deviceMetadataCache;
+    AlertService alertService;
     TelemetryRepository telemetryRepository;
     TelemetrySanitizerService telemetrySanitizerService;
     DiscoveredDeviceService discoveredDeviceService;
@@ -46,12 +49,17 @@ public class MqttMessageDispatcherService {
     MongoTemplate mongoTemplate;
 
     private static final Duration LAST_SEEN_THROTTLE_WINDOW = Duration.ofSeconds(30);
+    private static final int MONGO_WRITE_PERMITS = 30;
+    private static final long MONGO_ACQUIRE_TIMEOUT_MS = 3000;
 
     @lombok.experimental.PackagePrivate
     Cache<String, Instant> lastSeenThrottleCache = Caffeine.newBuilder()
             .expireAfterWrite(LAST_SEEN_THROTTLE_WINDOW)
             .maximumSize(10_000)
             .build();
+
+    @lombok.experimental.PackagePrivate
+    final Semaphore mongoWriteSemaphore = new Semaphore(MONGO_WRITE_PERMITS, true);
 
     private static final Pattern STATUS_TOPIC_PATTERN = Pattern.compile("^devices/([^/]+)/status$");
     private static final Pattern TELEMETRY_TOPIC_PATTERN = Pattern.compile("^devices/([^/]+)/telemetry$");
@@ -125,6 +133,7 @@ public class MqttMessageDispatcherService {
 
             UpdateResult result = mongoTemplate.updateFirst(query, update, Device.class);
             if (result.getMatchedCount() > 0) {
+                deviceMetadataCache.invalidate(hardwareId);
                 log.info("Device status updated: hardwareId={}, status={}, reason={}",
                         hardwareId, statusPayload.getStatus(), statusPayload.getReason());
             } else {
@@ -150,7 +159,7 @@ public class MqttMessageDispatcherService {
                 return;
             }
 
-            Device device = deviceRepository.findByHardwareId(hardwareId).orElse(null);
+            DeviceMetadata device = deviceMetadataCache.get(hardwareId).orElse(null);
 
             if (device == null) {
                 discoveredDeviceService.recordDiscovered(hardwareId, telemetryPayload.getWifiRssi());
@@ -172,6 +181,11 @@ public class MqttMessageDispatcherService {
                         Device.class
                 );
                 lastSeenThrottleCache.put(hardwareId, Instant.now());
+            }
+
+            // Đánh giá cảnh báo FSM theo thời gian thực (in-memory, không query DB)
+            if (alertService != null) {
+                alertService.evaluateTelemetry(device.getId(), device.getHardwareId(), device.getRoomId(), telemetryPayload.getData());
             }
 
             // Lọc và làm sạch dữ liệu cảm biến
@@ -204,9 +218,26 @@ public class MqttMessageDispatcherService {
                     .wifiRssi(telemetryPayload.getWifiRssi())
                     .build();
 
-            telemetryRepository.save(record);
-            log.debug("Saved telemetry record for device: hardwareId={}, roomId={}, ts={}",
-                    hardwareId, device.getRoomId(), timestamp);
+            // Bảo vệ tải ghi đồng thời vào MongoDB bằng Semaphore
+            boolean acquired = false;
+            try {
+                acquired = mongoWriteSemaphore.tryAcquire(MONGO_ACQUIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                if (!acquired) {
+                    log.warn("MongoDB write throttled: semaphore acquisition timed out after {}ms for hardwareId={}",
+                            MONGO_ACQUIRE_TIMEOUT_MS, hardwareId);
+                    return;
+                }
+                telemetryRepository.save(record);
+                log.debug("Saved telemetry record for device: hardwareId={}, roomId={}, ts={}",
+                        hardwareId, device.getRoomId(), timestamp);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while waiting for MongoDB write semaphore for hardwareId={}: {}", hardwareId, e.getMessage());
+            } finally {
+                if (acquired) {
+                    mongoWriteSemaphore.release();
+                }
+            }
 
         } catch (Exception e) {
             log.error("Error handling telemetry message for hardwareId={}: {}", topicHardwareId, e.getMessage(), e);

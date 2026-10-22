@@ -32,7 +32,7 @@ import java.util.Set;
 public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final Set<String> RATE_LIMITED_ENDPOINTS = Set.of(
-            "/api/auth/login",
+            "/api/v1/auth/login",
             "/api/v1/devices/authenticate"
     );
 

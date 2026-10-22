@@ -1,4 +1,4 @@
-package com.example.AIoTLibTQB.configuration;
+﻿package com.example.AIoTLibTQB.configuration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,7 +46,7 @@ class JwtAuthenticationEntryPointTest {
     @DisplayName("Commence khi token hết hạn → trả về message hướng dẫn refresh")
     void commence_expiredTokenException_returnsExpiredMessage() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setRequestURI("/api/users/myInfo");
+        request.setRequestURI("/api/v1/users/myInfo");
         MockHttpServletResponse response = new MockHttpServletResponse();
         AuthenticationException authException = new BadCredentialsException("Jwt expired at 2026-10-09T00:00:00Z");
 

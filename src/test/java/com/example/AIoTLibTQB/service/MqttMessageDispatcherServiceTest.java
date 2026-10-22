@@ -4,7 +4,6 @@ import com.example.AIoTLibTQB.document.AcousticMetrics;
 import com.example.AIoTLibTQB.document.ComfortScoreRecord;
 import com.example.AIoTLibTQB.document.Device;
 import com.example.AIoTLibTQB.document.TelemetryRecord;
-import com.example.AIoTLibTQB.repository.DeviceRepository;
 import com.example.AIoTLibTQB.repository.TelemetryRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.client.result.UpdateResult;
@@ -33,7 +32,8 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class MqttMessageDispatcherServiceTest {
 
-    @Mock DeviceRepository deviceRepository;
+    @Mock DeviceMetadataCache deviceMetadataCache;
+    @Mock AlertService alertService;
     @Mock TelemetryRepository telemetryRepository;
     @Mock TelemetrySanitizerService telemetrySanitizerService;
     @Mock DiscoveredDeviceService discoveredDeviceService;
@@ -43,23 +43,25 @@ class MqttMessageDispatcherServiceTest {
 
     @InjectMocks MqttMessageDispatcherService dispatcherService;
 
-    Device mockDevice;
+    DeviceMetadata mockDevice;
 
     @BeforeEach
     void setUp() {
-        mockDevice = Device.builder()
+        mockDevice = DeviceMetadata.builder()
                 .id("dev-1")
                 .hardwareId("ESP32_ROOM_101")
                 .roomId("room-1")
+                .zoneId("zone-A")
+                .deviceType("ESP32_S3")
                 .isActive(true)
                 .build();
         dispatcherService.lastSeenThrottleCache.invalidateAll();
     }
 
     @Test
-    @DisplayName("dispatch() - Nhận telemetry từ thiết bị hợp lệ -> Cập nhật nguyên tử và lưu vào Time-Series")
+    @DisplayName("dispatch() - Nhận telemetry từ thiết bị hợp lệ -> Cập nhật nguyên tử, đánh giá alert và lưu vào Time-Series")
     void dispatch_telemetry_registeredDevice() {
-        when(deviceRepository.findByHardwareId("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
         when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
                 new TelemetrySanitizerService.SanitizedMetrics(
                         AcousticMetrics.builder().noiseAvg(42.0).build(), null, null)
@@ -83,15 +85,15 @@ class MqttMessageDispatcherServiceTest {
         dispatcherService.dispatch(msg);
 
         verify(mongoTemplate).updateFirst(any(), any(), eq(Device.class));
-        verify(deviceRepository, never()).save(any());
         verify(telemetryRepository).save(any(TelemetryRecord.class));
         verify(discoveredDeviceService, never()).recordDiscovered(any(), any());
+        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), any());
     }
 
     @Test
     @DisplayName("dispatch() - Nhận telemetry từ thiết bị lạ -> Ghi nhận vào hàng đợi discovery và không lưu DB")
     void dispatch_telemetry_unregisteredDevice() {
-        when(deviceRepository.findByHardwareId("ESP32_UNKNOWN")).thenReturn(Optional.empty());
+        when(deviceMetadataCache.get("ESP32_UNKNOWN")).thenReturn(Optional.empty());
 
         String json = """
         {
@@ -110,10 +112,11 @@ class MqttMessageDispatcherServiceTest {
         verify(discoveredDeviceService).recordDiscovered("ESP32_UNKNOWN", -72);
         verify(telemetryRepository, never()).save(any());
         verify(mongoTemplate, never()).updateFirst(any(), any(), eq(Device.class));
+        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any());
     }
 
     @Test
-    @DisplayName("dispatch() - Nhận status (LWT) từ thiết bị đã đăng ký -> Cập nhật nguyên tử offline không đổi lastSeenAt")
+    @DisplayName("dispatch() - Nhận status (LWT) từ thiết bị đã đăng ký -> Cập nhật offline và invalidate cache")
     void dispatch_status_knownDevice() {
         when(mongoTemplate.updateFirst(any(), any(), eq(Device.class)))
                 .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
@@ -133,7 +136,7 @@ class MqttMessageDispatcherServiceTest {
         dispatcherService.dispatch(msg);
 
         verify(mongoTemplate).updateFirst(any(), any(), eq(Device.class));
-        verify(deviceRepository, never()).save(any());
+        verify(deviceMetadataCache).invalidate("ESP32_ROOM_101");
         verify(discoveredDeviceService, never()).recordDiscovered(any(), any());
     }
 
@@ -154,7 +157,7 @@ class MqttMessageDispatcherServiceTest {
 
         dispatcherService.dispatch(msg);
 
-        verify(deviceRepository, never()).findByHardwareId(any());
+        verify(deviceMetadataCache, never()).get(any());
         verify(telemetryRepository, never()).save(any());
         verify(mongoTemplate, never()).updateFirst(any(), any(), eq(Device.class));
     }
@@ -162,7 +165,7 @@ class MqttMessageDispatcherServiceTest {
     @Test
     @DisplayName("dispatch() - Kẹp timestamp năm 1970 (chưa sync NTP) về thời gian server (H4)")
     void dispatch_telemetry_timestampClamping() {
-        when(deviceRepository.findByHardwareId("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
         when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
                 new TelemetrySanitizerService.SanitizedMetrics(
                         AcousticMetrics.builder().noiseAvg(42.0).build(), null, null)
@@ -185,7 +188,6 @@ class MqttMessageDispatcherServiceTest {
         ArgumentCaptor<TelemetryRecord> captor = ArgumentCaptor.forClass(TelemetryRecord.class);
         verify(telemetryRepository).save(captor.capture());
 
-        // Timestamp phải được kẹp về khoảng thời gian hiện tại thay vì epoch 100s
         Instant savedTs = captor.getValue().getTimestamp();
         assertThat(Duration.between(savedTs, Instant.now()).abs().toSeconds()).isLessThan(5);
     }
@@ -193,7 +195,7 @@ class MqttMessageDispatcherServiceTest {
     @Test
     @DisplayName("dispatch() - R3: Bỏ qua không lưu DB khi toàn bộ số liệu cảm biến đều null (Empty Record)")
     void dispatch_telemetry_emptyMetrics_discardedWithoutDbInsertion() {
-        when(deviceRepository.findByHardwareId("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
         when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
                 new TelemetrySanitizerService.SanitizedMetrics(null, null, null)
         );
@@ -212,14 +214,13 @@ class MqttMessageDispatcherServiceTest {
 
         dispatcherService.dispatch(msg);
 
-        // telemetryRepository.save KHÔNG ĐƯỢC PHÉP GỌI
         verify(telemetryRepository, never()).save(any());
     }
 
     @Test
     @DisplayName("dispatch() - R4: Throttling ghi lastSeenAt trong 30 giây (chỉ update MongoDB 1 lần)")
     void dispatch_telemetry_throttling_lastSeenAtOnlyUpdatedOnceWithin30s() {
-        when(deviceRepository.findByHardwareId("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
         when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
                 new TelemetrySanitizerService.SanitizedMetrics(
                         AcousticMetrics.builder().noiseAvg(40.0).build(), null, null)
@@ -240,20 +241,17 @@ class MqttMessageDispatcherServiceTest {
                 .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
                 .build();
 
-        // Gửi 2 bản tin liên tiếp trong vòng 30s
         dispatcherService.dispatch(msg1);
         dispatcherService.dispatch(msg2);
 
-        // mongoTemplate.updateFirst chỉ được gọi 1 lần duy nhất cho Device lastSeenAt
         verify(mongoTemplate, times(1)).updateFirst(any(), any(), eq(Device.class));
-        // Nhưng telemetry record vẫn được lưu cả 2 lần
         verify(telemetryRepository, times(2)).save(any(TelemetryRecord.class));
     }
 
     @Test
     @DisplayName("dispatch() - R1: Hỗ trợ timestamp 13 chữ số (epoch milliseconds)")
     void dispatch_telemetry_13DigitTimestamp_supportedCorrectly() {
-        when(deviceRepository.findByHardwareId("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
         when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
                 new TelemetrySanitizerService.SanitizedMetrics(
                         AcousticMetrics.builder().noiseAvg(43.0).build(), null, null)
@@ -284,7 +282,7 @@ class MqttMessageDispatcherServiceTest {
     @Test
     @DisplayName("dispatch() - Tính toán và lưu trữ ComfortScoreRecord vào TelemetryRecord")
     void dispatch_telemetry_comfortScoreSaved() {
-        when(deviceRepository.findByHardwareId("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
         TelemetrySanitizerService.SanitizedMetrics metrics = new TelemetrySanitizerService.SanitizedMetrics(
                 AcousticMetrics.builder().noiseAvg(34.0).build(), null, null
         );
@@ -316,5 +314,42 @@ class MqttMessageDispatcherServiceTest {
 
         assertThat(captor.getValue().getComfortScore()).isEqualTo(expectedComfort);
         verify(comfortScoreService).calculateForRoom(eq(metrics), eq("room-1"));
+    }
+
+    @Test
+    @DisplayName("Semaphore - Khi cạn kiệt permits, ghi log WARN và an toàn bỏ qua lưu Time-Series không chặn vô hạn")
+    void dispatch_telemetry_semaphoreTimeout_dropsSafely() {
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
+                new TelemetrySanitizerService.SanitizedMetrics(
+                        AcousticMetrics.builder().noiseAvg(50.0).build(), null, null)
+        );
+
+        // Chiếm hết toàn bộ permits của Semaphore
+        int permits = dispatcherService.mongoWriteSemaphore.drainPermits();
+        try {
+            String json = """
+            {
+              "hardware_id": "ESP32_ROOM_101",
+              "timestamp": %d,
+              "data": { "acoustics": { "noise_avg": 50.0 } }
+            }
+            """.formatted(Instant.now().getEpochSecond());
+
+            var msg = MessageBuilder.withPayload(json)
+                    .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                    .build();
+
+            // Sẽ cố acquire trong 3000ms nhưng thất bại và log WARN
+            dispatcherService.dispatch(msg);
+
+            // Xác nhận KHÔNG lưu telemetryRecord vào repository do timeout
+            verify(telemetryRepository, never()).save(any());
+        } finally {
+            dispatcherService.mongoWriteSemaphore.release(permits);
+        }
+
+        // Sau khi release, số permit phải được hoàn trả đầy đủ
+        assertThat(dispatcherService.mongoWriteSemaphore.availablePermits()).isEqualTo(permits);
     }
 }

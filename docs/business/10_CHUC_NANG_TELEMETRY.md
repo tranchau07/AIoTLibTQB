@@ -149,6 +149,27 @@ Hệ thống định nghĩa các ngưỡng hằng số vật lý tiêu chuẩn n
 | **Môi trường (Env)** | Độ ẩm tương đối (`humidity`) | %RH | **[0.0, 100.0]** | SHT30 / BME280 | Từ chối số đo, kích hoạt Forward-fill `[Code: dòng 31-32, 94]` |
 | **Môi trường (Env)** | Cường độ ánh sáng (`lux`) | Lux | **[0.0, 65535.0]** | BH1750 (16-bit) | Từ chối số đo, kích hoạt Forward-fill `[Code: dòng 33-34, 95]` |
 
+### 1.1. SƠ ĐỒ ÁNH XẠ CHÂN PHẦN CỨNG VI ĐIỀU KHIỂN (HARDWARE PINOUT MAPPING)
+
+Dành cho lập trình viên Firmware (ESP32-S3) và kỹ thuật viên bảo trì phần cứng:
+
+* **Micro I2S (Cổng P2 - Đo Âm Học INMP441):**
+  * `SD` (Serial Data) $\rightarrow$ **GPIO5**
+  * `SCK` (Serial Clock) $\rightarrow$ **GPIO6**
+  * `WS` (Word Select) $\rightarrow$ **GPIO7**
+  * Nguồn cấp: `3.3V` & `GND`
+* **Cảm biến Bụi Sensirion SPS30 (Cổng P5 - Đo Bụi Laser UART):**
+  * `TX_SPS30` (ESP32 TX) $\rightarrow$ **GPIO17**
+  * `RX_SPS30` (ESP32 RX) $\leftarrow$ **GPIO18** (đã qua cầu phân áp an toàn $2.2\text{k}\Omega / 3.3\text{k}\Omega$)
+  * Nguồn cấp: `5V` & `GND`
+* **Bus Cảm biến Môi trường I2C (Cổng P3 & P4 - SHT30/BME280 & BH1750):**
+  * `SCL` $\rightarrow$ **GPIO10** (có trở kéo $4.7\text{k}\Omega$ lên 3.3V)
+  * `SDA` $\rightarrow$ **GPIO11** (có trở kéo $4.7\text{k}\Omega$ lên 3.3V)
+  * Nguồn cấp: `3.3V` & `GND`
+* **Cổng UART Debug / Flash Nạp Firmware (Cổng P1):**
+  * `U0TXD` $\rightarrow$ **GPIO43** (chân RX trên header)
+  * `U0RXD` $\rightarrow$ **GPIO44** (chân TX trên header)
+
 ---
 
 ### 2. CƠ CHẾ BÙ KHUYẾT DỮ LIỆU THIẾU (FORWARD-FILL FALLBACK)

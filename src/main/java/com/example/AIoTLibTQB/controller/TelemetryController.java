@@ -1,6 +1,7 @@
 package com.example.AIoTLibTQB.controller;
 
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
+import com.example.AIoTLibTQB.dto.response.TelemetryBucketResponse;
 import com.example.AIoTLibTQB.dto.response.TelemetryResponse;
 import com.example.AIoTLibTQB.service.TelemetryService;
 import lombok.AccessLevel;
@@ -53,6 +54,17 @@ public class TelemetryController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant end) {
         return ApiResponse.<List<TelemetryResponse>>builder()
                 .result(telemetryService.getHistoryByRoomId(roomId, start, end))
+                .build();
+    }
+
+    @GetMapping("/room/{roomId}/buckets")
+    public ApiResponse<TelemetryBucketResponse> getBucketsByRoomId(
+            @PathVariable String roomId,
+            @RequestParam(defaultValue = "1h") String interval,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant start,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant end) {
+        return ApiResponse.<TelemetryBucketResponse>builder()
+                .result(telemetryService.getBucketsByRoomId(roomId, interval, start, end))
                 .build();
     }
 }

@@ -2,17 +2,21 @@ package com.example.AIoTLibTQB.controller;
 
 import com.example.AIoTLibTQB.dto.request.DeviceAuthRequest;
 import com.example.AIoTLibTQB.dto.request.DeviceRegistrationRequest;
+import com.example.AIoTLibTQB.dto.request.DeviceUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
 import com.example.AIoTLibTQB.dto.response.AuthenticationResponse;
 import com.example.AIoTLibTQB.dto.response.DeviceRegistrationResponse;
 import com.example.AIoTLibTQB.dto.response.DeviceResponse;
 import com.example.AIoTLibTQB.dto.response.DiscoveredDeviceResponse;
+import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.service.DeviceService;
 import com.example.AIoTLibTQB.service.DiscoveredDeviceService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -46,7 +50,7 @@ public class DeviceController {
     @PutMapping("/{id}")
     public ApiResponse<DeviceResponse> update(
             @PathVariable String id,
-            @RequestBody com.example.AIoTLibTQB.dto.request.DeviceUpdateRequest request) {
+            @RequestBody @Valid DeviceUpdateRequest request) {
         return ApiResponse.<DeviceResponse>builder()
                 .result(deviceService.update(id, request))
                 .build();
@@ -67,9 +71,14 @@ public class DeviceController {
     }
 
     @GetMapping
-    public ApiResponse<List<DeviceResponse>> getAll() {
-        return ApiResponse.<List<DeviceResponse>>builder()
-                .result(deviceService.getAll())
+    public ApiResponse<PageResponse<DeviceResponse>> getAll(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String zoneId,
+            @RequestParam(required = false) String roomId) {
+        Pageable pageable = PageRequest.of(page, size);
+        return ApiResponse.<PageResponse<DeviceResponse>>builder()
+                .result(deviceService.getAll(pageable, zoneId, roomId))
                 .build();
     }
 

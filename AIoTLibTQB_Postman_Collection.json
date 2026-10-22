@@ -1,4 +1,4 @@
-{
+﻿{
   "info": {
     "_postman_id": "a9d300b1-3e4b-4890-8889-aiotlibtqb01",
     "name": "AIoTLibTQB - API & Audit Testing Collection",
@@ -122,9 +122,9 @@
               "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/login",
+              "raw": "{{baseUrl}}/api/v1/auth/login",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "login"]
+              "path": ["api", "v1", "auth", "login"]
             }
           }
         },
@@ -165,9 +165,9 @@
               "raw": "{\n  \"token\": \"{{refreshToken}}\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/refresh",
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "refresh"]
+              "path": ["api", "v1", "auth", "refresh"]
             }
           }
         },
@@ -203,9 +203,9 @@
               "raw": "{\n  \"token\": \"{{accessToken}}\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/refresh",
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "refresh"]
+              "path": ["api", "v1", "auth", "refresh"]
             }
           }
         },
@@ -241,9 +241,9 @@
               "raw": "{\n  \"token\": \"{{accessToken}}\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/introspect",
+              "raw": "{{baseUrl}}/api/v1/auth/introspect",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "introspect"]
+              "path": ["api", "v1", "auth", "introspect"]
             }
           }
         },
@@ -275,9 +275,9 @@
               "raw": "{\n  \"token\": \"{{accessToken}}\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/logout",
+              "raw": "{{baseUrl}}/api/v1/auth/logout",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "logout"]
+              "path": ["api", "v1", "auth", "logout"]
             }
           }
         }
@@ -319,14 +319,14 @@
               "raw": "{\n  \"username\": \"testuser_{{$timestamp}}\",\n  \"password\": \"password1234\",\n  \"email\": \"testuser_{{$timestamp}}@example.com\",\n  \"phone\": \"0987654321\",\n  \"assignedZones\": [\"ZONE_A\"]\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/users",
+              "raw": "{{baseUrl}}/api/v1/users",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users"]
+              "path": ["api", "v1", "users"]
             }
           }
         },
         {
-          "name": "2.2 Get My Profile (/api/users/myInfo)",
+          "name": "2.2 Get My Profile (/api/v1/users/myInfo)",
           "event": [
             {
               "listen": "test",
@@ -358,9 +358,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/users/myInfo",
+              "raw": "{{baseUrl}}/api/v1/users/myInfo",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users", "myInfo"]
+              "path": ["api", "v1", "users", "myInfo"]
             }
           }
         },
@@ -393,9 +393,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/users?page=0&size=10&sortBy=createdAt&sortDir=desc",
+              "raw": "{{baseUrl}}/api/v1/users?page=0&size=10&sortBy=createdAt&sortDir=desc",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users"],
+              "path": ["api", "v1", "users"],
               "query": [
                 { "key": "page", "value": "0" },
                 { "key": "size", "value": "10" },
@@ -434,9 +434,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/users/{{createdUserId}}",
+              "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users", "{{createdUserId}}"]
+              "path": ["api", "v1", "users", "{{createdUserId}}"]
             }
           }
         },
@@ -478,9 +478,9 @@
               "raw": "{\n  \"password\": \"newPassword123\",\n  \"email\": \"updated_email@example.com\",\n  \"phone\": \"0912345678\",\n  \"roles\": [\"USER\"],\n  \"assignedZones\": [\"ZONE_A\", \"ZONE_B\"]\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/users/{{createdUserId}}",
+              "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users", "{{createdUserId}}"]
+              "path": ["api", "v1", "users", "{{createdUserId}}"]
             }
           }
         },
@@ -522,9 +522,9 @@
               "raw": "{\n  \"active\": false\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/users/{{createdUserId}}/status",
+              "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}/status",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users", "{{createdUserId}}", "status"]
+              "path": ["api", "v1", "users", "{{createdUserId}}", "status"]
             }
           }
         },
@@ -557,9 +557,9 @@
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/users/{{createdUserId}}",
+              "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "users", "{{createdUserId}}"]
+              "path": ["api", "v1", "users", "{{createdUserId}}"]
             }
           }
         }
@@ -570,7 +570,7 @@
       "description": "Quản lý Role & Permission, xác minh @PreAuthorize (P0), toàn vẹn dữ liệu (P1) và updateMulti (P2)",
       "item": [
         {
-          "name": "3.1 [Test SEC-01] Gọi GET /api/roles không có Token -> Phải bị 401 Unauthorized",
+          "name": "3.1 [Test SEC-01] Gọi GET /api/v1/roles không có Token -> Phải bị 401 Unauthorized",
           "event": [
             {
               "listen": "test",
@@ -591,14 +591,14 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/roles",
+              "raw": "{{baseUrl}}/api/v1/roles",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "roles"]
+              "path": ["api", "v1", "roles"]
             }
           }
         },
         {
-          "name": "3.2 [Test SEC-01] Gọi GET /api/permissions không có Token -> Phải bị 401 Unauthorized",
+          "name": "3.2 [Test SEC-01] Gọi GET /api/v1/permissions không có Token -> Phải bị 401 Unauthorized",
           "event": [
             {
               "listen": "test",
@@ -619,9 +619,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/permissions",
+              "raw": "{{baseUrl}}/api/v1/permissions",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "permissions"]
+              "path": ["api", "v1", "permissions"]
             }
           }
         },
@@ -663,9 +663,9 @@
               "raw": "{\n  \"name\": \"{{testPermissionName}}\",\n  \"description\": \"Permission dùng để kiểm thử toàn vẹn DATA-01\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/permissions",
+              "raw": "{{baseUrl}}/api/v1/permissions",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "permissions"]
+              "path": ["api", "v1", "permissions"]
             }
           }
         },
@@ -698,9 +698,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/permissions",
+              "raw": "{{baseUrl}}/api/v1/permissions",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "permissions"]
+              "path": ["api", "v1", "permissions"]
             }
           }
         },
@@ -742,9 +742,9 @@
               "raw": "{\n  \"name\": \"{{testRoleName}}\",\n  \"description\": \"Role dùng để test PERF-02 và DATA-01\",\n  \"permissions\": [\"{{testPermissionName}}\"]\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/roles",
+              "raw": "{{baseUrl}}/api/v1/roles",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "roles"]
+              "path": ["api", "v1", "roles"]
             }
           }
         },
@@ -777,9 +777,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/roles",
+              "raw": "{{baseUrl}}/api/v1/roles",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "roles"]
+              "path": ["api", "v1", "roles"]
             }
           }
         },
@@ -821,9 +821,9 @@
               "raw": "{\n  \"name\": \"{{testRoleName}}\",\n  \"description\": \"Mô tả cập nhật mới cho testRole\",\n  \"permissions\": [\"{{testPermissionName}}\"]\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/roles/{{testRoleName}}",
+              "raw": "{{baseUrl}}/api/v1/roles/{{testRoleName}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "roles", "{{testRoleName}}"]
+              "path": ["api", "v1", "roles", "{{testRoleName}}"]
             }
           }
         },
@@ -860,9 +860,9 @@
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/permissions/{{testPermissionName}}",
+              "raw": "{{baseUrl}}/api/v1/permissions/{{testPermissionName}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "permissions", "{{testPermissionName}}"]
+              "path": ["api", "v1", "permissions", "{{testPermissionName}}"]
             }
           }
         },
@@ -895,9 +895,9 @@
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/roles/{{testRoleName}}",
+              "raw": "{{baseUrl}}/api/v1/roles/{{testRoleName}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "roles", "{{testRoleName}}"]
+              "path": ["api", "v1", "roles", "{{testRoleName}}"]
             }
           }
         },
@@ -930,9 +930,9 @@
             "method": "DELETE",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/permissions/{{testPermissionName}}",
+              "raw": "{{baseUrl}}/api/v1/permissions/{{testPermissionName}}",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "permissions", "{{testPermissionName}}"]
+              "path": ["api", "v1", "permissions", "{{testPermissionName}}"]
             }
           }
         }

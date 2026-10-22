@@ -3,15 +3,20 @@ package com.example.AIoTLibTQB.service;
 import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.dto.request.RoomCreationRequest;
 import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
+import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.dto.response.RoomResponse;
 import com.example.AIoTLibTQB.enums.ErrorCode;
 import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.exception.AppException;
+import com.example.AIoTLibTQB.repository.DeviceRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
@@ -25,6 +30,7 @@ import java.util.stream.Collectors;
 public class RoomService {
 
     RoomRepository roomRepository;
+    DeviceRepository deviceRepository;
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
     public RoomResponse create(RoomCreationRequest request) {
@@ -53,6 +59,36 @@ public class RoomService {
         return roomRepository.findAll().stream()
                 .map(this::toRoomResponse)
                 .collect(Collectors.toList());
+    }
+
+    public PageResponse<RoomResponse> getAll(Pageable pageable, Integer floor) {
+        if (floor != null) {
+            List<Room> roomsOnFloor = roomRepository.findByFloor(floor);
+            int start = (int) pageable.getOffset();
+            int end = Math.min(start + pageable.getPageSize(), roomsOnFloor.size());
+            List<Room> sub = (start <= roomsOnFloor.size())
+                    ? roomsOnFloor.subList(start, end)
+                    : List.of();
+            Page<Room> page = new PageImpl<>(sub, pageable, roomsOnFloor.size());
+            return PageResponse.<RoomResponse>builder()
+                    .content(page.getContent().stream().map(this::toRoomResponse).collect(Collectors.toList()))
+                    .page(page.getNumber())
+                    .size(page.getSize())
+                    .totalElements(page.getTotalElements())
+                    .totalPages(page.getTotalPages())
+                    .last(page.isLast())
+                    .build();
+        }
+
+        Page<Room> page = roomRepository.findAll(pageable);
+        return PageResponse.<RoomResponse>builder()
+                .content(page.getContent().stream().map(this::toRoomResponse).collect(Collectors.toList()))
+                .page(page.getNumber())
+                .size(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .last(page.isLast())
+                .build();
     }
 
     public RoomResponse getById(String id) {
@@ -107,8 +143,16 @@ public class RoomService {
         if (!roomRepository.existsById(id)) {
             throw new AppException(ErrorCode.ROOM_NOT_EXISTED);
         }
+        if (!deviceRepository.findByRoomId(id).isEmpty()) {
+            throw new AppException(ErrorCode.ROOM_HAS_DEVICES);
+        }
         roomRepository.deleteById(id);
         log.warn("Room deleted: (id={})", id);
+    }
+
+    @PreAuthorize("hasAuthority('ADMIN')")
+    public void deleteRoom(String id) {
+        delete(id);
     }
 
     private Room findRoomById(String id) {

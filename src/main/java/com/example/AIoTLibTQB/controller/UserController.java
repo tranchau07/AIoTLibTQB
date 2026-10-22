@@ -17,7 +17,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class UserController {
@@ -74,7 +74,7 @@ public class UserController {
     @PatchMapping("/{userId}/status")
     public ApiResponse<UserResponse> toggleStatus(
             @PathVariable("userId") String id,
-            @RequestBody UserStatusRequest request) {
+            @RequestBody @Valid UserStatusRequest request) {
         return ApiResponse.<UserResponse>builder()
                 .result(userService.toggleStatus(id, request))
                 .build();

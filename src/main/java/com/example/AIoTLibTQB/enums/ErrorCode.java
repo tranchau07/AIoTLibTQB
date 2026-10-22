@@ -18,6 +18,8 @@ public enum ErrorCode {
     INVALID_MESSAGE_KEY(1004, "Validation key is invalid", HttpStatus.BAD_REQUEST),
     USER_DID_NOT_EXIST(1005, "User does not exist", HttpStatus.NOT_FOUND),
     USER_INACTIVE(1008, "Account is disabled. Please contact administrator", HttpStatus.FORBIDDEN),
+    USERNAME_REQUIRED(1009, "Username is required", HttpStatus.BAD_REQUEST),
+    PASSWORD_REQUIRED(1010, "Password is required", HttpStatus.BAD_REQUEST),
 
     UNAUTHENTICATED(1006, "Unauthenticated", HttpStatus.UNAUTHORIZED),
     UNAUTHORIZED(1007, "You do not have permission", HttpStatus.FORBIDDEN),
@@ -45,8 +47,13 @@ public enum ErrorCode {
     ROOM_CODE_REQUIRED(5003, "Room code is required", HttpStatus.BAD_REQUEST),
     ROOM_NAME_REQUIRED(5004, "Room name is required", HttpStatus.BAD_REQUEST),
     FLOOR_REQUIRED(5005, "Floor is required", HttpStatus.BAD_REQUEST),
+    ROOM_HAS_DEVICES(5006, "Cannot delete room with associated devices", HttpStatus.BAD_REQUEST),
 
     ALERT_NOT_EXISTED(6001, "Alert does not exist", HttpStatus.NOT_FOUND),
+
+    INVALID_TIME_RANGE(7001, "Invalid time range: start must be before end", HttpStatus.BAD_REQUEST),
+    TOO_MANY_BUCKETS(7002, "Too many buckets requested: maximum allowed is 1000", HttpStatus.BAD_REQUEST),
+    INVALID_INTERVAL(7003, "Invalid interval: supported intervals are 15m, 1h, 1d", HttpStatus.BAD_REQUEST),
     ;
 
     int code;

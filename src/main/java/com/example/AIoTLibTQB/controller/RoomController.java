@@ -3,12 +3,15 @@ package com.example.AIoTLibTQB.controller;
 import com.example.AIoTLibTQB.dto.request.RoomCreationRequest;
 import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
+import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.dto.response.RoomResponse;
 import com.example.AIoTLibTQB.service.RoomService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -29,10 +32,13 @@ public class RoomController {
     }
 
     @GetMapping
-    public ApiResponse<List<RoomResponse>> getAll(@RequestParam(required = false) Integer floor) {
-        List<RoomResponse> list = (floor != null) ? roomService.getByFloor(floor) : roomService.getAll();
-        return ApiResponse.<List<RoomResponse>>builder()
-                .result(list)
+    public ApiResponse<PageResponse<RoomResponse>> getAll(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) Integer floor) {
+        Pageable pageable = PageRequest.of(page, size);
+        return ApiResponse.<PageResponse<RoomResponse>>builder()
+                .result(roomService.getAll(pageable, floor))
                 .build();
     }
 
