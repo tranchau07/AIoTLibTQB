@@ -16,6 +16,7 @@ import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -47,6 +48,14 @@ public class MqttMessageDispatcherService {
     DiscoveredDeviceService discoveredDeviceService;
     ComfortScoreService comfortScoreService;
     MongoTemplate mongoTemplate;
+
+    @Autowired(required = false)
+    @lombok.experimental.NonFinal
+    DeviceWatchdogService deviceWatchdogService;
+
+    public void setDeviceWatchdogService(DeviceWatchdogService deviceWatchdogService) {
+        this.deviceWatchdogService = deviceWatchdogService;
+    }
 
     private static final Duration LAST_SEEN_THROTTLE_WINDOW = Duration.ofSeconds(30);
     private static final int MONGO_WRITE_PERMITS = 30;
@@ -172,16 +181,31 @@ public class MqttMessageDispatcherService {
                 return;
             }
 
-            // Cập nhật nguyên tử lastSeenAt có throttling (30s) để giảm Write Amplification
-            Instant lastSeenUpdate = lastSeenThrottleCache.getIfPresent(hardwareId);
-            if (lastSeenUpdate == null) {
-                mongoTemplate.updateFirst(
-                        Query.query(Criteria.where("hardwareId").is(hardwareId)),
-                        new Update().set("lastSeenAt", Instant.now()).set("connectionState", "ONLINE"),
-                        Device.class
-                );
-                lastSeenThrottleCache.put(hardwareId, Instant.now());
+            // Hook Ingestion: Phục hồi ONLINE nhanh không truy vấn DB nếu thiết bị thuộc tập OFFLINE in-memory
+            boolean restoredOnline = false;
+            if (deviceWatchdogService != null) {
+                restoredOnline = deviceWatchdogService.handleIncomingTelemetry(hardwareId);
             }
+
+            if (restoredOnline) {
+                lastSeenThrottleCache.put(hardwareId, Instant.now());
+            } else {
+                // Cập nhật nguyên tử lastSeenAt có throttling (30s) để giảm Write Amplification
+                Instant lastSeenUpdate = lastSeenThrottleCache.getIfPresent(hardwareId);
+                if (lastSeenUpdate == null) {
+                    Update update = new Update().set("lastSeenAt", Instant.now());
+                    if (deviceWatchdogService == null) {
+                        update.set("connectionState", "ONLINE");
+                    }
+                    mongoTemplate.updateFirst(
+                            Query.query(Criteria.where("hardwareId").is(hardwareId)),
+                            update,
+                            Device.class
+                    );
+                    lastSeenThrottleCache.put(hardwareId, Instant.now());
+                }
+            }
+
 
             // Đánh giá cảnh báo FSM theo thời gian thực (in-memory, không query DB)
             if (alertService != null) {
