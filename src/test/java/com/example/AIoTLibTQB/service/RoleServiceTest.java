@@ -180,11 +180,25 @@ class RoleServiceTest {
     class DeleteTests {
 
         @Test
-        @DisplayName("Xóa role gọi repository deleteById")
+        @DisplayName("Xóa role gọi updateMulti $pull thu hồi role khỏi users và deleteById")
         void delete_delegatesToRepository() {
+            when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), eq(User.class)))
+                    .thenReturn(UpdateResult.acknowledged(5, 5L, null));
             doNothing().when(roleRepository).deleteById("TEMP");
 
             roleService.delete("TEMP");
+
+            ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+            ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+            verify(mongoTemplate, times(1)).updateMulti(queryCaptor.capture(), updateCaptor.capture(), eq(User.class));
+
+            Query capturedQuery = queryCaptor.getValue();
+            assertThat(capturedQuery.getQueryObject().toString()).contains("roles.name");
+            assertThat(capturedQuery.getQueryObject().toString()).contains("TEMP");
+
+            Update capturedUpdate = updateCaptor.getValue();
+            assertThat(capturedUpdate.getUpdateObject().toString()).contains("$pull");
+            assertThat(capturedUpdate.getUpdateObject().toString()).contains("roles");
 
             verify(roleRepository).deleteById("TEMP");
         }

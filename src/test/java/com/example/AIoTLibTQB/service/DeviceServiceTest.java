@@ -31,6 +31,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import com.example.AIoTLibTQB.dto.response.PageResponse;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -45,6 +51,7 @@ class DeviceServiceTest {
     @Mock AuthenticationService authenticationService;
     @Mock UserRepository userRepository;
     @Mock DiscoveredDeviceService discoveredDeviceService;
+    @Mock DeviceMetadataCache deviceMetadataCache;
 
     @InjectMocks DeviceService deviceService;
 
@@ -243,6 +250,73 @@ class DeviceServiceTest {
             DeviceResponse response = deviceService.getById("dev-offline");
             assertThat(response.isOnline()).isFalse();
             assertThat(response.getConnectionState()).isEqualTo("OFFLINE");
+        }
+    }
+
+    @Nested
+    @DisplayName("Cache Invalidation & Pagination")
+    class OperationAndCacheTests {
+
+        @Test
+        @DisplayName("update() - Thành công và gọi deviceMetadataCache.invalidate")
+        void update_success_invalidatesCache() {
+            Device d = buildDevice("dev-001", "HW-001", "Z1");
+            when(deviceRepository.findById("dev-001")).thenReturn(Optional.of(d));
+            when(deviceRepository.save(any(Device.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            DeviceUpdateRequest req = DeviceUpdateRequest.builder()
+                    .name("New Name")
+                    .roomId("room-123")
+                    .build();
+
+            DeviceResponse res = deviceService.update("dev-001", req);
+
+            assertThat(res.getName()).isEqualTo("New Name");
+            assertThat(res.getRoomId()).isEqualTo("room-123");
+            verify(deviceMetadataCache).invalidate("HW-001");
+        }
+
+        @Test
+        @DisplayName("toggleStatus() - Thành công và gọi deviceMetadataCache.invalidate")
+        void toggleStatus_success_invalidatesCache() {
+            Device d = buildDevice("dev-001", "HW-001", "Z1");
+            when(deviceRepository.findById("dev-001")).thenReturn(Optional.of(d));
+            when(deviceRepository.save(any(Device.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            DeviceResponse res = deviceService.toggleStatus("dev-001", false);
+
+            assertThat(res.isActive()).isFalse();
+            verify(deviceMetadataCache).invalidate("HW-001");
+        }
+
+        @Test
+        @DisplayName("delete() - Thành công và gọi deviceMetadataCache.invalidate")
+        void delete_success_invalidatesCache() {
+            Device d = buildDevice("dev-001", "HW-001", "Z1");
+            when(deviceRepository.findById("dev-001")).thenReturn(Optional.of(d));
+
+            deviceService.delete("dev-001");
+
+            verify(deviceRepository).deleteById("dev-001");
+            verify(deviceMetadataCache).invalidate("HW-001");
+        }
+
+        @Test
+        @DisplayName("getAll() - Phân trang PageResponse chuẩn")
+        void getAll_paginated_success() {
+            Device d1 = buildDevice("dev-1", "HW-1", "Z1");
+            Device d2 = buildDevice("dev-2", "HW-2", "Z1");
+            Pageable pageable = PageRequest.of(0, 10);
+            Page<Device> page = new PageImpl<>(List.of(d1, d2), pageable, 2);
+
+            when(deviceRepository.findAll(pageable)).thenReturn(page);
+
+            PageResponse<DeviceResponse> res = deviceService.getAll(pageable, null, null);
+
+            assertThat(res.getContent()).hasSize(2);
+            assertThat(res.getTotalElements()).isEqualTo(2);
+            assertThat(res.getPage()).isEqualTo(0);
+            assertThat(res.getSize()).isEqualTo(10);
         }
     }
 }

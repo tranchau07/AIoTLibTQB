@@ -1,12 +1,15 @@
 package com.example.AIoTLibTQB.service;
 
+import com.example.AIoTLibTQB.document.Device;
 import com.example.AIoTLibTQB.document.Point2D;
 import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.dto.request.RoomCreationRequest;
 import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
+import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.dto.response.RoomResponse;
 import com.example.AIoTLibTQB.enums.ErrorCode;
 import com.example.AIoTLibTQB.exception.AppException;
+import com.example.AIoTLibTQB.repository.DeviceRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,6 +17,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.util.List;
@@ -29,6 +36,9 @@ class RoomServiceTest {
 
     @Mock
     RoomRepository roomRepository;
+
+    @Mock
+    DeviceRepository deviceRepository;
 
     @InjectMocks
     RoomService roomService;
@@ -192,10 +202,27 @@ class RoomServiceTest {
     @DisplayName("delete() - Xóa phòng thành công khi ID tồn tại")
     void delete_success() {
         when(roomRepository.existsById("r1")).thenReturn(true);
+        when(deviceRepository.findByRoomId("r1")).thenReturn(List.of());
 
         roomService.delete("r1");
 
         verify(roomRepository).deleteById("r1");
+    }
+
+    @Test
+    @DisplayName("delete() - Ném lỗi ROOM_HAS_DEVICES khi phòng còn thiết bị")
+    void delete_hasAssociatedDevices_throwsRoomHasDevices() {
+        when(roomRepository.existsById("r1")).thenReturn(true);
+        when(deviceRepository.findByRoomId("r1")).thenReturn(List.of(
+                Device.builder().id("dev-1").hardwareId("HW-01").roomId("r1").build()
+        ));
+
+        assertThatThrownBy(() -> roomService.delete("r1"))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getErrorCode())
+                .isEqualTo(ErrorCode.ROOM_HAS_DEVICES);
+
+        verify(roomRepository, never()).deleteById(any());
     }
 
     @Test
@@ -209,5 +236,23 @@ class RoomServiceTest {
                 .isEqualTo(ErrorCode.ROOM_NOT_EXISTED);
 
         verify(roomRepository, never()).deleteById(any());
+    }
+
+    @Test
+    @DisplayName("getAll(pageable, floor) - Trả về phân trang PageResponse chuẩn")
+    void getAll_paginated_success() {
+        Room r1 = buildRoom("r1", "ROOM_101", "P101", 1);
+        Room r2 = buildRoom("r2", "ROOM_102", "P102", 1);
+        Pageable pageable = PageRequest.of(0, 10);
+        Page<Room> page = new PageImpl<>(List.of(r1, r2), pageable, 2);
+
+        when(roomRepository.findAll(pageable)).thenReturn(page);
+
+        PageResponse<RoomResponse> result = roomService.getAll(pageable, null);
+
+        assertThat(result.getContent()).hasSize(2);
+        assertThat(result.getTotalElements()).isEqualTo(2);
+        assertThat(result.getPage()).isEqualTo(0);
+        assertThat(result.getSize()).isEqualTo(10);
     }
 }

@@ -1,4 +1,4 @@
-﻿package com.example.AIoTLibTQB.configuration;
+package com.example.AIoTLibTQB.configuration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
