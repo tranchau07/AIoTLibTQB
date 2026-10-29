@@ -67,7 +67,25 @@ services:
     image: eclipse-mosquitto:2.0
     container_name: aiot_mosquitto
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+    entrypoint:
+      - "/bin/sh"
+      - "-c"
+      - |
+        PASSWD_FILE="/mosquitto/data/password.txt"
+        ACL_FILE="/mosquitto/data/acl.conf"
+        mkdir -p /mosquitto/data /mosquitto/log
+        : > "$$PASSWD_FILE"
+        cp /mosquitto/config/acl.conf "$$ACL_FILE"
+        chmod 0700 "$$PASSWD_FILE" "$$ACL_FILE"
+        mosquitto_passwd -b "$$PASSWD_FILE" "$${MQTT_USERNAME:-aiot_backend}" "$${MQTT_PASSWORD:-CHANGE_ME_LOCAL_DEV_MQTT}"
+        mosquitto_passwd -b "$$PASSWD_FILE" "$${MQTT_ADMIN_USERNAME:-admin}" "$${MQTT_ADMIN_PASSWORD:-CHANGE_ME_LOCAL_DEV_ADMIN}"
+        DEV_PASS="$${MQTT_DEVICE_PASSWORD:-$${MQTT_PASSWORD:-CHANGE_ME_LOCAL_DEV_MQTT}}"
+        for DEV_ID in ESP32S3_ZONE_A_001 ESP32_ROOM_101 ESP32_ROOM_101_CTR ESP32_ROOM_101_DOOR ESP32_ROOM_102 ESP32_ROOM_102_B ESP32_ROOM_102_C ESP32_STORAGE_201 ESP32_STORAGE_201_B ESP32_STORAGE_201_C ESP32_HALL_001_A ESP32_HALL_001_B ESP32_HALL_001_C; do
+          mosquitto_passwd -b "$$PASSWD_FILE" "$$DEV_ID" "$$DEV_PASS"
+        done
+        chown -R mosquitto:mosquitto /mosquitto/data /mosquitto/log 2>/dev/null || true
+        chmod 0700 "$$PASSWD_FILE" "$$ACL_FILE"
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
     environment:
       MQTT_USERNAME: ${MQTT_USERNAME:-aiot_backend}
       MQTT_PASSWORD: ${MQTT_PASSWORD:-CHANGE_ME_LOCAL_DEV_MQTT}
@@ -77,7 +95,6 @@ services:
     ports:
       - "127.0.0.1:1883:1883"
     volumes:
-      - ./mosquitto/docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/config/acl.conf:/mosquitto/config/acl.conf:ro
       - mosquitto_data:/mosquitto/data
