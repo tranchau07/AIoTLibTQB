@@ -1,4 +1,4 @@
-﻿{
+{
   "info": {
     "_postman_id": "a9d300b1-3e4b-4890-8889-aiotlibtqb01",
     "name": "AIoTLibTQB - API & Audit Testing Collection",
@@ -272,7 +272,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"token\": \"{{accessToken}}\"\n}"
+              "raw": "{\n  \"token\": \"{{accessToken}}\",\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/logout",
@@ -1433,7 +1433,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"ROOM_101\",\n  \"name\": \"Phòng đọc Yên tĩnh Tầng 1\",\n  \"floor\": 1,\n  \"capacity\": 60,\n  \"description\": \"Khu vực đọc sách yên tĩnh, trang bị trạm đo âm học và bụi mịn\",\n  \"targetComfortScore\": 85.0,\n  \"boundaryPolygon\": [\n    { \"x\": 0.0, \"y\": 0.0 },\n    { \"x\": 12.0, \"y\": 0.0 },\n    { \"x\": 12.0, \"y\": 8.5 },\n    { \"x\": 0.0, \"y\": 8.5 }\n  ]\n}"
+              "raw": "{\n  \"code\": \"ROOM_101\",\n  \"name\": \"Phòng đọc Yên tĩnh Tầng 1\",\n  \"floor\": 1,\n  \"capacity\": 60,\n  \"description\": \"Khu vực đọc sách yên tĩnh, trang bị trạm đo âm học và bụi mịn\",\n  \"targetComfortScore\": 85.0,\n  \"boundaryPolygon\": [\n    { \"x\": 0.0, \"y\": 0.0 },\n    { \"x\": 0.85, \"y\": 0.0 },\n    { \"x\": 0.85, \"y\": 0.65 },\n    { \"x\": 0.0, \"y\": 0.65 }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms",
@@ -1454,7 +1454,8 @@
                   "});",
                   "var res = pm.response.json();",
                   "pm.test(\"Response returns an array of rooms\", function () {",
-                  "    pm.expect(res.result).to.be.an('array');",
+                  "    var list = res.result && res.result.content ? res.result.content : res.result;",
+                  "    pm.expect(list).to.be.an('array');",
                   "});"
                 ],
                 "type": "text/javascript"
@@ -1493,8 +1494,9 @@
                   "});",
                   "var res = pm.response.json();",
                   "pm.test(\"All returned rooms belong to requested floor\", function () {",
-                  "    pm.expect(res.result).to.be.an('array');",
-                  "    res.result.forEach(function (room) {",
+                  "    var list = res.result && res.result.content ? res.result.content : res.result;",
+                  "    pm.expect(list).to.be.an('array');",
+                  "    list.forEach(function (room) {",
                   "        pm.expect(room.floor).to.eql(1);",
                   "    });",
                   "});"
@@ -1647,7 +1649,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Phòng đọc Chuyên đề Tầng 1 (Đã nâng cấp)\",\n  \"floor\": 1,\n  \"capacity\": 75,\n  \"description\": \"Bổ sung vách cách âm và cảm biến SPS30 nâng cấp\",\n  \"targetComfortScore\": 90.0,\n  \"boundaryPolygon\": [\n    { \"x\": 0.0, \"y\": 0.0 },\n    { \"x\": 14.0, \"y\": 0.0 },\n    { \"x\": 14.0, \"y\": 8.5 },\n    { \"x\": 0.0, \"y\": 8.5 }\n  ]\n}"
+              "raw": "{\n  \"name\": \"Phòng đọc Chuyên đề Tầng 1 (Đã nâng cấp)\",\n  \"floor\": 1,\n  \"capacity\": 75,\n  \"description\": \"Bổ sung vách cách âm và cảm biến SPS30 nâng cấp\",\n  \"targetComfortScore\": 90.0,\n  \"boundaryPolygon\": [\n    { \"x\": 0.0, \"y\": 0.0 },\n    { \"x\": 0.90, \"y\": 0.0 },\n    { \"x\": 0.90, \"y\": 0.70 },\n    { \"x\": 0.0, \"y\": 0.70 }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms/{{roomId}}",

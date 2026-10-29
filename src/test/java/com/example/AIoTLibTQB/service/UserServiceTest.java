@@ -2,6 +2,7 @@ package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.document.Role;
 import com.example.AIoTLibTQB.document.User;
+import com.example.AIoTLibTQB.dto.request.PasswordChangeRequest;
 import com.example.AIoTLibTQB.dto.request.UserCreationRequest;
 import com.example.AIoTLibTQB.dto.request.UserStatusRequest;
 import com.example.AIoTLibTQB.dto.request.UserUpdateRequest;
@@ -18,9 +19,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mapstruct.factory.Mappers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -47,7 +50,7 @@ import static org.mockito.Mockito.*;
 class UserServiceTest {
 
     @Mock UserRepository  userRepository;
-    @Mock UserMapper      userMapper;
+    @Spy  UserMapper      userMapper = Mappers.getMapper(UserMapper.class);
     @Mock PasswordEncoder passwordEncoder;
     @Mock RoleRepository  roleRepository;
 
@@ -343,6 +346,7 @@ class UserServiceTest {
             Authentication auth = mock(Authentication.class);
             SecurityContext ctx = mock(SecurityContext.class);
             doReturn(List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("USER"))).when(auth).getAuthorities();
+            when(auth.getName()).thenReturn("alice");
             when(ctx.getAuthentication()).thenReturn(auth);
 
             try (MockedStatic<SecurityContextHolder> holder = mockStatic(SecurityContextHolder.class)) {
@@ -393,6 +397,128 @@ class UserServiceTest {
                 verify(roleRepository).findAllById(List.of("ADMIN"));
                 assertThat(user.getRoles()).contains(adminRole);
                 assertThat(user.getAssignedZones()).containsExactlyInAnyOrder("P111", "P411");
+            }
+        }
+
+        @Test
+        @DisplayName("User thường update tài khoản của người khác → UNAUTHORIZED và KHÔNG lưu vào DB")
+        void update_nonAdminUpdatingOtherUser_throwsUnauthorizedBeforeSave() {
+            User targetUser = buildUser("id-002", "bob", true);
+            UserUpdateRequest request = UserUpdateRequest.builder()
+                    .password("hacked12345")
+                    .phone("0900000000")
+                    .build();
+
+            Authentication auth = mock(Authentication.class);
+            SecurityContext ctx = mock(SecurityContext.class);
+            doReturn(List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("USER"))).when(auth).getAuthorities();
+            when(auth.getName()).thenReturn("alice");
+            when(ctx.getAuthentication()).thenReturn(auth);
+
+            try (MockedStatic<SecurityContextHolder> holder = mockStatic(SecurityContextHolder.class)) {
+                holder.when(SecurityContextHolder::getContext).thenReturn(ctx);
+                when(userRepository.findById("id-002")).thenReturn(Optional.of(targetUser));
+
+                assertThatThrownBy(() -> userService.update(request, "id-002"))
+                        .isInstanceOf(AppException.class)
+                        .extracting(e -> ((AppException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.UNAUTHORIZED);
+
+                verify(userMapper, never()).updateUser(any(), any());
+                verify(userRepository, never()).save(any());
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("changePassword Tests")
+    class ChangePasswordTests {
+
+        @Test
+        @DisplayName("Đổi mật khẩu thành công khi cung cấp đúng mật khẩu cũ")
+        void changePassword_success() {
+            User user = buildUser("id-001", "alice", true);
+            user.setPassword("encoded_old");
+            PasswordChangeRequest request = PasswordChangeRequest.builder()
+                    .oldPassword("OldSecret123!")
+                    .newPassword("NewSecret123!")
+                    .build();
+
+            Authentication auth = mock(Authentication.class);
+            SecurityContext ctx = mock(SecurityContext.class);
+            when(auth.getName()).thenReturn("alice");
+            when(ctx.getAuthentication()).thenReturn(auth);
+
+            try (MockedStatic<SecurityContextHolder> holder = mockStatic(SecurityContextHolder.class)) {
+                holder.when(SecurityContextHolder::getContext).thenReturn(ctx);
+                when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+                when(passwordEncoder.matches("OldSecret123!", "encoded_old")).thenReturn(true);
+                when(passwordEncoder.encode("NewSecret123!")).thenReturn("encoded_new");
+
+                userService.changePassword(request);
+
+                assertThat(user.getPassword()).isEqualTo("encoded_new");
+                verify(userRepository).save(user);
+            }
+        }
+
+        @Test
+        @DisplayName("Sai mật khẩu cũ → ném OLD_PASSWORD_INCORRECT (1011)")
+        void changePassword_wrongOldPassword_throwsAppException() {
+            User user = buildUser("id-001", "alice", true);
+            user.setPassword("encoded_old");
+            PasswordChangeRequest request = PasswordChangeRequest.builder()
+                    .oldPassword("WrongSecret123!")
+                    .newPassword("NewSecret123!")
+                    .build();
+
+            Authentication auth = mock(Authentication.class);
+            SecurityContext ctx = mock(SecurityContext.class);
+            when(auth.getName()).thenReturn("alice");
+            when(ctx.getAuthentication()).thenReturn(auth);
+
+            try (MockedStatic<SecurityContextHolder> holder = mockStatic(SecurityContextHolder.class)) {
+                holder.when(SecurityContextHolder::getContext).thenReturn(ctx);
+                when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+                when(passwordEncoder.matches("WrongSecret123!", "encoded_old")).thenReturn(false);
+
+                assertThatThrownBy(() -> userService.changePassword(request))
+                        .isInstanceOf(AppException.class)
+                        .extracting(e -> ((AppException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.OLD_PASSWORD_INCORRECT);
+
+                verify(passwordEncoder, never()).encode(anyString());
+                verify(userRepository, never()).save(any());
+            }
+        }
+
+        @Test
+        @DisplayName("Mật khẩu mới trùng mật khẩu cũ → ném PASSWORD_SAME_AS_OLD (1012)")
+        void changePassword_samePassword_throwsAppException() {
+            User user = buildUser("id-001", "alice", true);
+            user.setPassword("encoded_old");
+            PasswordChangeRequest request = PasswordChangeRequest.builder()
+                    .oldPassword("SameSecret123!")
+                    .newPassword("SameSecret123!")
+                    .build();
+
+            Authentication auth = mock(Authentication.class);
+            SecurityContext ctx = mock(SecurityContext.class);
+            when(auth.getName()).thenReturn("alice");
+            when(ctx.getAuthentication()).thenReturn(auth);
+
+            try (MockedStatic<SecurityContextHolder> holder = mockStatic(SecurityContextHolder.class)) {
+                holder.when(SecurityContextHolder::getContext).thenReturn(ctx);
+                when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user));
+                when(passwordEncoder.matches("SameSecret123!", "encoded_old")).thenReturn(true);
+
+                assertThatThrownBy(() -> userService.changePassword(request))
+                        .isInstanceOf(AppException.class)
+                        .extracting(e -> ((AppException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.PASSWORD_SAME_AS_OLD);
+
+                verify(passwordEncoder, never()).encode(anyString());
+                verify(userRepository, never()).save(any());
             }
         }
     }

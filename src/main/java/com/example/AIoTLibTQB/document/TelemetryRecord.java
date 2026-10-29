@@ -17,7 +17,8 @@ import java.time.Instant;
         collection = "telemetry_records",
         timeField = "timestamp",
         metaField = "metadata",
-        granularity = Granularity.SECONDS
+        granularity = Granularity.SECONDS,
+        expireAfter = "7776000s"
 )
 @CompoundIndexes({
         @CompoundIndex(name = "telemetry_device_time_idx", def = "{'metadata.deviceId': 1, 'timestamp': -1}"),
@@ -35,7 +36,6 @@ public class TelemetryRecord {
     @Id
     String id;
 
-    @Indexed(expireAfterSeconds = 7776000)
     Instant timestamp;
 
     TelemetryMetadata metadata;

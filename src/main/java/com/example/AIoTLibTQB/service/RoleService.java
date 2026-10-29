@@ -78,6 +78,13 @@ public class RoleService {
     }
 
     public void delete(String name) {
+        if (name != null) {
+            for (com.example.AIoTLibTQB.enums.Role systemRole : com.example.AIoTLibTQB.enums.Role.values()) {
+                if (systemRole.name().equalsIgnoreCase(name.trim())) {
+                    throw new AppException(ErrorCode.CANNOT_DELETE_SYSTEM_ROLE);
+                }
+            }
+        }
         Query query = Query.query(Criteria.where("roles.name").is(name));
         Update update = new Update().pull("roles", Query.query(Criteria.where("name").is(name)));
         UpdateResult result = mongoTemplate.updateMulti(query, update, User.class);

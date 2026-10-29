@@ -42,7 +42,13 @@ public class StompChannelInterceptor implements ChannelInterceptor {
         }
 
         StompCommand command = accessor.getCommand();
-        if (StompCommand.CONNECT.equals(command)) {
+        if (StompCommand.SEND.equals(command)) {
+            String destination = accessor.getDestination();
+            if (destination != null && destination.startsWith("/topic/")) {
+                log.warn("STOMP SEND rejected: client attempted to publish to broker topic '{}'", destination);
+                throw new MessageDeliveryException("Client SEND to broker topics is forbidden");
+            }
+        } else if (StompCommand.CONNECT.equals(command)) {
             Authentication authentication = authenticateConnect(accessor);
             if (accessor.isMutable()) {
                 accessor.setUser(authentication);
@@ -91,6 +97,39 @@ public class StompChannelInterceptor implements ChannelInterceptor {
             log.warn("STOMP SUBSCRIBE rejected: user is not authenticated for destination {}",
                     accessor.getDestination());
             throw new MessageDeliveryException("Access denied: user must be authenticated to subscribe");
+        }
+        String destination = accessor.getDestination();
+        if (destination == null) {
+            return;
+        }
+
+        if ("/topic/alerts".equals(destination) && user instanceof Authentication auth) {
+            boolean canViewAlerts = auth.getAuthorities() != null && !auth.getAuthorities().isEmpty()
+                    && auth.getAuthorities().stream().anyMatch(a ->
+                            "VIEW_ALERTS".equals(a.getAuthority())
+                                    || "ADMIN".equals(a.getAuthority())
+                                    || "ROLE_ADMIN".equals(a.getAuthority())
+                                    || "LIBRARIAN".equals(a.getAuthority())
+                                    || "ROLE_LIBRARIAN".equals(a.getAuthority())
+                                    || "ZONE_MANAGER".equals(a.getAuthority())
+                                    || "ROLE_ZONE_MANAGER".equals(a.getAuthority())
+                                    || "MAINTENANCE".equals(a.getAuthority())
+                                    || "ROLE_MAINTENANCE".equals(a.getAuthority())
+                                    || "VIEWER".equals(a.getAuthority())
+                                    || "ROLE_VIEWER".equals(a.getAuthority()));
+            if (!canViewAlerts) {
+                log.warn("STOMP SUBSCRIBE rejected: user {} lacks VIEW_ALERTS for /topic/alerts", user.getName());
+                throw new MessageDeliveryException("Access denied: VIEW_ALERTS permission required for /topic/alerts");
+            }
+        }
+
+        if (destination.startsWith("/topic/rooms/") && user instanceof Authentication auth) {
+            boolean isDevice = auth.getAuthorities() != null && auth.getAuthorities().stream()
+                    .anyMatch(a -> "DEVICE".equals(a.getAuthority()) || "ROLE_DEVICE".equals(a.getAuthority()));
+            if (isDevice) {
+                log.warn("STOMP SUBSCRIBE rejected: device {} cannot subscribe to room telemetry", user.getName());
+                throw new MessageDeliveryException("Access denied: DEVICE role cannot subscribe to room telemetry");
+            }
         }
     }
 

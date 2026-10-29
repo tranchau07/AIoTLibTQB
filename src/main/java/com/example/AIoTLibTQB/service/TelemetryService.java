@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-@PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'USER', 'VIEWER')")
+@PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE', 'USER', 'VIEWER')")
 public class TelemetryService {
 
     TelemetryRepository telemetryRepository;
@@ -63,8 +63,14 @@ public class TelemetryService {
 
     public List<TelemetryResponse> getHistoryByDeviceId(String deviceId, Instant start, Instant end) {
         checkDeviceAccess(deviceId);
+        if (start != null && end != null && start.isAfter(end)) {
+            throw new AppException(ErrorCode.INVALID_TIME_RANGE);
+        }
         Instant actualEnd = (end != null) ? end : Instant.now();
         Instant actualStart = (start != null) ? start : actualEnd.minus(1, ChronoUnit.HOURS);
+        if (actualStart.isAfter(actualEnd)) {
+            throw new AppException(ErrorCode.INVALID_TIME_RANGE);
+        }
 
         return telemetryRepository.findByMetadataDeviceIdAndTimestampBetweenOrderByTimestampDesc(deviceId, actualStart, actualEnd)
                 .stream()
@@ -74,8 +80,14 @@ public class TelemetryService {
 
     public List<TelemetryResponse> getHistoryByRoomId(String roomId, Instant start, Instant end) {
         checkRoomAccess(roomId);
+        if (start != null && end != null && start.isAfter(end)) {
+            throw new AppException(ErrorCode.INVALID_TIME_RANGE);
+        }
         Instant actualEnd = (end != null) ? end : Instant.now();
         Instant actualStart = (start != null) ? start : actualEnd.minus(1, ChronoUnit.HOURS);
+        if (actualStart.isAfter(actualEnd)) {
+            throw new AppException(ErrorCode.INVALID_TIME_RANGE);
+        }
 
         return telemetryRepository.findByMetadataRoomIdAndTimestampBetweenOrderByTimestampDesc(roomId, actualStart, actualEnd)
                 .stream()
@@ -268,12 +280,13 @@ public class TelemetryService {
                 User user = userRepository.findByUsername(username)
                         .orElseThrow(() -> new AppException(ErrorCode.UNAUTHENTICATED));
                 List<Device> devices = deviceRepository.findByRoomId(roomId);
-                if (!devices.isEmpty()) {
-                    boolean anyMatch = devices.stream()
-                            .anyMatch(d -> d.getZoneId() != null && user.getAssignedZones() != null && user.getAssignedZones().contains(d.getZoneId()));
-                    if (!anyMatch) {
-                        throw new AppException(ErrorCode.ZONE_ACCESS_DENIED);
-                    }
+                if (devices.isEmpty()) {
+                    throw new AppException(ErrorCode.ZONE_ACCESS_DENIED);
+                }
+                boolean anyMatch = devices.stream()
+                        .anyMatch(d -> d.getZoneId() != null && user.getAssignedZones() != null && user.getAssignedZones().contains(d.getZoneId()));
+                if (!anyMatch) {
+                    throw new AppException(ErrorCode.ZONE_ACCESS_DENIED);
                 }
             }
         }

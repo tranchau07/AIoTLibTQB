@@ -11,9 +11,9 @@ import com.example.AIoTLibTQB.exception.AppException;
 import com.example.AIoTLibTQB.repository.DeviceRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
 import lombok.AccessLevel;
-import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -25,12 +25,28 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class RoomService {
 
     RoomRepository roomRepository;
     DeviceRepository deviceRepository;
+    ComfortScoreService comfortScoreService;
+    LatestTelemetryCache latestTelemetryCache;
+
+    @Autowired
+    public RoomService(RoomRepository roomRepository,
+                       DeviceRepository deviceRepository,
+                       @Autowired(required = false) ComfortScoreService comfortScoreService,
+                       @Autowired(required = false) LatestTelemetryCache latestTelemetryCache) {
+        this.roomRepository = roomRepository;
+        this.deviceRepository = deviceRepository;
+        this.comfortScoreService = comfortScoreService;
+        this.latestTelemetryCache = latestTelemetryCache;
+    }
+
+    public RoomService(RoomRepository roomRepository, DeviceRepository deviceRepository) {
+        this(roomRepository, deviceRepository, null, null);
+    }
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
     public RoomResponse create(RoomCreationRequest request) {
@@ -134,6 +150,12 @@ public class RoomService {
         }
 
         Room updated = roomRepository.save(room);
+        if (comfortScoreService != null) {
+            comfortScoreService.invalidateRoomTypeCache(id);
+        }
+        if (latestTelemetryCache != null) {
+            latestTelemetryCache.removeRoomTelemetry(id);
+        }
         log.info("Room updated: '{}' (code={})", updated.getName(), updated.getCode());
         return toRoomResponse(updated);
     }
@@ -147,6 +169,12 @@ public class RoomService {
             throw new AppException(ErrorCode.ROOM_HAS_DEVICES);
         }
         roomRepository.deleteById(id);
+        if (comfortScoreService != null) {
+            comfortScoreService.invalidateRoomTypeCache(id);
+        }
+        if (latestTelemetryCache != null) {
+            latestTelemetryCache.removeRoomTelemetry(id);
+        }
         log.warn("Room deleted: (id={})", id);
     }
 

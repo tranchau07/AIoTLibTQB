@@ -15,7 +15,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -23,6 +25,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 @Slf4j
@@ -33,8 +36,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final Set<String> RATE_LIMITED_ENDPOINTS = Set.of(
             "/api/v1/auth/login",
-            "/api/v1/devices/authenticate"
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/introspect",
+            "/api/v1/devices/authenticate",
+            "/api/v1/users"
     );
+
+    @NonFinal
+    @Value("${security.rate-limit.trusted-proxies:}")
+    List<String> trustedProxies;
 
     Cache<String, Bucket> ipBuckets = Caffeine.newBuilder()
             .expireAfterAccess(Duration.ofMinutes(10))
@@ -56,8 +66,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         String path = request.getServletPath();
-        if (path != null && path.length() > 1 && path.endsWith("/")) {
-            path = path.substring(0, path.length() - 1);
+        if (path != null) {
+            int semicolon = path.indexOf(';');
+            if (semicolon != -1) {
+                path = path.substring(0, semicolon);
+            }
+            path = path.replaceAll("/+", "/");
+            if (path.length() > 1 && path.endsWith("/")) {
+                path = path.substring(0, path.length() - 1);
+            }
         }
 
         String method = request.getMethod();
@@ -106,10 +123,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     private boolean isTrustedProxy(String ip) {
         if (ip == null) return false;
-        return ip.equals("127.0.0.1") ||
-                ip.equals("0:0:0:0:0:0:0:1") ||
-                ip.startsWith("10.") ||
-                ip.startsWith("192.168.") ||
-                ip.matches("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*");
+        if (ip.equals("127.0.0.1") || ip.equals("0:0:0:0:0:0:0:1") || ip.equals("::1")) {
+            return true;
+        }
+        if (trustedProxies != null && !trustedProxies.isEmpty()) {
+            return trustedProxies.contains(ip.trim());
+        }
+        return false;
     }
 }

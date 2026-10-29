@@ -6,6 +6,7 @@ import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import com.example.AIoTLibTQB.repository.AlertRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Component;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -49,6 +51,40 @@ public class AlertRuleEngine {
         this.alertRepository = alertRepository;
         this.realtimePublisher = realtimePublisher;
         this.clock = clock != null ? clock : Clock.systemUTC();
+    }
+
+    @PostConstruct
+    public void rehydrateActiveAlerts() {
+        try {
+            List<Alert> activeAlerts = alertRepository.findByStatusIn(List.of(AlertStatus.FIRING, AlertStatus.ACKNOWLEDGED));
+            if (activeAlerts != null) {
+                for (Alert alert : activeAlerts) {
+                    String targetId = alert.getDeviceId() != null && !alert.getDeviceId().isBlank()
+                            ? alert.getDeviceId()
+                            : (alert.getRoomId() != null && !alert.getRoomId().isBlank() ? alert.getRoomId() : alert.getHardwareId());
+                    if (targetId == null) continue;
+                    String metricType = alert.getType() != null ? alert.getType().name() : "UNKNOWN";
+                    String key = targetId + ":" + metricType;
+
+                    FsmState state = new FsmState();
+                    state.setStatus(alert.getStatus());
+                    state.setFiringSince(alert.getStartedAt() != null ? alert.getStartedAt() : clock.instant());
+                    state.setAlertId(alert.getId());
+                    state.setThreshold(alert.getThreshold());
+                    state.setLastValue(alert.getCurrentValue());
+                    state.setAlertType(alert.getType());
+                    state.setMetricType(metricType);
+                    state.setDeviceId(alert.getDeviceId());
+                    state.setHardwareId(alert.getHardwareId());
+                    state.setRoomId(alert.getRoomId());
+
+                    fsmMap.put(key, state);
+                }
+                log.info("Rehydrated {} active alert(s) into AlertRuleEngine FSM on startup", activeAlerts.size());
+            }
+        } catch (Exception e) {
+            log.debug("Skipping FSM rehydration during test or mock environment: {}", e.getMessage());
+        }
     }
 
     @Getter
@@ -129,6 +165,10 @@ public class AlertRuleEngine {
         String key = targetId + ":" + metricType;
         Instant now = clock.instant();
 
+        final boolean[] shouldFire = { false };
+        final Alert[] alertToSave = { null };
+        final String[] resolveAlertId = { null };
+
         fsmMap.compute(key, (k, state) -> {
             if (state == null) {
                 // NORMAL state
@@ -161,7 +201,7 @@ public class AlertRuleEngine {
                         state.setFiringSince(now);
                         state.setRecoverySince(null);
 
-                        Alert alert = Alert.builder()
+                        alertToSave[0] = Alert.builder()
                                 .deviceId(deviceId)
                                 .hardwareId(hardwareId)
                                 .roomId(roomId)
@@ -172,11 +212,7 @@ public class AlertRuleEngine {
                                 .message(message)
                                 .startedAt(now)
                                 .build();
-                        alert = alertRepository.save(alert);
-                        state.setAlertId(alert.getId());
-
-                        realtimePublisher.publishAlert(toAlertResponse(alert));
-                        log.info("Alert FSM transitioned to FIRING: key={}, alertId={}, value={}", key, alert.getId(), currentValue);
+                        shouldFire[0] = true;
                     }
                     return state;
                 } else {
@@ -207,13 +243,7 @@ public class AlertRuleEngine {
                         if (recoverySeconds >= HYSTERESIS_WINDOW.getSeconds()) {
                             // TRANSITION: FIRING / ACKNOWLEDGED -> RESOLVED
                             if (state.getAlertId() != null) {
-                                alertRepository.findById(state.getAlertId()).ifPresent(alert -> {
-                                    alert.setStatus(AlertStatus.RESOLVED);
-                                    alert.setResolvedAt(now);
-                                    alert = alertRepository.save(alert);
-                                    realtimePublisher.publishAlert(toAlertResponse(alert));
-                                    log.info("Alert FSM resolved after 60s hysteresis: key={}, alertId={}", key, alert.getId());
-                                });
+                                resolveAlertId[0] = state.getAlertId();
                             }
                             return null; // Evict from active in-memory state
                         }
@@ -224,6 +254,25 @@ public class AlertRuleEngine {
 
             return state;
         });
+
+        // Perform I/O outside compute() to prevent virtual thread carrier pinning
+        if (shouldFire[0] && alertToSave[0] != null) {
+            Alert savedAlert = alertRepository.save(alertToSave[0]);
+            FsmState s = fsmMap.get(key);
+            if (s != null && s.getStatus() == AlertStatus.FIRING) {
+                s.setAlertId(savedAlert.getId());
+            }
+            realtimePublisher.publishAlert(toAlertResponse(savedAlert));
+            log.info("Alert FSM transitioned to FIRING: key={}, alertId={}, value={}", key, savedAlert.getId(), currentValue);
+        } else if (resolveAlertId[0] != null) {
+            alertRepository.findById(resolveAlertId[0]).ifPresent(alert -> {
+                alert.setStatus(AlertStatus.RESOLVED);
+                alert.setResolvedAt(now);
+                Alert saved = alertRepository.save(alert);
+                realtimePublisher.publishAlert(toAlertResponse(saved));
+                log.info("Alert FSM resolved after 60s hysteresis: key={}, alertId={}", key, alert.getId());
+            });
+        }
     }
 
     public void triggerDeviceOfflineAlert(String deviceId, String hardwareId, String roomId) {
@@ -231,12 +280,14 @@ public class AlertRuleEngine {
         String key = targetId + ":DEVICE_OFFLINE";
         Instant now = clock.instant();
 
+        final Alert[] alertToSave = { null };
+
         fsmMap.compute(key, (k, state) -> {
             if (state != null && (state.getStatus() == AlertStatus.FIRING || state.getStatus() == AlertStatus.ACKNOWLEDGED)) {
                 return state;
             }
 
-            Alert alert = Alert.builder()
+            alertToSave[0] = Alert.builder()
                     .deviceId(deviceId)
                     .hardwareId(hardwareId)
                     .roomId(roomId)
@@ -247,21 +298,27 @@ public class AlertRuleEngine {
                     .message("Device is offline: hardwareId=" + hardwareId)
                     .startedAt(now)
                     .build();
-            alert = alertRepository.save(alert);
-            realtimePublisher.publishAlert(toAlertResponse(alert));
 
             FsmState newState = new FsmState();
             newState.setStatus(AlertStatus.FIRING);
             newState.setFiringSince(now);
-            newState.setAlertId(alert.getId());
             newState.setAlertType(AlertType.DEVICE_OFFLINE);
             newState.setMetricType("DEVICE_OFFLINE");
             newState.setDeviceId(deviceId);
             newState.setHardwareId(hardwareId);
             newState.setRoomId(roomId);
-            log.info("Triggered DEVICE_OFFLINE alert: hardwareId={}, alertId={}", hardwareId, alert.getId());
             return newState;
         });
+
+        if (alertToSave[0] != null) {
+            Alert savedAlert = alertRepository.save(alertToSave[0]);
+            FsmState s = fsmMap.get(key);
+            if (s != null) {
+                s.setAlertId(savedAlert.getId());
+            }
+            realtimePublisher.publishAlert(toAlertResponse(savedAlert));
+            log.info("Triggered DEVICE_OFFLINE alert: hardwareId={}, alertId={}", hardwareId, savedAlert.getId());
+        }
     }
 
     public void resolveDeviceOfflineAlert(String hardwareId) {
@@ -275,8 +332,8 @@ public class AlertRuleEngine {
                     alertRepository.findById(state.getAlertId()).ifPresent(alert -> {
                         alert.setStatus(AlertStatus.RESOLVED);
                         alert.setResolvedAt(now);
-                        alertRepository.save(alert);
-                        realtimePublisher.publishAlert(toAlertResponse(alert));
+                        Alert saved = alertRepository.save(alert);
+                        realtimePublisher.publishAlert(toAlertResponse(saved));
                         log.info("Resolved in-memory DEVICE_OFFLINE alert: hardwareId={}, alertId={}", hardwareId, alert.getId());
                     });
                 }
@@ -285,15 +342,22 @@ public class AlertRuleEngine {
             return false;
         });
 
-        // Also resolve in DB if not in in-memory state
-        alertRepository.findByStatus(AlertStatus.FIRING).stream()
-                .filter(a -> a.getType() == AlertType.DEVICE_OFFLINE && hardwareId != null && hardwareId.equals(a.getHardwareId()))
-                .forEach(a -> {
-                    a.setStatus(AlertStatus.RESOLVED);
-                    a.setResolvedAt(now);
-                    alertRepository.save(a);
-                    realtimePublisher.publishAlert(toAlertResponse(a));
-                });
+        // Also resolve in DB if not in in-memory state using indexed queries
+        List<Alert> firingAlerts;
+        try {
+            firingAlerts = alertRepository.findByHardwareIdAndTypeAndStatusIn(
+                    hardwareId, AlertType.DEVICE_OFFLINE, List.of(AlertStatus.FIRING, AlertStatus.ACKNOWLEDGED));
+        } catch (Exception e) {
+            firingAlerts = alertRepository.findByStatus(AlertStatus.FIRING).stream()
+                    .filter(a -> a.getType() == AlertType.DEVICE_OFFLINE && hardwareId != null && hardwareId.equals(a.getHardwareId()))
+                    .toList();
+        }
+        for (Alert a : firingAlerts) {
+            a.setStatus(AlertStatus.RESOLVED);
+            a.setResolvedAt(now);
+            alertRepository.save(a);
+            realtimePublisher.publishAlert(toAlertResponse(a));
+        }
     }
 
     public void onAcknowledge(String alertId) {

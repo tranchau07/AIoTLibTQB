@@ -154,6 +154,20 @@ public class MqttMessageDispatcherService {
                 deviceMetadataCache.invalidate(hardwareId);
                 log.info("Device status updated: hardwareId={}, status={}, reason={}",
                         hardwareId, statusPayload.getStatus(), statusPayload.getReason());
+
+                if (alertService != null) {
+                    DeviceMetadata metadata = deviceMetadataCache.get(hardwareId).orElse(null);
+                    if (metadata != null && metadata.isActive()) {
+                        if (isOffline) {
+                            alertService.triggerDeviceOfflineAlert(metadata.getId(), metadata.getHardwareId(), metadata.getRoomId());
+                            if (deviceWatchdogService != null) {
+                                deviceWatchdogService.recordOfflineDevice(hardwareId);
+                            }
+                        } else {
+                            alertService.resolveDeviceOfflineAlert(hardwareId);
+                        }
+                    }
+                }
             } else {
                 log.info("Status received from unregistered device: hardwareId={}, status={}",
                         hardwareId, statusPayload.getStatus());
@@ -216,11 +230,6 @@ public class MqttMessageDispatcherService {
             }
 
 
-            // Đánh giá cảnh báo FSM theo thời gian thực (in-memory, không query DB)
-            if (alertService != null) {
-                alertService.evaluateTelemetry(device.getId(), device.getHardwareId(), device.getRoomId(), telemetryPayload.getData());
-            }
-
             // Lọc và làm sạch dữ liệu cảm biến
             TelemetrySanitizerService.SanitizedMetrics sanitized =
                     telemetrySanitizerService.sanitize(device.getId(), telemetryPayload.getData());
@@ -229,6 +238,12 @@ public class MqttMessageDispatcherService {
             if (isEmptyMetrics(sanitized)) {
                 log.debug("Discarded empty telemetry record with no valid metrics: hardwareId={}", hardwareId);
                 return;
+            }
+
+            // Đánh giá cảnh báo FSM theo thời gian thực (in-memory, không query DB) với dữ liệu đã lọc sạch
+            if (alertService != null) {
+                TelemetryPayload.TelemetryData cleanData = toTelemetryData(sanitized);
+                alertService.evaluateTelemetry(device.getId(), device.getHardwareId(), device.getRoomId(), cleanData);
             }
 
             // Chuẩn hóa thời gian đo (hỗ trợ cả millis/seconds, bảo toàn lịch sử buffered, kẹp lệch tương lai/pre-2020)
@@ -315,6 +330,39 @@ public class MqttMessageDispatcherService {
         }
 
         return parsed;
+    }
+
+    private TelemetryPayload.TelemetryData toTelemetryData(TelemetrySanitizerService.SanitizedMetrics sanitized) {
+        if (sanitized == null) return null;
+        TelemetryPayload.AcousticsData acoustics = null;
+        if (sanitized.getAcoustics() != null) {
+            acoustics = TelemetryPayload.AcousticsData.builder()
+                    .noiseAvg(sanitized.getAcoustics().getNoiseAvg())
+                    .noisePeak(sanitized.getAcoustics().getNoisePeak())
+                    .build();
+        }
+        TelemetryPayload.EnvironmentData env = null;
+        if (sanitized.getEnvironment() != null) {
+            env = TelemetryPayload.EnvironmentData.builder()
+                    .temperature(sanitized.getEnvironment().getTemperature())
+                    .humidity(sanitized.getEnvironment().getHumidity())
+                    .lux(sanitized.getEnvironment().getLux())
+                    .build();
+        }
+        TelemetryPayload.AirQualityData airQuality = null;
+        if (sanitized.getAirQuality() != null) {
+            airQuality = TelemetryPayload.AirQualityData.builder()
+                    .pm1_0(sanitized.getAirQuality().getPm1_0())
+                    .pm2_5(sanitized.getAirQuality().getPm2_5())
+                    .pm4_0(sanitized.getAirQuality().getPm4_0())
+                    .pm10(sanitized.getAirQuality().getPm10())
+                    .build();
+        }
+        return TelemetryPayload.TelemetryData.builder()
+                .acoustics(acoustics)
+                .environment(env)
+                .airQuality(airQuality)
+                .build();
     }
 
     private boolean isEmptyMetrics(TelemetrySanitizerService.SanitizedMetrics sanitized) {

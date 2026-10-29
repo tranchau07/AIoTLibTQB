@@ -202,5 +202,22 @@ class RoleServiceTest {
 
             verify(roleRepository).deleteById("TEMP");
         }
+
+        @Test
+        @DisplayName("Xóa role hệ thống (ADMIN, USER, DEVICE...) -> ném CANNOT_DELETE_SYSTEM_ROLE")
+        void delete_systemRole_throwsCannotDeleteSystemRole() {
+            assertThatThrownBy(() -> roleService.delete("ADMIN"))
+                    .isInstanceOf(AppException.class)
+                    .extracting(e -> ((AppException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.CANNOT_DELETE_SYSTEM_ROLE);
+
+            assertThatThrownBy(() -> roleService.delete("USER"))
+                    .isInstanceOf(AppException.class)
+                    .extracting(e -> ((AppException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.CANNOT_DELETE_SYSTEM_ROLE);
+
+            verify(roleRepository, never()).deleteById(anyString());
+            verify(mongoTemplate, never()).updateMulti(any(), any(), eq(User.class));
+        }
     }
 }

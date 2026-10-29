@@ -14,8 +14,8 @@ public class MqttProperties {
 
     String brokerUrl = "tcp://localhost:1883";
     String clientId = "aiot_backend_consumer";
-    String username = "aiot_backend";
-    String password = "aiot_backend_secret";
+    String username = "";
+    String password = "";
     String defaultTelemetryTopic = "devices/+/telemetry";
     String defaultStatusTopic = "devices/+/status";
 }

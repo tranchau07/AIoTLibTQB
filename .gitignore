@@ -2,8 +2,22 @@
 target/
 *.class
 
+# Node.js / Next.js dependencies & build output
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/coverage/
+frontend/.vitest/
+tools/iot-simulator/node_modules/
+*.tsbuildinfo
+
 # Log files
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Package files
 *.jar
@@ -27,13 +41,13 @@ replay_pid*
 .classpath
 
 # Sensitive Configuration & Credentials
-src/main/resources/application.yaml
 mosquitto/config/password.txt
 *.secret
 *.pem
 *.key
 .env
 .env.*
+!.env.example
 
 # Temporary agent logs
 .agents/teamwork/

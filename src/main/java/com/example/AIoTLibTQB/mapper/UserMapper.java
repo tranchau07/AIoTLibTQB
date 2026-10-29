@@ -13,6 +13,8 @@ public interface UserMapper {
 
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "roles", ignore = true)
+    @Mapping(target = "assignedZones", ignore = true)
+    @Mapping(target = "credentialsUpdatedAt", ignore = true)
     User toUser(UserCreationRequest request);
 
     UserResponse toUserResponse(User user);
@@ -24,5 +26,7 @@ public interface UserMapper {
     @Mapping(target = "assignedZones", ignore = true)
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "username", ignore = true)
+    @Mapping(target = "password", ignore = true)
+    @Mapping(target = "credentialsUpdatedAt", ignore = true)
     void updateUser(@MappingTarget User user, UserUpdateRequest request);
 }

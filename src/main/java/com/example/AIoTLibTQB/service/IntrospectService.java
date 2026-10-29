@@ -48,13 +48,13 @@ public class IntrospectService {
         }
 
         Date expiryTime = signedJWT.getJWTClaimsSet().getExpirationTime();
-        if (expiryTime.before(new Date())) {
-            throw new RuntimeException("Token expired");
+        if (expiryTime == null || expiryTime.before(new Date())) {
+            throw new RuntimeException("Token expired or missing expiration");
         }
 
         String jwtId = signedJWT.getJWTClaimsSet().getJWTID();
-        if (invalidatedTokenRepository.existsById(jwtId)) {
-            throw new RuntimeException("Token has been invalidated");
+        if (jwtId == null || jwtId.isBlank() || invalidatedTokenRepository.existsById(jwtId)) {
+            throw new RuntimeException("Token missing ID or has been invalidated");
         }
 
         return signedJWT;

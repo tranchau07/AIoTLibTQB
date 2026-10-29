@@ -11,6 +11,8 @@ import com.example.AIoTLibTQB.enums.ErrorCode;
 import com.example.AIoTLibTQB.exception.AppException;
 import com.example.AIoTLibTQB.repository.InvalidatedTokenRepository;
 import com.example.AIoTLibTQB.repository.UserRepository;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import com.nimbusds.jose.*;
 import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jwt.JWTClaimsSet;
@@ -80,10 +82,20 @@ public class AuthenticationService {
 
     public void logout(LogoutRequest request) throws ParseException, JOSEException {
         try {
-            SignedJWT signedJWT = verifyTokenForRefreshOrLogout(request.getToken());
-            blacklistToken(signedJWT);
+            if (request.getToken() != null && !request.getToken().isBlank()) {
+                SignedJWT signedJWT = verifyTokenForRefreshOrLogout(request.getToken());
+                blacklistToken(signedJWT);
+            }
         } catch (AppException e) {
             log.info("Token already expired or invalid — skip invalidation");
+        }
+        try {
+            if (request.getRefreshToken() != null && !request.getRefreshToken().isBlank()) {
+                SignedJWT signedRefresh = verifyTokenForRefreshOrLogout(request.getRefreshToken());
+                blacklistToken(signedRefresh);
+            }
+        } catch (AppException e) {
+            log.info("Refresh token already expired or invalid — skip invalidation");
         }
     }
 
@@ -104,6 +116,14 @@ public class AuthenticationService {
 
         if (!user.isActive()) {
             throw new AppException(ErrorCode.USER_INACTIVE);
+        }
+
+        Date issueTime = signedJWT.getJWTClaimsSet().getIssueTime();
+        if (issueTime != null && user.getCredentialsUpdatedAt() != null) {
+            if (issueTime.toInstant().isBefore(user.getCredentialsUpdatedAt())) {
+                log.warn("Refresh token issued before credentials update for user: {}", username);
+                throw new AppException(ErrorCode.UNAUTHENTICATED);
+            }
         }
 
         return AuthenticationResponse.builder()
@@ -213,14 +233,28 @@ public class AuthenticationService {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
         }
 
+        String jwtId = signedJWT.getJWTClaimsSet().getJWTID();
+        if (jwtId == null || jwtId.isBlank()) {
+            throw new AppException(ErrorCode.UNAUTHENTICATED);
+        }
+
         Date issueTime = signedJWT.getJWTClaimsSet().getIssueTime();
+        if (issueTime == null) {
+            throw new AppException(ErrorCode.UNAUTHENTICATED);
+        }
+
+        Date expirationTime = signedJWT.getJWTClaimsSet().getExpirationTime();
+        if (expirationTime == null) {
+            throw new AppException(ErrorCode.UNAUTHENTICATED);
+        }
+
         Instant refreshExpiry = Instant.ofEpochMilli(issueTime.getTime())
                 .plus(refreshableHours, ChronoUnit.HOURS);
         if (Instant.now().isAfter(refreshExpiry)) {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
         }
 
-        if (invalidatedTokenRepository.existsById(signedJWT.getJWTClaimsSet().getJWTID())) {
+        if (invalidatedTokenRepository.existsById(jwtId)) {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
         }
 

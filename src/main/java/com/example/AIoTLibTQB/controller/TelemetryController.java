@@ -1,9 +1,11 @@
 package com.example.AIoTLibTQB.controller;
 
+import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
 import com.example.AIoTLibTQB.dto.response.TelemetryBucketResponse;
 import com.example.AIoTLibTQB.dto.response.TelemetryResponse;
 import com.example.AIoTLibTQB.dto.response.TelemetrySummaryResponse;
+import com.example.AIoTLibTQB.repository.RoomRepository;
 import com.example.AIoTLibTQB.service.LatestTelemetryCache;
 import com.example.AIoTLibTQB.service.TelemetryService;
 import lombok.AccessLevel;
@@ -25,7 +27,7 @@ import java.util.Map;
 @RequestMapping("/api/v1/telemetry")
 @RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-@PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'USER', 'VIEWER')")
+@PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE', 'USER', 'VIEWER')")
 public class TelemetryController {
 
     TelemetryService telemetryService;
@@ -34,8 +36,16 @@ public class TelemetryController {
     @lombok.experimental.NonFinal
     LatestTelemetryCache latestTelemetryCache;
 
+    @Autowired(required = false)
+    @lombok.experimental.NonFinal
+    RoomRepository roomRepository;
+
     public void setLatestTelemetryCache(LatestTelemetryCache latestTelemetryCache) {
         this.latestTelemetryCache = latestTelemetryCache;
+    }
+
+    public void setRoomRepository(RoomRepository roomRepository) {
+        this.roomRepository = roomRepository;
     }
 
     @GetMapping("/device/{deviceId}/latest")
@@ -170,10 +180,14 @@ public class TelemetryController {
     }
 
     private TelemetrySummaryResponse.RoomSummaryInfo toRoomSummaryInfo(String roomId, TelemetryResponse t) {
+        String resolvedRoomName = (roomRepository != null && roomId != null)
+                ? roomRepository.findById(roomId).map(Room::getName).orElse(roomId)
+                : roomId;
+
         if (t == null) {
             return TelemetrySummaryResponse.RoomSummaryInfo.builder()
                     .roomId(roomId)
-                    .roomName(roomId)
+                    .roomName(resolvedRoomName)
                     .build();
         }
 
@@ -199,7 +213,7 @@ public class TelemetryController {
 
         return TelemetrySummaryResponse.RoomSummaryInfo.builder()
                 .roomId(roomId)
-                .roomName(roomId)
+                .roomName(resolvedRoomName)
                 .comfortScore(score)
                 .grade(grade)
                 .temperature(temp)

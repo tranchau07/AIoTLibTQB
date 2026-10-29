@@ -56,6 +56,7 @@ public class DeviceController {
                 .build();
     }
 
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'DEVICE')")
     @PostMapping("/{id}/heartbeat")
     public ApiResponse<Void> heartbeat(@PathVariable String id) {
         deviceService.updateLastSeen(id);
@@ -76,7 +77,9 @@ public class DeviceController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String zoneId,
             @RequestParam(required = false) String roomId) {
-        Pageable pageable = PageRequest.of(page, size);
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(100, size));
+        Pageable pageable = PageRequest.of(safePage, safeSize);
         return ApiResponse.<PageResponse<DeviceResponse>>builder()
                 .result(deviceService.getAll(pageable, zoneId, roomId))
                 .build();

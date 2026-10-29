@@ -37,6 +37,14 @@ public class LatestTelemetryCacheImpl implements LatestTelemetryCache {
         return Collections.unmodifiableMap(new ConcurrentHashMap<>(cache));
     }
 
+    @Override
+    public void removeRoomTelemetry(String roomId) {
+        if (roomId != null) {
+            cache.remove(roomId);
+            log.trace("Removed latest telemetry for roomId={}", roomId);
+        }
+    }
+
     public void clear() {
         cache.clear();
     }

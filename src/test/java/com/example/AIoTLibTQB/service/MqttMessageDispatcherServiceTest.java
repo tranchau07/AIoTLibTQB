@@ -39,6 +39,7 @@ class MqttMessageDispatcherServiceTest {
     @Mock DiscoveredDeviceService discoveredDeviceService;
     @Mock ComfortScoreService comfortScoreService;
     @Mock MongoTemplate mongoTemplate;
+    @Mock DeviceWatchdogService deviceWatchdogService;
     @Spy ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks MqttMessageDispatcherService dispatcherService;
@@ -56,6 +57,7 @@ class MqttMessageDispatcherServiceTest {
                 .isActive(true)
                 .build();
         dispatcherService.lastSeenThrottleCache.invalidateAll();
+        dispatcherService.setDeviceWatchdogService(deviceWatchdogService);
     }
 
     @Test
@@ -351,5 +353,58 @@ class MqttMessageDispatcherServiceTest {
 
         // Sau khi release, số permit phải được hoàn trả đầy đủ
         assertThat(dispatcherService.mongoWriteSemaphore.availablePermits()).isEqualTo(permits);
+    }
+
+    @Test
+    @DisplayName("Pipeline order: telemetrySanitizerService.sanitize runs strictly BEFORE alertService.evaluateTelemetry")
+    void dispatch_telemetry_sanitizesBeforeAlertEvaluation() {
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        TelemetrySanitizerService.SanitizedMetrics metrics = new TelemetrySanitizerService.SanitizedMetrics(
+                AcousticMetrics.builder().noiseAvg(45.0).build(), null, null
+        );
+        when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(metrics);
+
+        String json = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": { "acoustics": { "noise_avg": 45.0 } }
+        }
+        """.formatted(Instant.now().getEpochSecond());
+
+        var msg = MessageBuilder.withPayload(json)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build();
+
+        dispatcherService.dispatch(msg);
+
+        org.mockito.InOrder inOrder = inOrder(telemetrySanitizerService, alertService);
+        inOrder.verify(telemetrySanitizerService).sanitize(eq("dev-1"), any());
+        inOrder.verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), any());
+    }
+
+    @Test
+    @DisplayName("LWT offline status message triggers triggerDeviceOfflineAlert and records in watchdog")
+    void dispatch_status_lwtOffline_triggersOfflineAlertAndRecordsWatchdog() {
+        when(mongoTemplate.updateFirst(any(), any(), eq(Device.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+
+        String json = """
+        {
+          "status": "offline",
+          "reason": "LWT connection lost"
+        }
+        """;
+
+        var msg = MessageBuilder.withPayload(json)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/status")
+                .build();
+
+        dispatcherService.dispatch(msg);
+
+        verify(alertService).triggerDeviceOfflineAlert("dev-1", "ESP32_ROOM_101", "room-1");
+        verify(deviceWatchdogService).recordOfflineDevice("ESP32_ROOM_101");
+        verify(deviceMetadataCache).invalidate("ESP32_ROOM_101");
     }
 }

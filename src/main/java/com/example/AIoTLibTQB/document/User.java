@@ -39,6 +39,8 @@ public class User {
     @LastModifiedDate
     Instant updatedAt;
 
+    Instant credentialsUpdatedAt;
+
     @Builder.Default
     Set<Role> roles = new HashSet<>();
 

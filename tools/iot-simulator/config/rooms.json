@@ -1,0 +1,231 @@
+{
+  "zones": [
+    {
+      "id": "ZONE_A",
+      "name": "Khu Vực Học Tập Yên Tĩnh (Tầng 1)",
+      "description": "Khu vực đọc sách và tự học cá nhân"
+    },
+    {
+      "id": "ZONE_B",
+      "name": "Khu Vực Thảo Luận Nhóm (Tầng 1)",
+      "description": "Khu vực làm việc nhóm và nghiên cứu chung"
+    },
+    {
+      "id": "ZONE_C",
+      "name": "Khu Lưu Trữ Đặc Biệt (Tầng 2)",
+      "description": "Kho bảo quản tư liệu quý hiếm và ấn bản cổ"
+    },
+    {
+      "id": "ZONE_HALL",
+      "name": "Khu Vực Sảnh Lưu Thông (Tầng Trệt)",
+      "description": "Khu vực tiếp đón, mượn trả và tra cứu thông tin chung"
+    }
+  ],
+  "rooms": [
+    {
+      "code": "ROOM_101",
+      "name": "Phòng Đọc Tầng 1 - Khu A",
+      "floor": 1,
+      "capacity": 50,
+      "type": "STUDY_ROOM",
+      "targetComfortScore": 85.0,
+      "description": "Phòng đọc chính yên tĩnh dành cho sinh viên và nhà nghiên cứu",
+      "boundaryPolygon": [
+        { "x": 0.05, "y": 0.08 },
+        { "x": 0.52, "y": 0.08 },
+        { "x": 0.52, "y": 0.90 },
+        { "x": 0.05, "y": 0.90 }
+      ]
+    },
+    {
+      "code": "ROOM_102",
+      "name": "Phòng Thảo Luận 102 - Khu B",
+      "floor": 1,
+      "capacity": 30,
+      "type": "STUDY_ROOM",
+      "targetComfortScore": 80.0,
+      "description": "Phòng làm việc nhóm trang bị bảng tương tác",
+      "boundaryPolygon": [
+        { "x": 0.58, "y": 0.08 },
+        { "x": 0.95, "y": 0.08 },
+        { "x": 0.95, "y": 0.90 },
+        { "x": 0.58, "y": 0.90 }
+      ]
+    },
+    {
+      "code": "ROOM_201",
+      "name": "Kho Lưu Trữ Sách Cổ 201",
+      "floor": 2,
+      "capacity": 10,
+      "type": "BOOK_STORAGE",
+      "targetComfortScore": 92.0,
+      "description": "Kho kiểm soát vi khí hậu nghiêm ngặt bảo tồn tài liệu cổ",
+      "boundaryPolygon": [
+        { "x": 0.15, "y": 0.12 },
+        { "x": 0.85, "y": 0.12 },
+        { "x": 0.85, "y": 0.88 },
+        { "x": 0.15, "y": 0.88 }
+      ]
+    },
+    {
+      "code": "ROOM_001",
+      "name": "Sảnh Lưu Thông Tầng Trệt",
+      "floor": 0,
+      "capacity": 120,
+      "type": "CIRCULATION_HALL",
+      "targetComfortScore": 75.0,
+      "description": "Sảnh lễ tân mượn trả sách và không gian chờ",
+      "boundaryPolygon": [
+        { "x": 0.10, "y": 0.10 },
+        { "x": 0.90, "y": 0.10 },
+        { "x": 0.90, "y": 0.90 },
+        { "x": 0.10, "y": 0.90 }
+      ]
+    }
+  ],
+  "devices": [
+    {
+      "hardwareId": "ESP32S3_ZONE_A_001",
+      "name": "Sensor Node Yên Tĩnh 101",
+      "zoneId": "ZONE_A",
+      "roomCode": "ROOM_101",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.15,
+      "posY": 0.25,
+      "location": "Góc đọc yên tĩnh trong cùng",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_ROOM_101",
+      "name": "Sensor Node Cửa Sổ 101",
+      "zoneId": "ZONE_A",
+      "roomCode": "ROOM_101",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.42,
+      "posY": 0.25,
+      "location": "Cửa sổ hướng Đông đón nắng",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_ROOM_101_CTR",
+      "name": "Sensor Node Trung Tâm 101",
+      "zoneId": "ZONE_A",
+      "roomCode": "ROOM_101",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.28,
+      "posY": 0.55,
+      "location": "Bàn học trung tâm điều hòa",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_ROOM_101_DOOR",
+      "name": "Sensor Node Cửa Ra Vào 101",
+      "zoneId": "ZONE_A",
+      "roomCode": "ROOM_101",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.42,
+      "posY": 0.80,
+      "location": "Cửa ra vào hành lang chính",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_ROOM_102",
+      "name": "Sensor Node Thuyết Trình 102",
+      "zoneId": "ZONE_B",
+      "roomCode": "ROOM_102",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.68,
+      "posY": 0.28,
+      "location": "Bàn thuyết trình tương tác",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_ROOM_102_B",
+      "name": "Sensor Node Thảo Luận 102",
+      "zoneId": "ZONE_B",
+      "roomCode": "ROOM_102",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.86,
+      "posY": 0.50,
+      "location": "Bàn thảo luận nhóm tranh biện",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_ROOM_102_C",
+      "name": "Sensor Node Chuyên Đề 102",
+      "zoneId": "ZONE_B",
+      "roomCode": "ROOM_102",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.68,
+      "posY": 0.75,
+      "location": "Bàn tra cứu tài liệu chuyên đề",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_STORAGE_201",
+      "name": "Sensor Node Kệ Sách Cổ 1",
+      "zoneId": "ZONE_C",
+      "roomCode": "ROOM_201",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.32,
+      "posY": 0.35,
+      "location": "Kệ sách cổ 1",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_STORAGE_201_B",
+      "name": "Sensor Node Kệ Sách Cổ 2",
+      "zoneId": "ZONE_C",
+      "roomCode": "ROOM_201",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.68,
+      "posY": 0.35,
+      "location": "Kệ sách cổ 2 bảo quản",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_STORAGE_201_C",
+      "name": "Sensor Node Khử Ẩm Trung Tâm",
+      "zoneId": "ZONE_C",
+      "roomCode": "ROOM_201",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.50,
+      "posY": 0.70,
+      "location": "Khu vực điều hòa khử ẩm vi khí hậu",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_HALL_001_A",
+      "name": "Sensor Node Quầy Lễ Tân",
+      "zoneId": "ZONE_HALL",
+      "roomCode": "ROOM_001",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.25,
+      "posY": 0.35,
+      "location": "Quầy tiếp đón lễ tân & mượn trả",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_HALL_001_B",
+      "name": "Sensor Node Máy Tính OPAC",
+      "zoneId": "ZONE_HALL",
+      "roomCode": "ROOM_001",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.75,
+      "posY": 0.35,
+      "location": "Khu máy tính tra cứu OPAC",
+      "firmwareVersion": "1.2.0"
+    },
+    {
+      "hardwareId": "ESP32_HALL_001_C",
+      "name": "Sensor Node Cửa Chính Sảnh",
+      "zoneId": "ZONE_HALL",
+      "roomCode": "ROOM_001",
+      "deviceType": "SENSOR_NODE",
+      "posX": 0.50,
+      "posY": 0.75,
+      "location": "Cửa xoay ra vào chính sảnh",
+      "firmwareVersion": "1.2.0"
+    }
+  ]
+}

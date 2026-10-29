@@ -20,16 +20,24 @@ public enum ErrorCode {
     USER_INACTIVE(1008, "Account is disabled. Please contact administrator", HttpStatus.FORBIDDEN),
     USERNAME_REQUIRED(1009, "Username is required", HttpStatus.BAD_REQUEST),
     PASSWORD_REQUIRED(1010, "Password is required", HttpStatus.BAD_REQUEST),
+    OLD_PASSWORD_INCORRECT(1011, "Current password does not match", HttpStatus.BAD_REQUEST),
+    PASSWORD_SAME_AS_OLD(1012, "New password must be different from current password", HttpStatus.BAD_REQUEST),
+    CANNOT_DEACTIVATE_SELF(1013, "Cannot deactivate your own account", HttpStatus.BAD_REQUEST),
+    CANNOT_DELETE_SELF(1014, "Cannot delete your own account", HttpStatus.BAD_REQUEST),
+    TOKEN_REQUIRED(1015, "Token is required", HttpStatus.BAD_REQUEST),
 
     UNAUTHENTICATED(1006, "Unauthenticated", HttpStatus.UNAUTHORIZED),
     UNAUTHORIZED(1007, "You do not have permission", HttpStatus.FORBIDDEN),
 
     ROLE_EXISTED(2001, "Role already existed", HttpStatus.BAD_REQUEST),
     ROLE_NOT_EXISTED(2002, "Role does not exist", HttpStatus.NOT_FOUND),
+    CANNOT_DELETE_SYSTEM_ROLE(2006, "Cannot delete system default role", HttpStatus.BAD_REQUEST),
+    ROLE_NAME_REQUIRED(2007, "Role name is required", HttpStatus.BAD_REQUEST),
 
     PERMISSION_EXISTED(2003, "Permission already existed", HttpStatus.BAD_REQUEST),
     PERMISSION_NOT_EXISTED(2004, "Permission does not exist", HttpStatus.NOT_FOUND),
     PERMISSION_IN_USE(2005, "Permission is currently in use by one or more roles", HttpStatus.BAD_REQUEST),
+    PERMISSION_NAME_REQUIRED(2008, "Permission name is required", HttpStatus.BAD_REQUEST),
 
     DEVICE_NOT_EXISTED(3001, "Device does not exist", HttpStatus.NOT_FOUND),
     DEVICE_INACTIVE(3002, "Device is disabled", HttpStatus.FORBIDDEN),
@@ -54,6 +62,9 @@ public enum ErrorCode {
     INVALID_TIME_RANGE(7001, "Invalid time range: start must be before end", HttpStatus.BAD_REQUEST),
     TOO_MANY_BUCKETS(7002, "Too many buckets requested: maximum allowed is 1000", HttpStatus.BAD_REQUEST),
     INVALID_INTERVAL(7003, "Invalid interval: supported intervals are 15m, 1h, 1d", HttpStatus.BAD_REQUEST),
+
+    INVALID_REQUEST_PAYLOAD(9001, "Invalid request payload", HttpStatus.BAD_REQUEST),
+    INVALID_PARAMETER(9002, "Invalid request parameter", HttpStatus.BAD_REQUEST),
     ;
 
     int code;

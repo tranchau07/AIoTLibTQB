@@ -16,4 +16,6 @@ public interface LatestTelemetryCache {
     Optional<TelemetryResponse> getRoomTelemetry(String roomId);
 
     Map<String, TelemetryResponse> getAllRoomLatest();
+
+    void removeRoomTelemetry(String roomId);
 }

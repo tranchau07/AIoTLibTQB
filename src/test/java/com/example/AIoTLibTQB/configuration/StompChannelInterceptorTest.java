@@ -176,6 +176,49 @@ class StompChannelInterceptorTest {
     }
 
     @Test
+    @DisplayName("SEND frame to /topic destination throws MessageDeliveryException")
+    void send_toTopicDestination_throwsMessageDeliveryException() {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
+        accessor.setLeaveMutable(true);
+        accessor.setDestination("/topic/rooms/room-101/telemetry");
+        accessor.setUser(new TestingAuthenticationToken("attacker", "pass"));
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        assertThatThrownBy(() -> interceptor.preSend(message, messageChannel))
+                .isInstanceOf(MessageDeliveryException.class)
+                .hasMessageContaining("Client SEND to broker topics is forbidden");
+    }
+
+    @Test
+    @DisplayName("SUBSCRIBE to /topic/alerts by user without alert permissions throws MessageDeliveryException")
+    void subscribe_alerts_unauthorizedUser_throwsMessageDeliveryException() {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        accessor.setLeaveMutable(true);
+        accessor.setDestination("/topic/alerts");
+        // User with only VIEW_DEVICE_STATUS, without VIEW_ALERTS or admin roles
+        accessor.setUser(new TestingAuthenticationToken("alice", "pass", "VIEW_DEVICE_STATUS"));
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        assertThatThrownBy(() -> interceptor.preSend(message, messageChannel))
+                .isInstanceOf(MessageDeliveryException.class)
+                .hasMessageContaining("Access denied: VIEW_ALERTS permission required for /topic/alerts");
+    }
+
+    @Test
+    @DisplayName("SUBSCRIBE to /topic/rooms by DEVICE role throws MessageDeliveryException")
+    void subscribe_rooms_deviceRole_throwsMessageDeliveryException() {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        accessor.setLeaveMutable(true);
+        accessor.setDestination("/topic/rooms/room-101/telemetry");
+        accessor.setUser(new TestingAuthenticationToken("esp32", "pass", "ROLE_DEVICE"));
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        assertThatThrownBy(() -> interceptor.preSend(message, messageChannel))
+                .isInstanceOf(MessageDeliveryException.class)
+                .hasMessageContaining("Access denied: DEVICE role cannot subscribe to room telemetry");
+    }
+
+    @Test
     @DisplayName("SEND frame passes through unchanged without blocking")
     void send_command_passesThrough() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);

@@ -2,6 +2,7 @@ package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.document.Role;
 import com.example.AIoTLibTQB.document.User;
+import com.example.AIoTLibTQB.dto.request.PasswordChangeRequest;
 import com.example.AIoTLibTQB.dto.request.UserCreationRequest;
 import com.example.AIoTLibTQB.dto.request.UserStatusRequest;
 import com.example.AIoTLibTQB.dto.request.UserUpdateRequest;
@@ -23,6 +24,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
 
@@ -51,8 +53,16 @@ public class UserService {
         boolean isAdmin = SecurityContextHolder.getContext().getAuthentication() != null &&
                 SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream()
                         .anyMatch(a -> "ADMIN".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
+        if (isAdmin && request.getRoles() != null && !request.getRoles().isEmpty()) {
+            List<Role> customRoles = roleRepository.findAllById(request.getRoles());
+            if (!customRoles.isEmpty()) {
+                user.setRoles(new HashSet<>(customRoles));
+            }
+        }
         if (!isAdmin) {
             user.setAssignedZones(new HashSet<>());
+        } else if (request.getAssignedZones() != null) {
+            user.setAssignedZones(new HashSet<>(request.getAssignedZones()));
         }
 
         return userMapper.toUserResponse(userRepository.save(user));
@@ -86,20 +96,25 @@ public class UserService {
         return userMapper.toUserResponse(user);
     }
 
-    @PostAuthorize("hasAuthority('ADMIN') or returnObject.username == authentication.name")
     public UserResponse update(UserUpdateRequest request, String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_DID_NOT_EXIST));
 
-        userMapper.updateUser(user, request);
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean isAdmin = auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> "ADMIN".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
+        boolean isSelf = auth != null && user.getUsername() != null && user.getUsername().equals(auth.getName());
 
-        if (request.getPassword() != null && !request.getPassword().isBlank()) {
-            user.setPassword(passwordEncoder.encode(request.getPassword()));
+        if (!isAdmin && !isSelf) {
+            throw new AppException(ErrorCode.UNAUTHORIZED);
         }
 
-        boolean isAdmin = SecurityContextHolder.getContext().getAuthentication() != null &&
-                SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream()
-                        .anyMatch(a -> "ADMIN".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
+        userMapper.updateUser(user, request);
+
+        if (isAdmin && request.getPassword() != null && !request.getPassword().isBlank()) {
+            user.setPassword(passwordEncoder.encode(request.getPassword()));
+            user.setCredentialsUpdatedAt(Instant.now());
+        }
 
         if (isAdmin) {
             if (request.getRoles() != null) {
@@ -114,16 +129,52 @@ public class UserService {
         return userMapper.toUserResponse(userRepository.save(user));
     }
 
+    public void changePassword(PasswordChangeRequest request) {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null) {
+            throw new AppException(ErrorCode.UNAUTHENTICATED);
+        }
+        String currentUsername = auth.getName();
+        User user = userRepository.findByUsername(currentUsername)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_DID_NOT_EXIST));
+
+        if (!passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
+            throw new AppException(ErrorCode.OLD_PASSWORD_INCORRECT);
+        }
+
+        if (request.getOldPassword().equals(request.getNewPassword())) {
+            throw new AppException(ErrorCode.PASSWORD_SAME_AS_OLD);
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setCredentialsUpdatedAt(Instant.now());
+        userRepository.save(user);
+    }
+
     @PreAuthorize("hasAuthority('ADMIN')")
     public UserResponse toggleStatus(String id, UserStatusRequest request) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_DID_NOT_EXIST));
+
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && user.getUsername().equals(auth.getName()) && !request.isActive()) {
+            throw new AppException(ErrorCode.CANNOT_DEACTIVATE_SELF);
+        }
+
         user.setActive(request.isActive());
+        user.setCredentialsUpdatedAt(Instant.now());
         return userMapper.toUserResponse(userRepository.save(user));
     }
 
     @PreAuthorize("hasAuthority('ADMIN')")
     public void deleteById(String id) {
+        var userOpt = userRepository.findById(id);
+        if (userOpt.isPresent()) {
+            var auth = SecurityContextHolder.getContext().getAuthentication();
+            if (auth != null && userOpt.get().getUsername().equals(auth.getName())) {
+                throw new AppException(ErrorCode.CANNOT_DELETE_SELF);
+            }
+        }
         userRepository.deleteById(id);
     }
 }

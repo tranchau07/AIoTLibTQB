@@ -1,5 +1,6 @@
 package com.example.AIoTLibTQB.controller;
 
+import com.example.AIoTLibTQB.dto.request.PasswordChangeRequest;
 import com.example.AIoTLibTQB.dto.request.UserCreationRequest;
 import com.example.AIoTLibTQB.dto.request.UserStatusRequest;
 import com.example.AIoTLibTQB.dto.request.UserUpdateRequest;
@@ -38,10 +39,15 @@ public class UserController {
             @RequestParam(defaultValue = "createdAt") String sortBy,
             @RequestParam(defaultValue = "desc") String sortDir) {
 
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(100, size));
+        java.util.List<String> allowedSortFields = java.util.List.of("username", "createdAt", "email");
+        String safeSortBy = allowedSortFields.contains(sortBy) ? sortBy : "createdAt";
+
         Sort sort = sortDir.equalsIgnoreCase("asc")
-                ? Sort.by(sortBy).ascending()
-                : Sort.by(sortBy).descending();
-        Pageable pageable = PageRequest.of(page, size, sort);
+                ? Sort.by(safeSortBy).ascending()
+                : Sort.by(safeSortBy).descending();
+        Pageable pageable = PageRequest.of(safePage, safeSize, sort);
 
         return ApiResponse.<PageResponse<UserResponse>>builder()
                 .result(userService.getAll(pageable))
@@ -52,6 +58,14 @@ public class UserController {
     public ApiResponse<UserResponse> getMyInfo() {
         return ApiResponse.<UserResponse>builder()
                 .result(userService.getMyInfo())
+                .build();
+    }
+
+    @PostMapping("/change-password")
+    public ApiResponse<Void> changePassword(@RequestBody @Valid PasswordChangeRequest request) {
+        userService.changePassword(request);
+        return ApiResponse.<Void>builder()
+                .message("Password changed successfully")
                 .build();
     }
 

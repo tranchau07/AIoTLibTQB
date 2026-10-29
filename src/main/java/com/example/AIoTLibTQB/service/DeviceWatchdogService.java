@@ -162,6 +162,12 @@ public class DeviceWatchdogService {
         return offlineDeviceHardwareIds.contains(hardwareId);
     }
 
+    public void recordOfflineDevice(String hardwareId) {
+        if (hardwareId != null) {
+            offlineDeviceHardwareIds.add(hardwareId);
+        }
+    }
+
     /**
      * Handles incoming telemetry packets in the ingestion pipeline.
      * If and ONLY if the device is present in the in-memory OFFLINE set:

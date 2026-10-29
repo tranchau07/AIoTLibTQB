@@ -111,8 +111,32 @@ public class DeviceService {
                 .collect(Collectors.toList());
     }
 
-    @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE', 'VIEWER', 'USER')")
     public PageResponse<DeviceResponse> getAll(Pageable pageable, String zoneId, String roomId) {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null) {
+            boolean isFullAccess = auth.getAuthorities().stream()
+                    .anyMatch(a -> "ADMIN".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority())
+                            || "LIBRARIAN".equals(a.getAuthority()) || "ROLE_LIBRARIAN".equals(a.getAuthority())
+                            || "MAINTENANCE".equals(a.getAuthority()) || "ROLE_MAINTENANCE".equals(a.getAuthority()));
+            boolean isZoneManager = !isFullAccess && auth.getAuthorities().stream()
+                    .anyMatch(a -> "ZONE_MANAGER".equals(a.getAuthority()) || "ROLE_ZONE_MANAGER".equals(a.getAuthority()));
+            if (isZoneManager) {
+                User user = userRepository.findByUsername(auth.getName()).orElse(null);
+                java.util.Set<String> allowedZones = (user != null && user.getAssignedZones() != null)
+                        ? user.getAssignedZones()
+                        : java.util.Set.of();
+                if (zoneId != null && !zoneId.isBlank() && !allowedZones.contains(zoneId)) {
+                    throw new AppException(ErrorCode.ZONE_ACCESS_DENIED);
+                }
+                List<Device> devices = deviceRepository.findAll().stream()
+                        .filter(d -> d.getZoneId() != null && allowedZones.contains(d.getZoneId()))
+                        .filter(d -> zoneId == null || zoneId.isBlank() || zoneId.equals(d.getZoneId()))
+                        .filter(d -> roomId == null || roomId.isBlank() || roomId.equals(d.getRoomId()))
+                        .collect(Collectors.toList());
+                return toPageResponse(devices, pageable);
+            }
+        }
         if (zoneId != null && !zoneId.isBlank()) {
             List<Device> devices = deviceRepository.findByZoneId(zoneId);
             if (roomId != null && !roomId.isBlank()) {
@@ -163,7 +187,26 @@ public class DeviceService {
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE')")
     public DeviceResponse getById(String id) {
-        return toDeviceResponse(findById(id));
+        Device device = findById(id);
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null) {
+            boolean isFullAccess = auth.getAuthorities().stream()
+                    .anyMatch(a -> "ADMIN".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority())
+                            || "LIBRARIAN".equals(a.getAuthority()) || "ROLE_LIBRARIAN".equals(a.getAuthority())
+                            || "MAINTENANCE".equals(a.getAuthority()) || "ROLE_MAINTENANCE".equals(a.getAuthority()));
+            boolean isZoneManager = !isFullAccess && auth.getAuthorities().stream()
+                    .anyMatch(a -> "ZONE_MANAGER".equals(a.getAuthority()) || "ROLE_ZONE_MANAGER".equals(a.getAuthority()));
+            if (isZoneManager) {
+                User user = userRepository.findByUsername(auth.getName()).orElse(null);
+                java.util.Set<String> allowedZones = (user != null && user.getAssignedZones() != null)
+                        ? user.getAssignedZones()
+                        : java.util.Set.of();
+                if (device.getZoneId() != null && !allowedZones.contains(device.getZoneId())) {
+                    throw new AppException(ErrorCode.ZONE_ACCESS_DENIED);
+                }
+            }
+        }
+        return toDeviceResponse(device);
     }
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'ZONE_MANAGER')")
@@ -199,8 +242,8 @@ public class DeviceService {
         if (request.getZoneId() != null && !request.getZoneId().isBlank()) {
             device.setZoneId(request.getZoneId());
         }
-        if (request.getRoomId() != null && !request.getRoomId().isBlank()) {
-            device.setRoomId(request.getRoomId());
+        if (request.getRoomId() != null) {
+            device.setRoomId(request.getRoomId().isBlank() ? null : request.getRoomId().trim());
         }
         if (request.getPosX() != null) {
             device.setPosX(request.getPosX());

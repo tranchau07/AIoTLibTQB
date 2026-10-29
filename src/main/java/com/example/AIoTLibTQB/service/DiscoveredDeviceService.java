@@ -1,6 +1,8 @@
 package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.dto.response.DiscoveredDeviceResponse;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -13,8 +15,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -22,8 +22,10 @@ import java.util.stream.Collectors;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class DiscoveredDeviceService {
 
-    Map<String, DiscoveredEntry> cache = new ConcurrentHashMap<>();
-    private static final Duration EXPIRATION = Duration.ofMinutes(10);
+    Cache<String, DiscoveredEntry> cache = Caffeine.newBuilder()
+            .maximumSize(1_000)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .build();
 
     public void recordDiscovered(String hardwareId, Integer wifiRssi) {
         if (hardwareId == null || hardwareId.isBlank()) {
@@ -31,7 +33,7 @@ public class DiscoveredDeviceService {
         }
 
         Instant now = Instant.now();
-        cache.compute(hardwareId, (key, existing) -> {
+        cache.asMap().compute(hardwareId, (key, existing) -> {
             if (existing == null) {
                 log.info("Discovered new unregistered IoT device broadcasting: hardwareId={}, rssi={}",
                         hardwareId, wifiRssi);
@@ -50,7 +52,7 @@ public class DiscoveredDeviceService {
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
     public List<DiscoveredDeviceResponse> getDiscoveredDevices() {
         cleanExpired();
-        return cache.values().stream()
+        return cache.asMap().values().stream()
                 .sorted(Comparator.comparing(DiscoveredEntry::getLastSeenAt).reversed())
                 .map(this::toResponse)
                 .collect(Collectors.toList());
@@ -58,13 +60,12 @@ public class DiscoveredDeviceService {
 
     public void removeDiscovered(String hardwareId) {
         if (hardwareId != null) {
-            cache.remove(hardwareId);
+            cache.invalidate(hardwareId);
         }
     }
 
     private void cleanExpired() {
-        Instant threshold = Instant.now().minus(EXPIRATION);
-        cache.entrySet().removeIf(entry -> entry.getValue().getLastSeenAt().isBefore(threshold));
+        cache.cleanUp();
     }
 
     private DiscoveredDeviceResponse toResponse(DiscoveredEntry entry) {

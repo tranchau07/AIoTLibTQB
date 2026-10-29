@@ -36,8 +36,12 @@ public class AlertController {
             @RequestParam(defaultValue = "startedAt") String sortBy,
             @RequestParam(defaultValue = "DESC") String direction
     ) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(1, Math.min(100, size));
+        java.util.List<String> allowedSortFields = java.util.List.of("startedAt", "severity", "status", "type", "createdAt");
+        String safeSortBy = allowedSortFields.contains(sortBy) ? sortBy : "startedAt";
         Sort.Direction sortDirection = "ASC".equalsIgnoreCase(direction) ? Sort.Direction.ASC : Sort.Direction.DESC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, sortBy));
+        Pageable pageable = PageRequest.of(safePage, safeSize, Sort.by(sortDirection, safeSortBy));
 
         return ApiResponse.<PageResponse<AlertResponse>>builder()
                 .result(alertService.getAlerts(roomId, type, status, pageable))

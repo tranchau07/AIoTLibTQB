@@ -4,7 +4,7 @@ spring:
 
   data:
     mongodb:
-      uri: ${MONGO_URI:mongodb://root:root@localhost:27017/aiot_identity_db?authSource=admin}
+      uri: ${MONGO_URI:mongodb://localhost:27017/aiot_identity_db}
       auto-index-creation: true
 
 server:
@@ -21,20 +21,20 @@ management:
       show-details: when_authorized
 
 jwt:
-  # Secret key HMAC-SHA512 tối thiểu 64 ký tự (cần thay thế bằng key bí mật thực tế của môi trường)
-  secret-key: ${JWT_SECRET:YOUR_SECURE_HMAC_SHA512_SECRET_KEY_AT_LEAST_64_CHARACTERS_LONG_HERE}
+  # Bắt buộc cấu hình biến môi trường JWT_SECRET (tối thiểu 64 ký tự cho HMAC-SHA512)
+  secret-key: ${JWT_SECRET}
   expiration-hours: ${JWT_EXPIRATION_HOURS:1}
   refreshable-hours: ${JWT_REFRESHABLE_HOURS:24}
   issuer: ${JWT_ISSUER:AIoTLibTQB.com}
 
 cors:
-  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:8081}
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
 
 mqtt:
   broker-url: ${MQTT_BROKER_URL:tcp://localhost:1883}
   client-id: ${MQTT_CLIENT_ID:aiot_backend_consumer}
   username: ${MQTT_USERNAME:aiot_backend}
-  password: ${MQTT_PASSWORD:your_mqtt_broker_password_here}
+  password: ${MQTT_PASSWORD:}
   default-telemetry-topic: ${MQTT_TELEMETRY_TOPIC:devices/+/telemetry}
   default-status-topic: ${MQTT_STATUS_TOPIC:devices/+/status}
 

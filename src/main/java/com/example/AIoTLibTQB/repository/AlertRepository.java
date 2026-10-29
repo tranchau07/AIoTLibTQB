@@ -18,6 +18,12 @@ public interface AlertRepository extends MongoRepository<Alert, String> {
 
     List<Alert> findByStatus(AlertStatus status);
 
+    List<Alert> findByStatusIn(List<AlertStatus> statuses);
+
+    List<Alert> findByHardwareIdAndTypeAndStatusIn(String hardwareId, AlertType type, List<AlertStatus> statuses);
+
+    List<Alert> findByDeviceIdAndTypeAndStatusIn(String deviceId, AlertType type, List<AlertStatus> statuses);
+
     List<Alert> findByRoomIdOrderByStartedAtDesc(String roomId);
 
     Optional<Alert> findTopByDeviceIdAndTypeAndStatusOrderByStartedAtDesc(

@@ -164,7 +164,11 @@ public class ApplicationInitConfig {
                 Role role = roleRepository.findById(def.name())
                         .map(existing -> {
                             existing.setDescription(def.description());
-                            existing.setPermissions(perms);
+                            Set<Permission> mergedPerms = new HashSet<>(perms);
+                            if (existing.getPermissions() != null) {
+                                mergedPerms.addAll(existing.getPermissions());
+                            }
+                            existing.setPermissions(mergedPerms);
                             return existing;
                         })
                         .orElseGet(() -> Role.builder()
@@ -173,7 +177,7 @@ public class ApplicationInitConfig {
                                 .permissions(perms)
                                 .build());
                 roleRepository.save(role);
-                log.info("Synchronized role: {} ({} permissions)", def.name(), perms.size());
+                log.info("Synchronized role: {} ({} permissions)", def.name(), role.getPermissions().size());
             }
 
             Role adminRole = roleRepository.findById("ADMIN")
@@ -226,11 +230,20 @@ public class ApplicationInitConfig {
                                     .roles(new HashSet<>(Set.of(adminRole)))
                                     .build();
                             userRepository.save(adminUser);
+                            boolean isDevOrLocal = environment != null && (
+                                    environment.getActiveProfiles().length == 0 ||
+                                    Arrays.stream(environment.getActiveProfiles())
+                                            .anyMatch(p -> p.equalsIgnoreCase("dev") || p.equalsIgnoreCase("local") || p.equalsIgnoreCase("test"))
+                            );
                             log.warn("================================================================================");
                             log.warn(" [SECURITY WARNING] No INITIAL_ADMIN_PASSWORD provided for local/dev environment!");
                             log.warn(" A temporary admin account has been created:");
                             log.warn("   Username: admin");
-                            log.warn("   Password: {}", generatedPassword);
+                            if (isDevOrLocal) {
+                                log.warn("   Password: {}", generatedPassword);
+                            } else {
+                                log.warn("   Password generated dynamically. Set INITIAL_ADMIN_PASSWORD for permanent credentials.");
+                            }
                             log.warn(" Please change this password immediately after login or set INITIAL_ADMIN_PASSWORD.");
                             log.warn("================================================================================");
                         }
