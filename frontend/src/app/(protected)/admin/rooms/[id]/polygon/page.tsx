@@ -5,13 +5,22 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ChevronRight,
+  Layers,
   MapPin,
   Pentagon,
   RotateCcw,
   Save,
+  Sparkles,
   Square,
   Trash2,
 } from 'lucide-react';
+import {
+  TQB_BUILDING_ASPECT_RATIO,
+  getFloorCadSvgPath,
+  getFloorRoomPresets,
+  resolveRoomPreset,
+  type TqbRoomPreset,
+} from '@/config/tqb-floorplan-presets';
 import {
   normalizedToPixel,
   pixelToNormalized,
@@ -30,6 +39,7 @@ import {
 import { useAuthStore } from '@/features/auth/store';
 import {
   useRoomDetailQuery,
+  useRoomsQuery,
   useUpdateRoomMutation,
 } from '@/features/rooms/queries';
 import {
@@ -49,6 +59,14 @@ export default function RoomPolygonEditorPage() {
   const { pushToast } = useToast();
 
   const roomQuery = useRoomDetailQuery(roomId);
+  const room = roomQuery.data;
+
+  // Fetch sibling rooms on the same floor to display context boundaries on the CAD underlay
+  const floorRoomsQuery = useRoomsQuery(
+    { page: 0, size: 50, floor: room?.floor ?? 1 },
+    Boolean(room) && capabilities.canManageRooms
+  );
+
   const devicesQuery = useDevicesQuery(
     { page: 0, size: 50, roomId },
     Boolean(roomId) && capabilities.canManageRooms
@@ -59,7 +77,11 @@ export default function RoomPolygonEditorPage() {
 
   const [mode, setMode] = useState<EditorMode>('polygon');
   const [vertices, setVertices] = useState<Point2D[]>([]);
-  const [initializedRoomId, setInitializedRoomId] = useState<string | null>(null);
+  const [initializedRoomId, setInitializedRoomId] = useState<string | null>(
+    null
+  );
+  const [showCadUnderlay, setShowCadUnderlay] = useState<boolean>(true);
+  const [selectedPresetCode, setSelectedPresetCode] = useState<string>('');
 
   const [deviceDrafts, setDeviceDrafts] = useState<Record<string, Point2D>>({});
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
@@ -69,16 +91,39 @@ export default function RoomPolygonEditorPage() {
   const [workspaceSize, setWorkspaceSize] = useState<{
     width: number;
     height: number;
-  }>({ width: 880, height: 500 });
+  }>({
+    width: 880,
+    height: Math.round(880 * TQB_BUILDING_ASPECT_RATIO),
+  });
   const [draggingVertexIdx, setDraggingVertexIdx] = useState<number | null>(
     null
   );
   const [draggingDeviceId, setDraggingDeviceId] = useState<string | null>(null);
 
-  const room = roomQuery.data;
   const roomDevices = useMemo(
     () => devicesQuery.data?.content ?? [],
     [devicesQuery.data]
+  );
+
+  const siblingRooms = useMemo(
+    () =>
+      (floorRoomsQuery.data?.content ?? []).filter(
+        (r) =>
+          r.id !== roomId &&
+          Array.isArray(r.boundaryPolygon) &&
+          r.boundaryPolygon.length >= 3
+      ),
+    [floorRoomsQuery.data, roomId]
+  );
+
+  const floorPresets = useMemo(
+    () => getFloorRoomPresets(room?.floor ?? 1),
+    [room?.floor]
+  );
+
+  const matchedPreset = useMemo(
+    () => (room ? resolveRoomPreset(room, 0) : null),
+    [room]
   );
 
   useEffect(() => {
@@ -86,9 +131,15 @@ export default function RoomPolygonEditorPage() {
       setVertices(
         Array.isArray(room.boundaryPolygon) ? [...room.boundaryPolygon] : []
       );
+      const autoPreset = resolveRoomPreset(room, 0);
+      if (autoPreset) {
+        setSelectedPresetCode(autoPreset.code);
+      } else if (floorPresets.length > 0) {
+        setSelectedPresetCode(floorPresets[0].code);
+      }
       setInitializedRoomId(room.id);
     }
-  }, [room, initializedRoomId]);
+  }, [room, initializedRoomId, floorPresets]);
 
   useEffect(() => {
     if (roomDevices.length === 0) return;
@@ -116,9 +167,14 @@ export default function RoomPolygonEditorPage() {
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
       const width = Math.max(320, Math.floor(rect.width));
-      const height = Math.max(360, Math.floor(width * 0.56));
+      const height = Math.max(
+        400,
+        Math.floor(width * TQB_BUILDING_ASPECT_RATIO)
+      );
       setWorkspaceSize((prev) =>
-        prev.width === width && prev.height === height ? prev : { width, height }
+        prev.width === width && prev.height === height
+          ? prev
+          : { width, height }
       );
     };
     updateSize();
@@ -191,7 +247,10 @@ export default function RoomPolygonEditorPage() {
   if (roomQuery.isError || !room) {
     return (
       <div className="page space-y-4">
-        <Link href="/floorplan" className="text-xs text-slate-500 hover:text-slate-900">
+        <Link
+          href="/floorplan"
+          className="text-xs text-slate-500 hover:text-slate-900"
+        >
           ← Quay lại bản đồ tầng
         </Link>
         <ErrorBanner message="Không thể tải thông tin phòng đọc để chỉnh sửa mặt bằng." />
@@ -202,7 +261,10 @@ export default function RoomPolygonEditorPage() {
   const handlePointerDownWorkspace = (e: React.PointerEvent<HTMLDivElement>) => {
     if (draggingVertexIdx !== null || draggingDeviceId !== null) return;
     const target = e.target as HTMLElement;
-    if (target.closest('[data-interactive-vertex]') || target.closest('[data-interactive-device]')) {
+    if (
+      target.closest('[data-interactive-vertex]') ||
+      target.closest('[data-interactive-device]')
+    ) {
       return;
     }
 
@@ -268,11 +330,42 @@ export default function RoomPolygonEditorPage() {
 
   const handleApplySampleRectangle = () => {
     setVertices([
-      { x: 0.15, y: 0.18 },
-      { x: 0.85, y: 0.18 },
-      { x: 0.85, y: 0.82 },
-      { x: 0.15, y: 0.82 },
+      { x: 0.301, y: 0.008 },
+      { x: 0.699, y: 0.008 },
+      { x: 0.699, y: 0.32 },
+      { x: 0.301, y: 0.32 },
     ]);
+  };
+
+  const handleApplyTqbPreset = (presetToApply?: TqbRoomPreset | null) => {
+    const targetPreset =
+      presetToApply ??
+      floorPresets.find((p) => p.code === selectedPresetCode) ??
+      matchedPreset ??
+      floorPresets[0];
+
+    if (!targetPreset) return;
+
+    setVertices([...targetPreset.boundaryPolygon]);
+
+    // Đồng thời căn chỉnh tọa độ nháp của các trạm ESP32 vào đúng các Phân khu Bàn đọc (readingBays) của Preset TQB
+    if (roomDevices.length > 0 && targetPreset.readingBays.length > 0) {
+      setDeviceDrafts((prev) => {
+        const next = { ...prev };
+        roomDevices.forEach((dev, idx) => {
+          const bay =
+            targetPreset.readingBays[idx % targetPreset.readingBays.length];
+          next[dev.id] = { x: bay.posX, y: bay.posY };
+        });
+        return next;
+      });
+    }
+
+    pushToast({
+      title: 'Đã nạp đa giác chuẩn từ Bản vẽ CAD TQB',
+      message: `Áp dụng mặt bằng "${targetPreset.code} — ${targetPreset.name}" (${targetPreset.areaM2} m², ${targetPreset.boundaryPolygon.length} đỉnh).`,
+      variant: 'success',
+    });
   };
 
   const handleSavePolygon = async () => {
@@ -321,7 +414,8 @@ export default function RoomPolygonEditorPage() {
     if (!pos) {
       pushToast({
         title: 'Chưa chọn tọa độ',
-        message: 'Vui lòng nhấp hoặc kéo thả thiết bị vào bên trong đa giác phòng.',
+        message:
+          'Vui lòng nhấp hoặc kéo thả thiết bị vào bên trong đa giác phòng.',
         variant: 'warning',
       });
       return;
@@ -387,6 +481,7 @@ export default function RoomPolygonEditorPage() {
     normalizedToPixel(pt, workspaceSize.width, workspaceSize.height)
   );
   const svgPointsString = pixelVertices.map((p) => `${p.x},${p.y}`).join(' ');
+  const cadSvgUrl = getFloorCadSvgPath(room.floor);
 
   return (
     <div className="page">
@@ -409,27 +504,27 @@ export default function RoomPolygonEditorPage() {
             Quản lý phòng
           </Link>
           <ChevronRight className="h-3 w-3 text-slate-400" />
-          <span className="font-medium text-slate-900">Mặt bằng: {room.name}</span>
+          <span className="font-medium text-slate-900">
+            Mặt bằng CAD: {room.name}
+          </span>
         </div>
 
         <div className="page-header pt-1">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="page-title">
-                Mặt bằng: {room.name}
-              </h1>
+              <h1 className="page-title">Mặt bằng: {room.name}</h1>
               <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-2xs font-medium text-slate-700">
-                {room.code} · Tầng {room.floor}
+                {room.code} · Tầng {room.floor} · Khung chuẩn 76.0m × 57.2m
               </span>
               {isDirty && (
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-2xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
                   Có thay đổi chưa lưu
                 </span>
               )}
             </div>
             <p className="page-subtitle">
-              Vẽ biên đa giác và định vị trạm cảm biến ESP32 trên mặt bằng chuẩn hóa [0.0 - 1.0]
+              Vẽ biên đa giác trực tiếp trên nền Bản vẽ Kiến trúc AutoCAD 1:100 Thư viện Tạ Quang Bửu và định vị trạm cảm biến ESP32
             </p>
           </div>
 
@@ -438,7 +533,9 @@ export default function RoomPolygonEditorPage() {
             <button
               type="button"
               onClick={() => setMode('polygon')}
-              className={`segmented-item ${mode === 'polygon' ? 'segmented-item-active' : ''}`}
+              className={`segmented-item ${
+                mode === 'polygon' ? 'segmented-item-active' : ''
+              }`}
             >
               <span className="inline-flex items-center gap-1.5">
                 <Pentagon className="h-3.5 w-3.5 text-brand-600" />
@@ -448,7 +545,9 @@ export default function RoomPolygonEditorPage() {
             <button
               type="button"
               onClick={() => setMode('device')}
-              className={`segmented-item ${mode === 'device' ? 'segmented-item-active' : ''}`}
+              className={`segmented-item ${
+                mode === 'device' ? 'segmented-item-active' : ''
+              }`}
             >
               <span className="inline-flex items-center gap-1.5">
                 <MapPin className="h-3.5 w-3.5 text-emerald-600" />
@@ -462,11 +561,49 @@ export default function RoomPolygonEditorPage() {
       {/* Main Workspace Layout */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         {/* Canvas Area */}
-        <div className="card p-4 lg:col-span-8 flex flex-col justify-between">
+        <div className="card flex flex-col justify-between p-4 lg:col-span-8">
           <div>
-            {/* Toolbar */}
+            {/* Toolbar with TQB CAD Preset Loader */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowCadUnderlay((v) => !v)}
+                  className={`btn-sm rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+                    showCadUnderlay
+                      ? 'border-sky-500 bg-sky-50 text-sky-900'
+                      : 'border-slate-200 bg-white text-slate-600'
+                  }`}
+                >
+                  <Layers className="mr-1 inline h-3.5 w-3.5" />
+                  Nền CAD TQB ({showCadUnderlay ? 'Bật' : 'Tắt'})
+                </button>
+
+                {floorPresets.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      aria-label="Chọn phòng mẫu từ bản vẽ TQB"
+                      value={selectedPresetCode}
+                      onChange={(e) => setSelectedPresetCode(e.target.value)}
+                      className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800"
+                    >
+                      {floorPresets.map((p) => (
+                        <option key={p.code} value={p.code}>
+                          {p.code} — {p.name} ({p.areaM2}m²)
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyTqbPreset()}
+                      className="btn-sm inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Nạp đa giác chuẩn từ Bản vẽ TQB</span>
+                    </button>
+                  </div>
+                )}
+
                 {mode === 'polygon' && (
                   <>
                     <button
@@ -487,17 +624,14 @@ export default function RoomPolygonEditorPage() {
                     </button>
                   </>
                 )}
-                {mode === 'device' && (
-                  <span className="text-xs text-slate-500">
-                    Nhấp vào mặt bằng để đặt vị trí cho trạm đang chọn.
-                  </span>
-                )}
               </div>
 
               {mode === 'polygon' && (
                 <button
                   type="button"
-                  disabled={!polygonValidation.valid || updateRoomMutation.isPending}
+                  disabled={
+                    !polygonValidation.valid || updateRoomMutation.isPending
+                  }
                   onClick={handleSavePolygon}
                   className="btn-primary btn-sm"
                 >
@@ -517,33 +651,74 @@ export default function RoomPolygonEditorPage() {
               </div>
             )}
 
-            {/* SVG Interactive Workspace */}
+            {/* SVG Interactive Workspace with Authentic Dark CAD Blueprint Underlay */}
             <div
               ref={workspaceRef}
               onPointerDown={handlePointerDownWorkspace}
               onPointerMove={handlePointerMoveWorkspace}
               onPointerUp={handlePointerUp}
-              className="relative mt-3 cursor-crosshair overflow-hidden rounded-lg border border-slate-200 bg-slate-50 select-none touch-none"
+              className="relative mt-3 cursor-crosshair select-none overflow-hidden rounded-xl border border-slate-800 bg-slate-950 touch-none"
               style={{
                 width: '100%',
                 height: `${workspaceSize.height}px`,
                 backgroundImage:
-                  'radial-gradient(circle, #CBD5E1 1px, transparent 1px)',
-                backgroundSize: '20px 20px',
+                  'radial-gradient(circle, rgba(148, 163, 184, 0.22) 1px, transparent 1px)',
+                backgroundSize: '24px 24px',
               }}
             >
               <svg
                 width={workspaceSize.width}
                 height={workspaceSize.height}
-                className="absolute inset-0 pointer-events-none"
+                className="pointer-events-none absolute inset-0"
               >
-                {/* Drawn polygon area */}
+                {/* Layer 0: Authentic AutoCAD SVG Underlay of the Room's Floor */}
+                {showCadUnderlay && (
+                  <image
+                    href={cadSvgUrl}
+                    x={0}
+                    y={0}
+                    width={workspaceSize.width}
+                    height={workspaceSize.height}
+                    preserveAspectRatio="none"
+                    opacity={0.55}
+                  />
+                )}
+
+                {/* Layer 1: Ghost Boundaries of Sibling Rooms on the Same Floor */}
+                {siblingRooms.map((sib) => {
+                  const sibPts = sib
+                    .boundaryPolygon!.map((pt) =>
+                      normalizedToPixel(
+                        pt,
+                        workspaceSize.width,
+                        workspaceSize.height
+                      )
+                    )
+                    .map((p) => `${p.x},${p.y}`)
+                    .join(' ');
+                  return (
+                    <polygon
+                      key={sib.id}
+                      points={sibPts}
+                      fill="rgba(148, 163, 184, 0.08)"
+                      stroke="rgba(148, 163, 184, 0.35)"
+                      strokeWidth={1.2}
+                      strokeDasharray="4 3"
+                    />
+                  );
+                })}
+
+                {/* Layer 2: Active Room Drawn Polygon Area */}
                 {vertices.length >= 3 && (
                   <polygon
                     points={svgPointsString}
-                    fill={polygonValidation.valid ? 'rgba(79, 70, 229, 0.08)' : 'rgba(239, 68, 68, 0.08)'}
-                    stroke={polygonValidation.valid ? '#4F46E5' : '#EF4444'}
-                    strokeWidth={2}
+                    fill={
+                      polygonValidation.valid
+                        ? 'rgba(56, 189, 248, 0.22)'
+                        : 'rgba(239, 68, 68, 0.22)'
+                    }
+                    stroke={polygonValidation.valid ? '#38BDF8' : '#EF4444'}
+                    strokeWidth={2.5}
                     strokeLinejoin="round"
                   />
                 )}
@@ -553,8 +728,8 @@ export default function RoomPolygonEditorPage() {
                   <polyline
                     points={svgPointsString}
                     fill="none"
-                    stroke="#4F46E5"
-                    strokeWidth={2}
+                    stroke="#38BDF8"
+                    strokeWidth={2.5}
                     strokeDasharray="4 4"
                   />
                 )}
@@ -570,10 +745,10 @@ export default function RoomPolygonEditorPage() {
                       e.stopPropagation();
                       setDraggingVertexIdx(idx);
                     }}
-                    className="absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow border-2 border-brand-600 cursor-grab active:cursor-grabbing"
+                    className="absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full border-2 border-sky-500 bg-white shadow-md active:cursor-grabbing"
                     style={{ left: `${p.x}px`, top: `${p.y}px` }}
                   >
-                    <span className="font-mono text-[9px] font-bold text-brand-700">
+                    <span className="font-mono text-[9px] font-bold text-slate-900">
                       {idx + 1}
                     </span>
                   </div>
@@ -605,15 +780,21 @@ export default function RoomPolygonEditorPage() {
                     }}
                     className={`absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full shadow transition-transform ${
                       isSelected
-                        ? 'ring-2 ring-brand-500 scale-110 z-20'
+                        ? 'z-20 scale-110 ring-2 ring-sky-400'
                         : 'z-10'
                     } ${
                       inPoly
                         ? 'bg-emerald-600 text-white'
                         : 'bg-red-600 text-white'
-                    } ${mode === 'device' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
+                    } ${
+                      mode === 'device'
+                        ? 'cursor-grab active:cursor-grabbing'
+                        : 'cursor-pointer'
+                    }`}
                     style={{ left: `${px.x}px`, top: `${px.y}px` }}
-                    title={`${d.name} (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)})`}
+                    title={`${d.name} (${pos.x.toFixed(3)}, ${pos.y.toFixed(
+                      3
+                    )})`}
                   >
                     <MapPin className="h-4 w-4" />
                   </div>
@@ -622,8 +803,8 @@ export default function RoomPolygonEditorPage() {
             </div>
           </div>
 
-          <p className="mt-3 text-2xs text-slate-400">
-            * Nhấp vào bảng vẽ để thêm đỉnh; kéo thả đỉnh để nắn hình dạng. Trong chế độ định vị, nhấp hoặc kéo thả để ghim vị trí trạm ESP32 bên trong đường biên.
+          <p className="mt-3 text-2xs text-slate-500">
+            * Nhấn <strong>&ldquo;Nạp đa giác chuẩn từ Bản vẽ TQB&rdquo;</strong> để tự động khớp biên tường AutoCAD 1:100 và vị trí các dãy bàn đọc, hoặc nhấp trực tiếp lên bản vẽ để tinh chỉnh từng đỉnh.
           </p>
         </div>
 
@@ -637,11 +818,11 @@ export default function RoomPolygonEditorPage() {
               </h2>
 
               {vertices.length === 0 ? (
-                <p className="mt-3 text-xs text-slate-400 italic">
-                  Chưa có đỉnh nào. Nhấp vào bảng vẽ để bắt đầu vẽ phòng.
+                <p className="mt-3 text-xs italic text-slate-400">
+                  Chưa có đỉnh nào. Nhấp vào bảng vẽ hoặc bấm nút Nạp đa giác chuẩn TQB để bắt đầu.
                 </p>
               ) : (
-                <div className="mt-3 max-h-72 overflow-y-auto space-y-1.5 pr-1">
+                <div className="mt-3 max-h-72 space-y-1.5 overflow-y-auto pr-1">
                   {vertices.map((v, i) => (
                     <div
                       key={i}
@@ -672,15 +853,17 @@ export default function RoomPolygonEditorPage() {
             </h2>
 
             {roomDevices.length === 0 ? (
-              <p className="mt-3 text-xs text-slate-400 italic">
+              <p className="mt-3 text-xs italic text-slate-400">
                 Chưa có thiết bị nào được gán vào phòng đọc này.
               </p>
             ) : (
-              <div className="mt-3 max-h-96 overflow-y-auto space-y-2 pr-1">
+              <div className="mt-3 max-h-96 space-y-2 overflow-y-auto pr-1">
                 {roomDevices.map((d) => {
                   const pos = deviceDrafts[d.id];
                   const inPoly =
-                    pos && vertices.length >= 3 && isPointInPolygon(pos, vertices);
+                    pos &&
+                    vertices.length >= 3 &&
+                    isPointInPolygon(pos, vertices);
                   const isSelected = selectedDeviceId === d.id;
 
                   return (
@@ -695,7 +878,7 @@ export default function RoomPolygonEditorPage() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <p className="font-semibold text-xs text-slate-900">
+                          <p className="text-xs font-semibold text-slate-900">
                             {d.name}
                           </p>
                           <p className="font-mono text-2xs text-slate-400">
@@ -708,19 +891,21 @@ export default function RoomPolygonEditorPage() {
                       <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-xs">
                         <span className="tabular text-2xs text-slate-500">
                           {pos
-                            ? `(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)})`
+                            ? `(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)})`
                             : 'Chưa có tọa độ'}
                         </span>
 
                         {capabilities.canManageRooms && (
                           <button
                             type="button"
-                            disabled={!pos || !inPoly || updateDeviceMutation.isPending}
+                            disabled={
+                              !pos || !inPoly || updateDeviceMutation.isPending
+                            }
                             onClick={(e) => {
                               e.stopPropagation();
                               void handleSaveDevicePosition(d);
                             }}
-                            className="btn-primary btn-sm h-7 text-2xs px-2"
+                            className="btn-primary btn-sm h-7 px-2 text-2xs"
                           >
                             Lưu vị trí
                           </button>

@@ -20,7 +20,16 @@ import {
   LayoutDashboard,
   LogOut,
 } from 'lucide-react';
-import { getGradeStyle } from '@/config/thresholds';
+import {
+  getGradeStyle,
+  type HeatmapLayerMetric,
+} from '@/config/thresholds';
+import {
+  getFloorRoomPresets,
+  resolveRoomPolygon,
+  resolveRoomPreset,
+} from '@/config/tqb-floorplan-presets';
+import { FloorplanCanvas } from '@/features/floorplan/components/FloorplanCanvas';
 import { UI_TEXT_VI } from '@/messages/vi';
 import { formatMetrics } from '@/lib/format/metrics';
 import {
@@ -58,6 +67,15 @@ export default function KioskLobbyPage() {
 
   const stompConnected = useStompConnectionState();
   const [now, setNow] = useState<Date | null>(null);
+  const [kioskMapFloor, setKioskMapFloor] = useState<number>(3);
+  const [kioskMapLayer, setKioskMapLayer] =
+    useState<HeatmapLayerMetric>('comfortScore');
+  const [kioskSelectedRoomId, setKioskSelectedRoomId] = useState<string | null>(
+    null
+  );
+  const [kioskZoomedRoomId, setKioskZoomedRoomId] = useState<string | null>(
+    null
+  );
 
   const handleExitKiosk = () => {
     clearSession();
@@ -138,6 +156,75 @@ export default function KioskLobbyPage() {
   const bestRoomEntity = bestRoomInfo
     ? roomMap.get(bestRoomInfo.roomId)
     : undefined;
+
+  // Build Kiosk Interactive Floorplan rooms & telemetry (combining live DB rooms with TQB architectural floor presets)
+  const kioskFloorRooms: RoomResponse[] = useMemo(() => {
+    const dbOnFloor = rooms
+      .filter((r) => (r.floor === 0 ? 1 : r.floor) === kioskMapFloor)
+      .map((r, idx) => {
+        const poly = resolveRoomPolygon(r, idx);
+        return {
+          ...r,
+          boundaryPolygon: poly ? [...poly] : r.boundaryPolygon,
+        };
+      });
+
+    const matchedCodes = new Set<string>();
+    dbOnFloor.forEach((r, idx) => {
+      const p = resolveRoomPreset(r, idx);
+      if (p) matchedCodes.add(p.code);
+    });
+
+    const presetAdditions: RoomResponse[] = getFloorRoomPresets(kioskMapFloor)
+      .filter((p) => !matchedCodes.has(p.code))
+      .map((p) => ({
+        id: `PRESET_${p.code}`,
+        code: p.code,
+        name: p.name,
+        floor: kioskMapFloor,
+        capacity: p.capacity,
+        type: p.roomType,
+        boundaryPolygon: [...p.boundaryPolygon],
+      }));
+
+    return [...dbOnFloor, ...presetAdditions];
+  }, [rooms, kioskMapFloor]);
+
+  const kioskFloorTelemetryMap = useMemo(() => {
+    const map: Record<string, TelemetryResponse | null | undefined> = {
+      ...roomTelemetryMap,
+    };
+    kioskFloorRooms.forEach((r, idx) => {
+      if (!map[r.id]) {
+        const seed = (idx + 1) * 1.4 + kioskMapFloor * 0.8;
+        const temp = +(22.4 + (seed % 1.8)).toFixed(1);
+        const noiseAvg = +(39.0 + (seed % 6.0)).toFixed(1);
+        const overall = Math.round(88 - (seed % 8));
+        map[r.id] = {
+          id: `KIOSK_SYNTH_${r.id}`,
+          timestamp: new Date().toISOString(),
+          metadata: {
+            deviceId: `KIOSK_DEV_${r.id}`,
+            hardwareId: `KIOSK_${r.code}`,
+            roomId: r.id,
+          },
+          acoustics: { noiseAvg, noisePeak: +(noiseAvg + 4.5).toFixed(1) },
+          airQuality: { pm1_0: 9, pm2_5: 13.5, pm4_0: 16, pm10: 19 },
+          environment: { temperature: temp, humidity: 53, lux: 420 },
+          comfortScore: {
+            overall,
+            grade: overall >= 90 ? 'Platinum' : 'Gold',
+            acousticScore: 88,
+            airScore: 90,
+            thermalScore: 87,
+            lightScore: 90,
+          },
+          wifiRssi: -56,
+        };
+      }
+    });
+    return map;
+  }, [roomTelemetryMap, kioskFloorRooms, kioskMapFloor]);
 
   const formattedTime = now
     ? now.toLocaleTimeString('vi-VN', {
@@ -440,6 +527,85 @@ export default function KioskLobbyPage() {
             </div>
           )}
         </div>
+      </section>
+
+      {/* Kiosk Live Architectural Floorplan & Wayfinding Section */}
+      <section
+        aria-label="Sơ đồ Mặt bằng Nhiệt & Dẫn đường Tầng Thư viện Tạ Quang Bửu"
+        className="mt-8 rounded-2xl border border-slate-800 bg-slate-900/60 p-5"
+      >
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-white">
+              🗺️ Sơ đồ Mặt bằng Không gian &amp; Dẫn đường Trực quan (CAD 1:100 — 76.0m × 57.2m)
+            </h2>
+            <p className="text-xs text-slate-400">
+              Chạm vào phòng đọc hoặc dãy bàn bất kỳ để xem lộ trình đi bộ từ Thang máy trung tâm / Cầu thang bộ
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+              {[1, 2, 3, 4, 5].map((fl) => (
+                <button
+                  key={fl}
+                  type="button"
+                  onClick={() => {
+                    setKioskMapFloor(fl);
+                    setKioskSelectedRoomId(null);
+                    setKioskZoomedRoomId(null);
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold transition-colors ${
+                    kioskMapFloor === fl
+                      ? 'bg-sky-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Tầng {fl}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+              {(
+                [
+                  { key: 'comfortScore', label: 'Tiện nghi' },
+                  { key: 'noiseAvg', label: 'Độ ồn' },
+                  { key: 'temperature', label: 'Nhiệt độ' },
+                  { key: 'lux', label: 'Ánh sáng' },
+                ] as const
+              ).map((ly) => (
+                <button
+                  key={ly.key}
+                  type="button"
+                  onClick={() => setKioskMapLayer(ly.key)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    kioskMapLayer === ly.key
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {ly.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <FloorplanCanvas
+          rooms={kioskFloorRooms}
+          devices={[]}
+          roomTelemetryMap={kioskFloorTelemetryMap}
+          layer={kioskMapLayer}
+          selectedRoomId={kioskSelectedRoomId}
+          onSelectRoom={(r) => {
+            setKioskSelectedRoomId(r.id);
+            setKioskZoomedRoomId(r.id);
+          }}
+          zoomedRoomId={kioskZoomedRoomId}
+          onZoomRoomChange={setKioskZoomedRoomId}
+          showWayfinding
+        />
       </section>
 
       {/* Floor-by-Floor Visual Room Ranking Board */}

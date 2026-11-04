@@ -14,13 +14,35 @@ import {
   validateBucketRange,
 } from '@/lib/format/metrics';
 import { formatRelativeTimeVi } from '@/lib/format/datetime';
-import { getGradeStyle, resolveGradeFromScore } from '@/config/thresholds';
+import {
+  getGradeStyle,
+  getMetricColorHex,
+  resolveGradeFromScore,
+  type HeatmapLayerMetric,
+} from '@/config/thresholds';
 import { computeIdwValue } from '@/lib/floorplan/idw';
 import {
   computeVisualPolygonCenter,
   isPointInPolygon,
   validateBoundaryPolygon,
 } from '@/lib/floorplan/polygon';
+import {
+  WEATHER_PALETTES,
+  computeAdaptiveSigma,
+  computeRoomBlindspotRatio,
+  getContinuousMetricColor,
+} from '@/lib/floorplan/weatherPalette';
+import {
+  TQB_BUILDING_ASPECT_RATIO,
+  TQB_ROOM_PRESETS,
+  computeWayfindingPath,
+  resolveRoomPreset,
+  synthesizeAnonymousMicroZones,
+} from '@/config/tqb-floorplan-presets';
+import {
+  extractLayerMetricValue,
+  formatLayerMetricValue,
+} from '@/features/floorplan/components/FloorplanCanvas';
 import { normalizedToPixel, pixelToNormalized } from '@/lib/floorplan/coords';
 import {
   mergeRealtimeTelemetry,
@@ -406,5 +428,174 @@ describe('7. Remediation Verification: Kiosk Refresh, Custom RBAC, CSV Hygiene &
     expect(validateBoundaryPolygon(lShape).valid).toBe(true);
     const center = computeVisualPolygonCenter(lShape);
     expect(isPointInPolygon(center, lShape)).toBe(true);
+  });
+});
+
+describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive Sigma & Anonymous Micro-Zones', () => {
+  it('validates 100% of TQB_ROOM_PRESETS boundary polygons and ensures readingBays sit inside room boundaries', () => {
+    expect(TQB_BUILDING_ASPECT_RATIO).toBeCloseTo(57.2 / 76.0, 4);
+    expect(TQB_ROOM_PRESETS.length).toBeGreaterThanOrEqual(24);
+
+    for (const preset of TQB_ROOM_PRESETS) {
+      const validation = validateBoundaryPolygon(preset.boundaryPolygon);
+      expect(validation.valid, `Preset ${preset.code} failed polygon validation: ${validation.error}`).toBe(true);
+
+      const visualCenter = computeVisualPolygonCenter(preset.boundaryPolygon);
+      expect(
+        isPointInPolygon(visualCenter, preset.boundaryPolygon),
+        `Preset ${preset.code} visual center lies outside polygon`
+      ).toBe(true);
+
+      for (const bay of preset.readingBays) {
+        expect(
+          isPointInPolygon({ x: bay.posX, y: bay.posY }, preset.boundaryPolygon),
+          `Reading bay ${bay.id} in ${preset.code} lies outside room polygon`
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('supports all 7 HeatmapLayerMetric layers across WEATHER_PALETTES, thresholds, and FloorplanCanvas formatters', () => {
+    const allMetrics: HeatmapLayerMetric[] = [
+      'comfortScore',
+      'noiseAvg',
+      'pm2_5',
+      'temperature',
+      'humidity',
+      'lux',
+      'wifiRssi',
+    ];
+
+    const sampleTelemetry: TelemetryResponse = {
+      id: 'tel-1',
+      timestamp: '2026-11-04T00:00:00Z',
+      metadata: {
+        deviceId: 'dev-1',
+        roomId: 'room-301',
+        zoneId: 'zone-3',
+      },
+      environment: {
+        temperature: 24.5,
+        humidity: 56.2,
+        lux: 420,
+      },
+      acoustics: {
+        noiseAvg: 44.8,
+        noiseMax: 52.0,
+      },
+      airQuality: {
+        pm2_5: 14.3,
+        pm10: 25.0,
+      },
+      wifiRssi: -58,
+      comfortScore: {
+        overall: 86,
+        grade: 'GOOD',
+      },
+    };
+
+    for (const metric of allMetrics) {
+      expect(WEATHER_PALETTES[metric].length).toBeGreaterThanOrEqual(5);
+      const val = extractLayerMetricValue(sampleTelemetry, metric);
+      expect(val).not.toBeNull();
+      const [r, g, b] = getContinuousMetricColor(val!, metric);
+      expect(r).toBeGreaterThanOrEqual(0);
+      expect(r).toBeLessThanOrEqual(255);
+      expect(g).toBeGreaterThanOrEqual(0);
+      expect(b).toBeGreaterThanOrEqual(0);
+      expect(getMetricColorHex(metric, val!)).toMatch(/^#[0-9A-Fa-f]{6}$/);
+      expect(formatLayerMetricValue(val!, metric).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('computes smaller adaptiveSigma for small Floor 5 group study rooms than for large Multimedia halls', () => {
+    const smallGroupRoom = resolveRoomPreset({
+      code: 'TQB_508',
+      name: 'Phòng Học Nhóm 508',
+      floor: 5,
+      boundaryPolygon: null,
+    })!;
+    const largeMultimediaRoom = resolveRoomPreset({
+      code: 'TQB_301',
+      name: 'Phòng Multimedia Tầng 3',
+      floor: 3,
+      boundaryPolygon: null,
+    })!;
+
+    expect(smallGroupRoom).not.toBeNull();
+    expect(largeMultimediaRoom).not.toBeNull();
+
+    const sigmaSmall = computeAdaptiveSigma(smallGroupRoom.boundaryPolygon, 1);
+    const sigmaLarge = computeAdaptiveSigma(largeMultimediaRoom.boundaryPolygon, 3);
+
+    expect(sigmaSmall).toBeGreaterThanOrEqual(0.042);
+    expect(sigmaLarge).toBeGreaterThan(sigmaSmall);
+    expect(sigmaLarge).toBeLessThanOrEqual(0.165);
+  });
+
+  it('synthesizes hardware-safe anonymous reading bay micro-zones (FE-VIZ-09) and computes blindspots & wayfinding', () => {
+    const multimediaPreset = resolveRoomPreset({
+      code: 'TQB_301',
+      name: 'Phòng Multimedia Tầng 3',
+      floor: 3,
+      boundaryPolygon: null,
+    })!;
+    const mockRoom = {
+      id: 'room-301',
+      code: multimediaPreset.code,
+      name: multimediaPreset.name,
+      floor: multimediaPreset.floor,
+      roomType: multimediaPreset.roomType,
+      capacity: multimediaPreset.capacity,
+      zoneId: 'zone-3',
+      boundaryPolygon: [...multimediaPreset.boundaryPolygon],
+    };
+    const baseTel: TelemetryResponse = {
+      id: 'tel-301',
+      timestamp: '2026-11-04T00:00:00Z',
+      metadata: {
+        deviceId: 'room-aggregate',
+        roomId: 'room-301',
+        zoneId: 'zone-3',
+      },
+      environment: {
+        temperature: 25.0,
+        humidity: 55.0,
+        lux: 410,
+      },
+      acoustics: {
+        noiseAvg: 46.0,
+        noiseMax: 55.0,
+      },
+      airQuality: {
+        pm2_5: 15.0,
+        pm10: 28.0,
+      },
+      wifiRssi: -60,
+      comfortScore: {
+        overall: 82,
+        grade: 'GOOD',
+      },
+    };
+
+    const microZones = synthesizeAnonymousMicroZones(mockRoom, baseTel);
+    expect(microZones.length).toBeGreaterThanOrEqual(2);
+    // Ensure distinct spatial values so Case C diffusion renders multi-bay thermal gradients
+    const values = new Set(microZones.map((z) => z.metrics.comfortScore));
+    expect(values.size).toBeGreaterThan(1);
+
+    const blindspotFull = computeRoomBlindspotRatio(
+      multimediaPreset.boundaryPolygon,
+      microZones.map((z) => ({ x: z.posX, y: z.posY }))
+    );
+    const blindspotNoSensor = computeRoomBlindspotRatio(multimediaPreset.boundaryPolygon, []);
+    expect(blindspotNoSensor.blindspotRatio).toBe(1);
+    expect(blindspotNoSensor.isUnderCovered).toBe(true);
+    expect(blindspotFull.blindspotRatio).toBeLessThan(1);
+
+    const wayfinding = computeWayfindingPath(mockRoom, multimediaPreset.doorPosition);
+    expect(wayfinding).not.toBeNull();
+    expect(wayfinding!.waypoints.length).toBeGreaterThanOrEqual(2);
+    expect(wayfinding!.distanceMeters).toBeGreaterThan(0);
   });
 });

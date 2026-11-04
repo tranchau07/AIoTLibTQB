@@ -90,7 +90,14 @@ export function getGradeStyle(
   return GRADE_STYLES[resolveGradeFromScore(fallbackScore)];
 }
 
-export type HeatmapLayerMetric = 'comfortScore' | 'noiseAvg' | 'pm2_5' | 'temperature';
+export type HeatmapLayerMetric =
+  | 'comfortScore'
+  | 'noiseAvg'
+  | 'pm2_5'
+  | 'temperature'
+  | 'humidity'
+  | 'lux'
+  | 'wifiRssi';
 
 export function getMetricColorHex(
   metric: HeatmapLayerMetric,
@@ -119,6 +126,23 @@ export function getMetricColorHex(
       if (value >= 22 && value <= 25) return '#10B981';
       if (value >= 20 && value <= 26.5) return '#22C55E';
       if (value >= 18 && value <= 28.5) return '#F59E0B';
+      return '#EF4444';
+    case 'humidity':
+      if (value >= 48 && value <= 58) return '#10B981';
+      if (value >= 42 && value <= 60) return '#22C55E';
+      if (value >= 35 && value <= 68) return '#F59E0B';
+      if (value <= 75) return '#F97316';
+      return '#EF4444';
+    case 'lux':
+      if (value >= 320 && value <= 520) return '#10B981';
+      if (value >= 250 && value <= 600) return '#22C55E';
+      if (value >= 160 && value <= 750) return '#F59E0B';
+      return '#EF4444';
+    case 'wifiRssi':
+      if (value >= -58) return '#10B981';
+      if (value >= -67) return '#22C55E';
+      if (value >= -75) return '#F59E0B';
+      if (value >= -82) return '#F97316';
       return '#EF4444';
   }
 }
