@@ -712,3 +712,18 @@ Select-String -Path "frontend/src/features/floorplan/components/FloorplanCanvas.
 # Xác nhận toàn bộ bài kiểm thử hiện có của backend vượt qua thành công
 ./mvnw.cmd test -Dtest=DeviceWatchdogServiceTest,MqttMessageDispatcherServiceTest,TelemetrySanitizerServiceTest,ComfortScoreServiceTest,AlertServiceTest
 ```
+
+---
+
+## PHẦN 6: BÁO CÁO NGHIỆM THU CẢI TIẾN KIẾN TRÚC V2.1 (POST-AUDIT IMPLEMENTATION)
+
+Toàn bộ các điểm yếu trọng yếu được phát hiện trong Báo cáo Kiểm toán trên đã được khắc phục triệt để qua lộ trình 5 giai đoạn (GĐ0 – GĐ4) và kiểm chứng tự động 100%:
+
+| Giai đoạn | Hạng mục Cải tiến Cốt lõi | Tọa độ Mã nguồn Đã Triển khai | Kết quả Kiểm chứng Tự động |
+| :---: | :--- | :--- | :--- |
+| **GĐ0** | **Chuẩn hóa Baseline & Tách Commit**: Tách các thay đổi WIP thành 4 commit độc lập theo chủ đề và gắn thẻ `baseline-post-audit`. | Git commits `78558dcb`, `3471b14e`, `cf95e19e`, `e06f748` | Backend 193/193 tests; Frontend 27/27 tests PASS |
+| **GĐ1** | **Minh bạch Dữ liệu Mô phỏng (`isSynthetic`)**: Gắn cờ `isSynthetic: true` cho dữ liệu Preset CAD, hiển thị huy hiệu `"Mô phỏng"` trên Canvas/Inspector/Table, và loại bỏ phòng mô phỏng khỏi bảng gợi ý chỗ ngồi sinh viên. | `frontend/src/config/tqb-floorplan-presets.ts`, `frontend/src/app/(protected)/floorplan/page.tsx`, `FloorplanCanvas.tsx` | Vitest suite 10 (`marks preset fallback telemetry with isSynthetic: true`) PASS |
+| **GĐ2** | **Tái cấu trúc Động cơ Cảnh báo Chuẩn ISA-18.2 & ISO 11799**:<br>- Ngưỡng động theo phòng (`RoomThresholdConfig` + `PUT /api/v1/rooms/{id}/thresholds`) kèm Caffeine Cache.<br>- Quy tắc Độ ẩm Min/Max cho `BOOK_STORAGE` (45–60 %RH).<br>- Dải trễ biên độ (Deadband Hysteresis) chống bão cảnh báo.<br>- Xung tiếng ồn kép: $\ge 85$ dBA kích hoạt `CRITICAL` tức thì; $\ge 3$ xung $> 75$ dBA/60s kích hoạt `HIGH`.<br>- Bổ sung `severityRank` (1..4) sửa lỗi sắp xếp ABC và danh mục hướng dẫn SOP (`AlertSopCatalog`). | `RoomThresholdConfig.java`, `AlertSopCatalog.java`, `AlertRuleEngine.java`, `AlertSeverity.java`, `AlertController.java`, `RoomService.java` | `AlertServiceTest` & `RoomServiceTest` PASS (200/200 tests toàn backend) |
+| **GĐ3** | **Trải nghiệm Cảnh báo Chủ động & Cảm ứng Di động**:<br>- Toast ghim (`sticky: true`) kèm âm báo Web Audio API cho cảnh báo `HIGH`/`CRITICAL` (có nút tắt tiếng).<br>- Huy hiệu `"Dữ liệu cũ"` (`isTelemetryStale` $> 5$ phút).<br>- Cảm ứng đa điểm Pinch-Zoom & Pan trên `FloorplanCanvas` + vòng tròn xung đỏ cho phòng `FIRING`.<br>- Bổ sung `app/error.tsx` & `app/not-found.tsx`. | `primitives.tsx`, `AppShell.tsx`, `alerts/page.tsx`, `datetime.ts`, `coords.ts`, `FloorplanCanvas.tsx`, `error.tsx`, `not-found.tsx` | `tsc --noEmit` (0 lỗi), Vitest 31/31 tests PASS, Next.js build 16/16 routes PASS |
+| **GĐ4** | **Cổng Công khai An toàn cho Sinh viên & Kiosk (`/api/v1/public/**`)**:<br>- Endpoint công khai trả về `PublicRoomStatusResponse` tối giản (ẩn `deviceId`, `hardwareId`).<br>- Giới hạn tần suất Bucket4j `60 req/min/IP` tại `RateLimitFilter`.<br>- STOMP nặc danh chỉ đọc `/topic/public/rooms/*` với header `X-Public-Kiosk: true`.<br>- Mở khóa `/kiosk` và `/` cho người dùng chưa đăng nhập. | `PublicController.java`, `PublicRoomStatusResponse.java`, `SecurityConfig.java`, `RateLimitFilter.java`, `StompChannelInterceptor.java`, `kiosk/page.tsx`, `page.tsx` | `PublicControllerTest`, `RateLimitFilterTest`, `StompChannelInterceptorTest` PASS |
+

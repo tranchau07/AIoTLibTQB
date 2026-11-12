@@ -590,6 +590,32 @@ Nhằm chuẩn hóa việc tích hợp giữa các tầng hệ thống, bảng d
 - **Mô tả**: Trả về thống kê toàn diện: tổng số phòng giám sát, điểm LCS trung bình toàn thư viện, phòng có chất lượng vi khí hậu tốt nhất (`bestRoom`), và phòng có chất lượng kém nhất (`worstRoom`) phục vụ hiển thị Widget Dashboard quản trị.
 - **Response Body (200 OK)**: `ApiResponse<TelemetrySummaryResponse>`.
 
+#### 3.8.4. Cấu hình Động Ngưỡng Cảnh báo theo Phòng (`PUT /api/v1/rooms/{id}/thresholds`) — *Bổ sung v2.1*
+- **Controller**: `src/main/java/com/example/AIoTLibTQB/controller/RoomController.java`
+- **Quyền hạn**: `@PreAuthorize("hasAnyAuthority('MANAGE_ALERT_CONFIG', 'ROLE_ADMIN')")`
+- **Mô tả**: Cập nhật ngưỡng vi khí hậu và âm học riêng cho từng phòng (`RoomThresholdConfig`), kiểm tra tính hợp lệ (`min < max` cho nhiệt độ/độ ẩm) và tự động xóa bộ đệm `AlertRuleEngine.invalidateRoomContext(id)`.
+- **Request Body** (`RoomThresholdUpdateRequest`):
+  ```json
+  {
+    "noiseAvgMax": 60.0,
+    "noisePeakMax": 75.0,
+    "noisePeakCritical": 85.0,
+    "tempMin": 18.0,
+    "tempMax": 24.0,
+    "humidityMin": 45.0,
+    "humidityMax": 60.0,
+    "pm25Max": 35.0
+  }
+  ```
+
+#### 3.8.5. Nhóm 8: Cổng Dữ Liệu Công Khai Kiosk & Sinh Viên (`/api/v1/public`) — *Bổ sung v2.1*
+- **Controller**: `src/main/java/com/example/AIoTLibTQB/controller/PublicController.java`
+- **Quyền hạn**: `permitAll` cho `GET /api/v1/public/**`, được bảo vệ bởi Bucket4j `60 requests / phút / IP` tại `RateLimitFilter.java`.
+- **Các Endpoint**:
+  1. `GET /api/v1/public/rooms?floor={floor}`: Trả về danh sách `List<PublicRoomStatusResponse>` kèm điểm tiện nghi LCS và chỉ số vi khí hậu mới nhất từ `LatestTelemetryCache` (tuyệt đối ẩn `deviceId`, `hardwareId` nội bộ).
+  2. `GET /api/v1/public/rooms/{id}/latest`: Trả về trạng thái vi khí hậu mới nhất của một phòng đọc cụ thể.
+- **Kênh STOMP Công khai**: Cho phép kết nối nặc danh với header `X-Public-Kiosk: true` chỉ được phép `SUBSCRIBE` vào `/topic/public/rooms/{roomId}/telemetry` (chặn tuyệt đối `/topic/alerts` và `/topic/rooms/**`).
+
 ---
 
 ### 3.9. Danh Mục Toàn Bộ 46 Mã Lỗi Hệ Thống (`ErrorCode.java`)

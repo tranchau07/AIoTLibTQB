@@ -1,7 +1,7 @@
 # HỆ THỐNG TÀI LIỆU KỸ THUẬT AIoTLibTQB
 
 > **Dự án**: AIoTLibTQB — Hệ thống Giám sát Vi khí hậu & Âm học Thông minh Thư viện Tạ Quang Bửu (Đại học Bách khoa Hà Nội)  
-> **Phiên bản tài liệu**: 2.0 (Toàn diện & Đã kiểm chứng thực tế mã nguồn)  
+> **Phiên bản tài liệu**: 2.1 (Cập nhật Kiến trúc Cổng Công khai, Cảnh báo ISA-18.2 & Minh bạch Dữ liệu)  
 > **Nguyên tắc kỹ thuật**: Mã nguồn thực tế là nguồn sự thật tối thượng (*Code is the Single Source of Truth*). Mọi mô tả kiến trúc, quy chuẩn và tham số đều được đối chiếu trực tiếp với mã nguồn đang chạy.
 
 ---
@@ -215,19 +215,14 @@ Qua quá trình rà soát độc lập và đối chiếu trực tiếp giữa y
 
 ---
 
-### 3.6. Danh mục Các Mục "TODO: Cần Xác Nhận"
+### 3.6. Danh mục Các Hạng Mục Đã Hoàn Thiện (v2.1) & Các Mục Mở
 
-Các tính năng xuất hiện trong ý định thiết kế nhưng **chưa tìm thấy triển khai mã nguồn tương ứng**:
-
-1. **`TODO: cần xác nhận` — Endpoint Công khai Màn hình Kiosk sảnh (`PUBLIC_GUEST`)**:
-   - *Vấn đề*: Bản thiết kế màn hình TV Kiosk sảnh thư viện yêu cầu đọc dữ liệu điểm tiện nghi LCS của các phòng mà không cần người xem đăng nhập.
-   - *Hiện trạng code*: Tất cả các endpoint trong `TelemetryController.java` (`/api/v1/telemetry/**`) đều yêu cầu Header JWT (`@PreAuthorize("hasAnyAuthority(...)")`). Hiện tại Frontend Kiosk (`frontend/src/app/kiosk/page.tsx`) đang phải duy trì một phiên đăng nhập định danh sẵn qua `localStorage`. Cần xác nhận với Product Owner xem có mở endpoint public không cần JWT riêng hay giữ nguyên cơ chế tài khoản chuyên dụng cho Kiosk.
-2. **`TODO: cần xác nhận` — Giải thuật Kiểm tra Tọa độ Điểm trong Đa giác (2D Spatial Point-in-Polygon)**:
-   - *Vấn đề*: Khả năng tự động xác định thiết bị `(posX, posY)` thuộc phòng nào dựa trên `rooms.boundaryPolygon`.
-   - *Hiện trạng code*: Lớp `Point2D.java` trong Backend chỉ chứa dữ liệu thuần `{Double x, Double y}`. Mối quan hệ giữa Thiết bị và Phòng hiện được gán thủ công qua trường `device.roomId`. Giải thuật Ray-Casting hiện chỉ được triển khai trên Canvas của Frontend Editor (`frontend/src/app/(protected)/admin/rooms/[id]/polygon/page.tsx`).
-3. **`TODO: cần xác nhận` — REST API Cấu hình Động Ngưỡng & Trọng số Điểm LCS**:
-   - *Vấn đề*: Quản trị viên tùy chỉnh trọng số các thành phần âm thanh, nhiệt độ, bụi mịn và ánh sáng theo mùa hoặc quy định mới.
-   - *Hiện trạng code*: Toàn bộ ma trận trọng số và công thức phạt phi tuyến đang được lập trình tĩnh trong `ComfortScoreService.java:442-448`. Chưa có endpoint REST và bảng dữ liệu MongoDB lưu trữ cấu hình động này.
+1. **`[ĐÃ TRIỂN KHAI v2.1]` — Endpoint Công khai Màn hình Kiosk sảnh & Cổng Sinh viên (`/api/v1/public/**`)**:
+   - *Giải pháp đã triển khai*: Đã bổ sung `PublicController.java` (`GET /api/v1/public/rooms`, `GET /api/v1/public/rooms/{id}/latest`) trả về `PublicRoomStatusResponse` tối giản (tuyệt đối không lộ `deviceId`, `hardwareId`), bảo vệ bởi Bucket4j `60 req/min/IP` tại `RateLimitFilter.java` và cho phép STOMP nặc danh chỉ đọc `/topic/public/rooms/*` với header `X-Public-Kiosk: true` tại `StompChannelInterceptor.java`. Trang `/kiosk` hoạt động trực tiếp cho khách vãng lai mà không bắt buộc đăng nhập.
+2. **`[ĐÃ TRIỂN KHAI v2.1]` — REST API Cấu hình Động Ngưỡng Cảnh báo theo Phòng & Máy trạng thái ISA-18.2**:
+   - *Giải pháp đã triển khai*: Đã bổ sung `RoomThresholdConfig` nhúng trong `Room`, endpoint `PUT /api/v1/rooms/{id}/thresholds` (yêu cầu quyền `MANAGE_ALERT_CONFIG` hoặc `ROLE_ADMIN`), xóa cache `AlertRuleEngine` tức thì; hỗ trợ ngưỡng độ ẩm Min/Max bảo tồn tài liệu kho sách (`BOOK_STORAGE`: 45–60 %RH), dải trễ biên độ (Deadband Hysteresis), xung tiếng ồn kép (`NOISE_PEAK` $\ge 85$ dBA kích hoạt `CRITICAL` tức thì; $\ge 3$ xung $> 75$ dBA/60s kích hoạt `HIGH`), phân hạng số `severityRank` (1..4) và hướng dẫn xử lý chuẩn `AlertSopCatalog`.
+3. **`TODO: cần xác nhận` — Giải thuật Kiểm tra Tọa độ Điểm trong Đa giác tại Backend (2D Spatial Point-in-Polygon)**:
+   - *Hiện trạng code*: Lớp `Point2D.java` trong Backend lưu trữ tọa độ `{Double x, Double y}`. Mối quan hệ giữa Thiết bị và Phòng được gán tường minh qua `device.roomId`, trong khi giải thuật Ray-Casting kiểm tra điểm thuộc đa giác đang thực thi trực tiếp trên trình biên tập Canvas của Frontend (`frontend/src/lib/floorplan/polygon.ts`).
 
 ---
 

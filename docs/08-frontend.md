@@ -605,6 +605,13 @@ Dựa trên báo cáo kiểm toán khớp nối `docs/frontend/01_gap_report.md`
 - **D15 (Từ điển lỗi)**: Ánh xạ toàn bộ 46 mã lỗi từ backend sang tiếng Việt qua `messages/vi.ts`.
 - **D16 (Rate Limit 429)**: Tự động đọc header `Retry-After` và hiển thị đồng hồ đếm ngược trên giao diện.
 
+#### 3.8.1. Nâng Cấp Giao Diện & Trải Nghiệm Vận Hành v2.1:
+- **Minh bạch Dữ liệu Mô phỏng (`isSynthetic: true`)**: Các phòng Preset kiến trúc CAD chưa gắn trạm cảm biến thật được gắn cờ `isSynthetic: true` (`buildPresetFallbackTelemetry` tại `frontend/src/config/tqb-floorplan-presets.ts`), hiển thị huy hiệu `"Mô phỏng"` rõ ràng trên Canvas, Inspector và thẻ phòng, đồng thời loại trừ khỏi bảng gợi ý chỗ ngồi tối ưu để bảo vệ sinh viên.
+- **Chỉ báo Dữ liệu Cũ (`isTelemetryStale`)**: Hàm kiểm tra tuổi dữ liệu cảm biến (`> 5 phút` / `300,000 ms`, không áp dụng cho dữ liệu mô phỏng) hiển thị huy hiệu `"Dữ liệu cũ"` trên `RoomTelemetryCard` và Floorplan Inspector.
+- **Thông báo Cảnh báo Ghim & Âm báo Web Audio API**: Các cảnh báo `FIRING` mức `HIGH`/`CRITICAL` hiển thị Toast ghim (`sticky: true`, không tự tắt sau 5s) kèm âm báo синтез Web Audio API có nút bật/tắt âm thanh trên Header `AppShell` và trang `/alerts`.
+- **Hỗ trợ Cảm ứng Đa điểm (Touch Pinch-Zoom & Pan) & Vòng tròn Xung Đỏ Cảnh báo**: `FloorplanCanvas.tsx` tích hợp Pointer Events (`clampViewportTransform`, `computePinchScale`), hỗ trợ chụm 2 ngón phóng to $[1.0, 3.0]$ và kéo mặt bằng trên thiết bị di động (`touch-none`), đồng thời vẽ vòng tròn xung đỏ đứt nét quanh các phòng đang có cảnh báo `FIRING`.
+- **Cổng Kiosk Công khai Nặc danh (`/kiosk`) & Error Boundaries**: Trang `/` tự động điều hướng khách chưa đăng nhập sang `/kiosk` (sử dụng `usePublicRoomsQuery` gọi `/api/v1/public/rooms`), và bổ sung `app/error.tsx` cùng `app/not-found.tsx` chuẩn tiếng Việt.
+
 ---
 
 ## 4. Mục "Đọc tiếp" (Next Reading)
