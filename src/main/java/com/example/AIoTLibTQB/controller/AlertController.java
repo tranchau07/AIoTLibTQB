@@ -38,8 +38,11 @@ public class AlertController {
     ) {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(1, Math.min(100, size));
-        java.util.List<String> allowedSortFields = java.util.List.of("startedAt", "severity", "status", "type", "currentValue");
+        java.util.List<String> allowedSortFields = java.util.List.of("startedAt", "severity", "severityRank", "status", "type", "currentValue");
         String safeSortBy = allowedSortFields.contains(sortBy) ? sortBy : "startedAt";
+        if ("severity".equals(safeSortBy)) {
+            safeSortBy = "severityRank";
+        }
         Sort.Direction sortDirection = "ASC".equalsIgnoreCase(direction) ? Sort.Direction.ASC : Sort.Direction.DESC;
         Pageable pageable = PageRequest.of(safePage, safeSize, Sort.by(sortDirection, safeSortBy));
 

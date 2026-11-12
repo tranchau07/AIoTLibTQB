@@ -58,6 +58,8 @@ public class SecurityConfig {
 
                     .requestMatchers(HttpMethod.POST, PUBLIC_POST_ENDPOINTS).permitAll()
 
+                    .requestMatchers(HttpMethod.GET, "/api/v1/public/**").permitAll()
+
                     .requestMatchers("/ws-aiot/**").permitAll()
 
                     .anyRequest().authenticated()

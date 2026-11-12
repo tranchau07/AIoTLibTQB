@@ -164,4 +164,28 @@ class RateLimitFilterTest {
 
         verify(filterChain, times(15)).doFilter(any(), any());
     }
+
+    @Test
+    @DisplayName("Endpoint công khai (/api/v1/public/rooms) giới hạn 60 req/phút/IP: request thứ 61 bị chặn HTTP 429")
+    void publicApi_sixtyRequestsSucceed_sixtyFirstBlockedWith429() throws Exception {
+        FilterChain filterChain = mock(FilterChain.class);
+
+        for (int i = 0; i < 60; i++) {
+            MockHttpServletRequest req = new MockHttpServletRequest("GET", "/api/v1/public/rooms");
+            req.setServletPath("/api/v1/public/rooms");
+            req.setRemoteAddr("192.168.1.200");
+            MockHttpServletResponse res = new MockHttpServletResponse();
+            rateLimitFilter.doFilterInternal(req, res, filterChain);
+            assertThat(res.getStatus()).isEqualTo(200);
+        }
+
+        MockHttpServletRequest req61 = new MockHttpServletRequest("GET", "/api/v1/public/rooms");
+        req61.setServletPath("/api/v1/public/rooms");
+        req61.setRemoteAddr("192.168.1.200");
+        MockHttpServletResponse res61 = new MockHttpServletResponse();
+        rateLimitFilter.doFilterInternal(req61, res61, filterChain);
+
+        assertThat(res61.getStatus()).isEqualTo(429);
+        assertThat(res61.getContentAsString()).contains("4029");
+    }
 }

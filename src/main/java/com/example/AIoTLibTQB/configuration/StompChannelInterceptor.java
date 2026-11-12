@@ -69,7 +69,12 @@ public class StompChannelInterceptor implements ChannelInterceptor {
 
     private Authentication authenticateConnect(StompHeaderAccessor accessor) {
         String token = extractToken(accessor);
+        String publicMode = accessor.getFirstNativeHeader("X-Public-Kiosk");
         if (token == null || token.isBlank()) {
+            if ("true".equalsIgnoreCase(publicMode)) {
+                log.debug("STOMP CONNECT allowed in anonymous public kiosk mode");
+                return null;
+            }
             log.warn("STOMP CONNECT rejected: missing Authorization header");
             throw new MessageDeliveryException("Missing or empty Authorization token for STOMP connection");
         }
@@ -92,13 +97,16 @@ public class StompChannelInterceptor implements ChannelInterceptor {
     }
 
     private void handleSubscribe(StompHeaderAccessor accessor) {
+        String destination = accessor.getDestination();
         Principal user = accessor.getUser();
         if (user == null) {
+            if (destination != null && destination.startsWith("/topic/public/rooms/")) {
+                return;
+            }
             log.warn("STOMP SUBSCRIBE rejected: user is not authenticated for destination {}",
-                    accessor.getDestination());
+                    destination);
             throw new MessageDeliveryException("Access denied: user must be authenticated to subscribe");
         }
-        String destination = accessor.getDestination();
         if (destination == null) {
             return;
         }

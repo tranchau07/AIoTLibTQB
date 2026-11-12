@@ -4,6 +4,7 @@ import com.example.AIoTLibTQB.document.Device;
 import com.example.AIoTLibTQB.document.Point2D;
 import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.dto.request.RoomCreationRequest;
+import com.example.AIoTLibTQB.dto.request.RoomThresholdUpdateRequest;
 import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.dto.response.RoomResponse;
@@ -254,5 +255,37 @@ class RoomServiceTest {
         assertThat(result.getTotalElements()).isEqualTo(2);
         assertThat(result.getPage()).isEqualTo(0);
         assertThat(result.getSize()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("updateThresholds() - Lưu ngưỡng động hợp lệ và từ chối khi min >= max")
+    void updateThresholds_validationAndSuccess() {
+        Room room = buildRoom("r1", "ROOM_201", "Phòng Đọc", 2);
+        when(roomRepository.findById("r1")).thenReturn(Optional.of(room));
+        when(roomRepository.save(any(Room.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        RoomThresholdUpdateRequest validReq = RoomThresholdUpdateRequest.builder()
+                .noiseAvgMax(55.0)
+                .noisePeakMax(72.0)
+                .tempMin(20.0)
+                .tempMax(27.0)
+                .humidityMin(42.0)
+                .humidityMax(62.0)
+                .build();
+
+        RoomResponse updated = roomService.updateThresholds("r1", validReq);
+        assertThat(updated.getThresholds()).isNotNull();
+        assertThat(updated.getThresholds().getNoiseAvgMax()).isEqualTo(55.0);
+        assertThat(updated.getThresholds().getTempMax()).isEqualTo(27.0);
+
+        RoomThresholdUpdateRequest invalidTemp = RoomThresholdUpdateRequest.builder()
+                .tempMin(30.0)
+                .tempMax(25.0)
+                .build();
+
+        assertThatThrownBy(() -> roomService.updateThresholds("r1", invalidTemp))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getErrorCode())
+                .isEqualTo(ErrorCode.INVALID_PARAMETER);
     }
 }

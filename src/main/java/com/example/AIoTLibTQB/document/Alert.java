@@ -42,6 +42,9 @@ public class Alert {
 
     AlertSeverity severity;
 
+    @Indexed
+    Integer severityRank;
+
     AlertStatus status;
 
     Double currentValue;
@@ -49,6 +52,8 @@ public class Alert {
     Double threshold;
 
     String message;
+
+    String recommendedAction;
 
     @CreatedDate
     Instant startedAt;

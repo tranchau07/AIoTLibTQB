@@ -230,4 +230,32 @@ class StompChannelInterceptorTest {
 
         assertThat(result).isNotNull();
     }
+
+    @Test
+    @DisplayName("Anonymous public kiosk CONNECT + SUBSCRIBE to /topic/public/rooms/* allowed, but /topic/alerts rejected")
+    void anonymousPublicKiosk_allowsPublicRoomTopicAndRejectsAlerts() {
+        StompHeaderAccessor connectAcc = StompHeaderAccessor.create(StompCommand.CONNECT);
+        connectAcc.setLeaveMutable(true);
+        connectAcc.setNativeHeader("X-Public-Kiosk", "true");
+        Message<byte[]> connectMsg = MessageBuilder.createMessage(new byte[0], connectAcc.getMessageHeaders());
+
+        Message<?> connected = interceptor.preSend(connectMsg, messageChannel);
+        assertThat(connected).isNotNull();
+
+        StompHeaderAccessor subPublic = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        subPublic.setLeaveMutable(true);
+        subPublic.setDestination("/topic/public/rooms/room-101/telemetry");
+        subPublic.setUser(null);
+        Message<byte[]> subPublicMsg = MessageBuilder.createMessage(new byte[0], subPublic.getMessageHeaders());
+        assertThat(interceptor.preSend(subPublicMsg, messageChannel)).isNotNull();
+
+        StompHeaderAccessor subAlerts = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        subAlerts.setLeaveMutable(true);
+        subAlerts.setDestination("/topic/alerts");
+        subAlerts.setUser(null);
+        Message<byte[]> subAlertsMsg = MessageBuilder.createMessage(new byte[0], subAlerts.getMessageHeaders());
+        assertThatThrownBy(() -> interceptor.preSend(subAlertsMsg, messageChannel))
+                .isInstanceOf(MessageDeliveryException.class)
+                .hasMessageContaining("Access denied");
+    }
 }

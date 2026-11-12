@@ -1,6 +1,8 @@
 package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
+import com.example.AIoTLibTQB.dto.response.PublicRoomStatusResponse;
+import com.example.AIoTLibTQB.dto.response.TelemetryResponse;
 import lombok.AccessLevel;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +28,17 @@ public class RealtimePublisherImpl implements RealtimePublisher {
         if (messagingTemplate != null) {
             try {
                 messagingTemplate.convertAndSend("/topic/rooms/" + roomId + "/telemetry", payload);
+                if (payload instanceof TelemetryResponse tel) {
+                    PublicRoomStatusResponse publicPayload = PublicRoomStatusResponse.builder()
+                            .id(roomId)
+                            .timestamp(tel.getTimestamp())
+                            .acoustics(tel.getAcoustics())
+                            .airQuality(tel.getAirQuality())
+                            .environment(tel.getEnvironment())
+                            .comfortScore(tel.getComfortScore())
+                            .build();
+                    messagingTemplate.convertAndSend("/topic/public/rooms/" + roomId + "/telemetry", publicPayload);
+                }
                 log.debug("Published room telemetry to /topic/rooms/{}/telemetry", roomId);
             } catch (Exception e) {
                 log.warn("Failed to publish room telemetry to /topic/rooms/{}/telemetry: {}", roomId, e.getMessage());

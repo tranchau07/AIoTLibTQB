@@ -41,6 +41,8 @@ public class Room {
     @Builder.Default
     RoomType type = RoomType.STUDY_ROOM;
 
+    RoomThresholdConfig thresholds;
+
     @CreatedDate
     Instant createdAt;
 

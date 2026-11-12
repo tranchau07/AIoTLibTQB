@@ -61,6 +61,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
         return Bucket.builder().addLimit(limit).build();
     }
 
+    private Bucket createPublicApiBucket() {
+        Bandwidth limit = Bandwidth.builder()
+                .capacity(60)
+                .refillGreedy(60, Duration.ofMinutes(1))
+                .build();
+        return Bucket.builder().addLimit(limit).build();
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -78,13 +86,17 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         String method = request.getMethod();
-        boolean isRateLimitedEndpoint = "POST".equalsIgnoreCase(method) &&
-                RATE_LIMITED_ENDPOINTS.contains(path);
+        boolean isAuthEndpoint = "POST".equalsIgnoreCase(method) &&
+                path != null && RATE_LIMITED_ENDPOINTS.contains(path);
+        boolean isPublicEndpoint = path != null &&
+                (path.equals("/api/v1/public") || path.startsWith("/api/v1/public/"));
 
-        if (isRateLimitedEndpoint) {
+        if (isAuthEndpoint || isPublicEndpoint) {
             String clientIp = getClientIP(request);
-            String bucketKey = clientIp + ":" + path;
-            Bucket bucket = ipBuckets.get(bucketKey, k -> createNewBucket());
+            String bucketKey = isPublicEndpoint
+                    ? clientIp + ":PUBLIC_API"
+                    : clientIp + ":" + path;
+            Bucket bucket = ipBuckets.get(bucketKey, k -> isPublicEndpoint ? createPublicApiBucket() : createNewBucket());
 
             ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
             if (!probe.isConsumed()) {

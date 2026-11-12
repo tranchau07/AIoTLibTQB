@@ -21,10 +21,12 @@ public class AlertResponse {
     String roomId;
     AlertType type;
     AlertSeverity severity;
+    Integer severityRank;
     AlertStatus status;
     Double currentValue;
     Double threshold;
     String message;
+    String recommendedAction;
     Instant startedAt;
     Instant acknowledgedAt;
     Instant resolvedAt;

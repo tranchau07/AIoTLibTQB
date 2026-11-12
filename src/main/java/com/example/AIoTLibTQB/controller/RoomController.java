@@ -1,6 +1,7 @@
 package com.example.AIoTLibTQB.controller;
 
 import com.example.AIoTLibTQB.dto.request.RoomCreationRequest;
+import com.example.AIoTLibTQB.dto.request.RoomThresholdUpdateRequest;
 import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
@@ -70,6 +71,16 @@ public class RoomController {
             @RequestBody @Valid RoomUpdateRequest request) {
         return ApiResponse.<RoomResponse>builder()
                 .result(roomService.update(id, request))
+                .build();
+    }
+
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
+    @PutMapping("/{id}/thresholds")
+    public ApiResponse<RoomResponse> updateThresholds(
+            @PathVariable String id,
+            @RequestBody @Valid RoomThresholdUpdateRequest request) {
+        return ApiResponse.<RoomResponse>builder()
+                .result(roomService.updateThresholds(id, request))
                 .build();
     }
 

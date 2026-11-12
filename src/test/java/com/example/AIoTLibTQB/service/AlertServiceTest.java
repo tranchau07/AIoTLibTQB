@@ -1,6 +1,8 @@
 package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.document.Alert;
+import com.example.AIoTLibTQB.document.Room;
+import com.example.AIoTLibTQB.document.RoomThresholdConfig;
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
@@ -8,8 +10,10 @@ import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import com.example.AIoTLibTQB.enums.ErrorCode;
+import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.exception.AppException;
 import com.example.AIoTLibTQB.repository.AlertRepository;
+import com.example.AIoTLibTQB.repository.RoomRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,6 +51,9 @@ class AlertServiceTest {
     @Mock
     MongoTemplate mongoTemplate;
 
+    @Mock
+    RoomRepository roomRepository;
+
     MutableClock mutableClock;
     AlertRuleEngine alertRuleEngine;
     AlertServiceImpl alertService;
@@ -81,7 +88,7 @@ class AlertServiceTest {
     @BeforeEach
     void setUp() {
         mutableClock = new MutableClock(Instant.parse("2026-10-22T10:00:00Z"));
-        alertRuleEngine = new AlertRuleEngine(alertRepository, realtimePublisher, mutableClock);
+        alertRuleEngine = new AlertRuleEngine(alertRepository, realtimePublisher, mutableClock, roomRepository);
         alertService = new AlertServiceImpl(alertRepository, realtimePublisher, alertRuleEngine, mongoTemplate, mutableClock);
     }
 
@@ -258,7 +265,7 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("noisePeak > 75 dBA kích hoạt cảnh báo NOISE_EXCEEDED ngay lập tức (không chờ 30s)")
+    @DisplayName("noisePeak >= 85 dBA kích hoạt cảnh báo NOISE_EXCEEDED ngay lập tức (CRITICAL), còn 1 xung lẻ 76 dBA không báo")
     void evaluate_noisePeakExceeded_triggersNoiseExceededAlert() {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> {
             Alert a = invocation.getArgument(0);
@@ -266,15 +273,22 @@ class AlertServiceTest {
             return a;
         });
 
-        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 80.0));
+        // 1 xung lẻ 76.0 dBA (< 85.0 dBA) chỉ ghi nhận pulse thứ 1, chưa báo động giả
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 76.0));
+        verify(alertRepository, never()).save(any());
+
+        // Xung nghiêm trọng 88.0 dBA (>= 85.0 dBA) -> FIRING ngay lập tức
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 88.0));
 
         ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository).save(captor.capture());
         assertThat(captor.getValue().getType()).isEqualTo(AlertType.NOISE_EXCEEDED);
         assertThat(captor.getValue().getStatus()).isEqualTo(AlertStatus.FIRING);
-        assertThat(captor.getValue().getSeverity()).isEqualTo(AlertSeverity.HIGH);
-        assertThat(captor.getValue().getCurrentValue()).isEqualTo(80.0);
-        assertThat(captor.getValue().getThreshold()).isEqualTo(75.0);
+        assertThat(captor.getValue().getSeverity()).isEqualTo(AlertSeverity.CRITICAL);
+        assertThat(captor.getValue().getSeverityRank()).isEqualTo(4);
+        assertThat(captor.getValue().getCurrentValue()).isEqualTo(88.0);
+        assertThat(captor.getValue().getThreshold()).isEqualTo(85.0);
+        assertThat(captor.getValue().getRecommendedAction()).isNotBlank();
     }
 
     @Test
@@ -372,7 +386,7 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("FSM: Xung âm tức thời (noisePeak spike) kích hoạt FIRING ngay với severity HIGH, duy trì qua hysteresis")
+    @DisplayName("FSM: 3 xung âm (noisePeak >= 75 dBA) trong 60s kích hoạt FIRING ngay với severity HIGH, duy trì qua hysteresis")
     void evaluate_noisePeakSpike_transitionsToFiringWithout30sContinuousBreach() {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> {
             Alert a = invocation.getArgument(0);
@@ -380,33 +394,40 @@ class AlertServiceTest {
             return a;
         });
 
-        // t = 0s: Xuất hiện xung âm tức thời 82.0 dBA (> 75.0 dBA), noiseAvg bình thường (50.0 dBA)
+        // Xung 1 & 2 (82.0 dBA): chưa đủ 3 xung -> chưa báo
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 82.0));
+        mutableClock.advance(Duration.ofSeconds(10));
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 81.0));
+        verify(alertRepository, never()).save(any());
+
+        // Xung 3 trong vòng 60s -> FIRING ngay lập tức
+        mutableClock.advance(Duration.ofSeconds(10));
         TelemetryPayload.TelemetryData spikeData = createAcousticsData(50.0, 82.0);
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", spikeData);
 
-        // Với cơ chế tức thời cho xung âm đỉnh, cảnh báo phải FIRING ngay lập tức (không chờ 30s)
         ArgumentCaptor<Alert> alertCaptor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository, times(1)).save(alertCaptor.capture());
         Alert saved = alertCaptor.getValue();
         assertThat(saved.getStatus()).isEqualTo(AlertStatus.FIRING);
         assertThat(saved.getType()).isEqualTo(AlertType.NOISE_EXCEEDED);
         assertThat(saved.getSeverity()).isEqualTo(AlertSeverity.HIGH);
+        assertThat(saved.getSeverityRank()).isEqualTo(3);
         assertThat(saved.getCurrentValue()).isEqualTo(82.0);
         assertThat(saved.getThreshold()).isEqualTo(75.0);
         assertThat(saved.getMessage()).contains("Peak noise spike");
+        assertThat(saved.getRecommendedAction()).isNotBlank();
 
         verify(realtimePublisher, times(1)).publishAlert(any(AlertResponse.class));
 
-        // t = 5s: Xung âm đã dứt, noisePeak hạ về 52.0 dBA (hoặc null)
+        // t + 5s: Xung âm đã dứt, noisePeak hạ về 52.0 dBA
         mutableClock.advance(Duration.ofSeconds(5));
         TelemetryPayload.TelemetryData calmData = createAcousticsData(50.0, 52.0);
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", calmData);
 
-        // Cảnh báo vẫn duy trì FIRING (đang trong cửa sổ hysteresis 60s), không bị xóa mất
         assertThat(alertRuleEngine.getFsmMap()).containsKey("dev-1:NOISE_PEAK");
         assertThat(alertRuleEngine.getFsmMap().get("dev-1:NOISE_PEAK").getStatus()).isEqualTo(AlertStatus.FIRING);
 
-        // t = 65s (sau 60s không còn peak nào nữa) -> Chuyển sang RESOLVED
+        // Sau 60s không còn peak nào nữa -> Chuyển sang RESOLVED
         when(alertRepository.findById("alert-peak-001")).thenReturn(Optional.of(saved));
         mutableClock.advance(Duration.ofSeconds(60));
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", calmData);
@@ -414,6 +435,89 @@ class AlertServiceTest {
         verify(alertRepository, times(2)).save(any(Alert.class));
         assertThat(saved.getStatus()).isEqualTo(AlertStatus.RESOLVED);
         assertThat(saved.getResolvedBy()).isEqualTo("SYSTEM");
+    }
+
+    @Test
+    @DisplayName("BOOK_STORAGE: Độ ẩm vượt ngưỡng trên (>60%RH) hoặc dưới (<45%RH) sau 30s -> FIRING kèm SOP Kho sách")
+    void evaluate_bookStorageHumidity_triggersHighAndLowAlerts() {
+        Room storageRoom = Room.builder()
+                .id("room-storage-201")
+                .code("TQB_201")
+                .name("Kho sách Tầng 2")
+                .type(RoomType.BOOK_STORAGE)
+                .build();
+        when(roomRepository.findById("room-storage-201")).thenReturn(Optional.of(storageRoom));
+        when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
+            Alert a = inv.getArgument(0);
+            if (a.getId() == null) a.setId("alert-hum-1");
+            return a;
+        });
+
+        TelemetryPayload.TelemetryData highHum = TelemetryPayload.TelemetryData.builder()
+                .environment(TelemetryPayload.EnvironmentData.builder().temperature(20.0).humidity(64.5).build())
+                .build();
+
+        alertService.evaluateTelemetry("dev-s1", "HW-S1", "room-storage-201", highHum);
+        mutableClock.advance(Duration.ofSeconds(30));
+        alertService.evaluateTelemetry("dev-s1", "HW-S1", "room-storage-201", highHum);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(alertRepository, times(1)).save(captor.capture());
+        Alert saved = captor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(AlertStatus.FIRING);
+        assertThat(saved.getSeverity()).isEqualTo(AlertSeverity.HIGH);
+        assertThat(saved.getThreshold()).isEqualTo(60.0);
+        assertThat(saved.getRecommendedAction()).contains("SOP Kho sách");
+    }
+
+    @Test
+    @DisplayName("Deadband biên độ: Dao động nhỏ trong vùng trễ (63.5–65.0 dBA) không kích hoạt recovery sớm")
+    void evaluate_deadband_preventsPrematureRecoveryWhenHoveringNearThreshold() {
+        when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
+            Alert a = inv.getArgument(0);
+            if (a.getId() == null) a.setId("alert-db-1");
+            return a;
+        });
+
+        // Vượt ngưỡng 66.0 dBA trong 30s -> FIRING
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(66.0, null));
+        mutableClock.advance(Duration.ofSeconds(30));
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(66.5, null));
+
+        AlertRuleEngine.FsmState state = alertRuleEngine.getFsmMap().get("dev-1:NOISE_AVG");
+        assertThat(state.getStatus()).isEqualTo(AlertStatus.FIRING);
+
+        // Hạ nhẹ xuống 64.0 dBA (nằm trong deadband [63.0, 65.0]) -> Chưa được tính là đã hồi phục an toàn
+        mutableClock.advance(Duration.ofSeconds(10));
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(64.0, null));
+        assertThat(state.getRecoverySince()).isNull();
+
+        // Chỉ khi hạ hẳn xuống <= 63.0 dBA (62.5 dBA) mới bắt đầu đếm 60s hysteresis
+        mutableClock.advance(Duration.ofSeconds(10));
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(62.5, null));
+        assertThat(state.getRecoverySince()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Migration idempotent (M3): Bản ghi cũ thiếu severity được điền MEDIUM, severityRank=2 và SOP")
+    void migrateLegacyAlertsSeverity_idempotent() {
+        Alert legacy = Alert.builder()
+                .id("legacy-1")
+                .type(AlertType.NOISE_EXCEEDED)
+                .status(AlertStatus.FIRING)
+                .severity(null)
+                .build();
+        when(alertRepository.findAll()).thenReturn(List.of(legacy));
+
+        int firstRun = alertRuleEngine.migrateLegacyAlertsSeverity();
+        assertThat(firstRun).isEqualTo(1);
+        assertThat(legacy.getSeverity()).isEqualTo(AlertSeverity.MEDIUM);
+        assertThat(legacy.getSeverityRank()).isEqualTo(2);
+        assertThat(legacy.getRecommendedAction()).isNotBlank();
+
+        // Chạy lần 2 không ghi lại DB
+        int secondRun = alertRuleEngine.migrateLegacyAlertsSeverity();
+        assertThat(secondRun).isEqualTo(0);
     }
 
     @Test

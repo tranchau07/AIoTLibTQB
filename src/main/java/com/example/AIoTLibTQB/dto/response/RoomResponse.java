@@ -33,6 +33,8 @@ public class RoomResponse {
 
     RoomType type;
 
+    com.example.AIoTLibTQB.document.RoomThresholdConfig thresholds;
+
     Instant createdAt;
 
     Instant updatedAt;
