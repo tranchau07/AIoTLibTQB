@@ -216,12 +216,7 @@ function AdminDevicesPageContent() {
     <div className="page">
       {/* Header */}
       <div className="page-header">
-        <div>
-          <h1 className="page-title">Quản lý Thiết bị Đo IoT</h1>
-          <p className="page-subtitle">
-            Giám sát trạng thái trạm đo ESP32, phân bổ phòng đọc và kích hoạt vận hành
-          </p>
-        </div>
+        <h1 className="page-title">Thiết bị cảm biến</h1>
 
         <div className="flex flex-wrap items-center gap-2">
           {capabilities.canManageDevices && (
@@ -230,8 +225,7 @@ function AdminDevicesPageContent() {
                 href="/admin/devices/discovery"
                 className="btn-secondary btn-sm"
               >
-                <Radar className="h-4 w-4 text-brand-600" aria-hidden="true" />
-                <span>Phát hiện ESP32 mới</span>
+                <span>Phát hiện thiết bị mới</span>
               </Link>
               <button
                 type="button"

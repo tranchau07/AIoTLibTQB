@@ -88,12 +88,27 @@ export async function provisionInfrastructure(options = {}) {
     console.warn(`[PROVISION] Error querying rooms: ${err.message}`);
   }
 
-  // 3. Create missing rooms or backfill missing boundaryPolygon
+  // 3. Create missing rooms or synchronize changed metadata / boundaryPolygon
   for (const r of roomsConfig.rooms) {
     if (roomMap.has(r.code)) {
       const existingRoom = roomMap.get(r.code);
-      const hasBoundary = Array.isArray(existingRoom.boundaryPolygon) && existingRoom.boundaryPolygon.length >= 3;
-      if (!hasBoundary && Array.isArray(r.boundaryPolygon) && r.boundaryPolygon.length >= 3) {
+      const existingPoly = Array.isArray(existingRoom.boundaryPolygon) ? existingRoom.boundaryPolygon : [];
+      const targetPoly = Array.isArray(r.boundaryPolygon) ? r.boundaryPolygon : [];
+      const polyChanged =
+        targetPoly.length >= 3 &&
+        (existingPoly.length !== targetPoly.length ||
+          existingPoly.some(
+            (pt, idx) =>
+              Math.abs((pt?.x ?? 0) - (targetPoly[idx]?.x ?? 0)) > 1e-4 ||
+              Math.abs((pt?.y ?? 0) - (targetPoly[idx]?.y ?? 0)) > 1e-4
+          ));
+      const metaChanged =
+        existingRoom.floor !== r.floor ||
+        existingRoom.name !== r.name ||
+        existingRoom.type !== r.type ||
+        existingRoom.capacity !== r.capacity;
+
+      if (polyChanged || metaChanged) {
         try {
           const updateRes = await fetchWithTimeout(`${baseUrl}/api/v1/rooms/${existingRoom.id}`, {
             method: 'PUT',
@@ -113,13 +128,13 @@ export async function provisionInfrastructure(options = {}) {
             if (updatedData?.result) {
               roomMap.set(r.code, updatedData.result);
             }
-            console.log(`[PROVISION] [UPDATED] Room [${r.code}] boundaryPolygon synchronized.`);
+            console.log(`[PROVISION] [UPDATED] Room [${r.code}] metadata & boundaryPolygon synchronized (floor=${r.floor}).`);
           }
         } catch (err) {
-          console.warn(`[PROVISION] Could not update boundaryPolygon for room [${r.code}]: ${err.message}`);
+          console.warn(`[PROVISION] Could not update room [${r.code}]: ${err.message}`);
         }
       } else {
-        console.log(`[PROVISION] Room [${r.code}] "${r.name}" already exists (id: ${existingRoom.id}). Skipping creation.`);
+        console.log(`[PROVISION] Room [${r.code}] "${r.name}" already up-to-date (id: ${existingRoom.id}).`);
       }
       continue;
     }

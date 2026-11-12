@@ -5,18 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueries } from '@tanstack/react-query';
 import {
-  Sparkles,
-  Clock,
   Building2,
-  Volume2,
-  Wind,
-  Thermometer,
-  Droplets,
-  Layers,
-  Award,
   ArrowRight,
-  ShieldAlert,
-  Info,
+  ChevronDown,
   LayoutDashboard,
   LogOut,
 } from 'lucide-react';
@@ -322,7 +313,7 @@ export default function KioskLobbyPage() {
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
               title="Quay lại Bảng điều khiển quản trị"
             >
-              <LayoutDashboard className="h-3.5 w-3.5 text-brand-400" />
+              <LayoutDashboard className="h-3.5 w-3.5 text-slate-400" />
               <span>Bảng điều khiển</span>
             </Link>
             <button
@@ -380,8 +371,8 @@ export default function KioskLobbyPage() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-2xs font-medium text-emerald-300">
-                    <Sparkles className="h-3 w-3 text-emerald-400" />
-                    <span>Gợi ý phòng đọc lý tưởng nhất hiện tại</span>
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    <span>Phòng đọc lý tưởng nhất hiện tại</span>
                   </div>
 
                   <h2 className="mt-2.5 text-2xl font-bold tracking-tight text-white lg:text-3xl">
@@ -391,8 +382,8 @@ export default function KioskLobbyPage() {
                   </h2>
                   {bestRoomEntity && (
                     <p className="mt-1 text-xs font-medium text-slate-400">
-                      Vị trí: Tầng {bestRoomEntity.floor} · Sức chứa:{' '}
-                      {bestRoomEntity.capacity ?? '--'} chỗ ngồi
+                      Tầng {bestRoomEntity.floor} · Sức chứa{' '}
+                      {bestRoomEntity.capacity ?? '--'} chỗ
                     </p>
                   )}
                 </div>
@@ -413,42 +404,30 @@ export default function KioskLobbyPage() {
                 </div>
               </div>
 
-              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
-                  <div className="flex items-center gap-1.5 text-2xs text-slate-400">
-                    <Volume2 className="h-3.5 w-3.5 text-slate-500" />
-                    <span>Độ ồn TB</span>
-                  </div>
+                  <span className="text-2xs text-slate-400">Độ ồn TB</span>
                   <p className="mt-1 font-mono text-lg font-bold text-white">
                     {formatMetrics.noise(bestRoomInfo.noiseAvg)}
                   </p>
                 </div>
 
                 <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
-                  <div className="flex items-center gap-1.5 text-2xs text-slate-400">
-                    <Wind className="h-3.5 w-3.5 text-slate-500" />
-                    <span>Bụi PM2.5</span>
-                  </div>
+                  <span className="text-2xs text-slate-400">Bụi PM2.5</span>
                   <p className="mt-1 font-mono text-lg font-bold text-white">
                     {formatMetrics.pm(bestRoomInfo.pm25)}
                   </p>
                 </div>
 
                 <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
-                  <div className="flex items-center gap-1.5 text-2xs text-slate-400">
-                    <Thermometer className="h-3.5 w-3.5 text-slate-500" />
-                    <span>Nhiệt độ</span>
-                  </div>
+                  <span className="text-2xs text-slate-400">Nhiệt độ</span>
                   <p className="mt-1 font-mono text-lg font-bold text-white">
                     {formatMetrics.temperature(bestRoomInfo.temperature)}
                   </p>
                 </div>
 
                 <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
-                  <div className="flex items-center gap-1.5 text-2xs text-slate-400">
-                    <Droplets className="h-3.5 w-3.5 text-slate-500" />
-                    <span>Độ ẩm</span>
-                  </div>
+                  <span className="text-2xs text-slate-400">Độ ẩm</span>
                   <p className="mt-1 font-mono text-lg font-bold text-white">
                     {formatMetrics.humidity(bestRoomInfo.humidity)}
                   </p>
@@ -462,7 +441,7 @@ export default function KioskLobbyPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:col-span-5">
           <div className="flex flex-col justify-between rounded-xl border border-slate-800 bg-slate-900/60 p-5">
             <p className="text-2xs font-semibold tracking-wider text-slate-400 uppercase">
-              Điểm tiện nghi trung bình
+              Điểm tiện nghi TB
             </p>
             <div className="my-2 flex items-baseline gap-2">
               <span className="font-mono text-4xl font-bold tracking-tight text-white">
@@ -482,7 +461,7 @@ export default function KioskLobbyPage() {
 
           <div className="flex flex-col justify-between rounded-xl border border-slate-800 bg-slate-900/60 p-5">
             <p className="text-2xs font-semibold tracking-wider text-slate-400 uppercase">
-              Phòng đạt chuẩn tối ưu
+              Phòng đạt chuẩn
             </p>
             <div className="my-2 flex items-baseline gap-2">
               <span className="font-mono text-4xl font-bold tracking-tight text-emerald-400">
@@ -492,57 +471,45 @@ export default function KioskLobbyPage() {
                 / {summary?.totalRooms ?? rooms.length}
               </span>
             </div>
-            <p className="text-2xs text-slate-400">
-              Hạng Tốt (Gold) &amp; Tối ưu (Platinum)
-            </p>
+            <p className="text-2xs text-slate-400">Hạng Tốt &amp; Tối ưu</p>
           </div>
 
           {/* Only show internal attention room note if user has canViewAlerts (§9 M02 RBAC rule) */}
           {capabilities.canViewAlerts && summary?.attentionRoom ? (
             <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 p-4 sm:col-span-2">
-              <div className="flex items-center gap-1.5 text-2xs font-semibold text-amber-300 uppercase">
-                <ShieldAlert className="h-3.5 w-3.5" />
-                <span>Lưu ý vận hành nội bộ</span>
-              </div>
+              <span className="text-2xs font-semibold text-amber-300 uppercase">
+                Lưu ý vận hành
+              </span>
               <p className="mt-1 text-xs font-medium text-slate-200">
-                Phòng cần chú ý:{' '}
+                Cần chú ý:{' '}
                 {roomMap.get(summary.attentionRoom.roomId)?.name ??
                   summary.attentionRoom.roomName}{' '}
-                ({formatMetrics.comfortScore(summary.attentionRoom.comfortScore)}{' '}
-                điểm)
+                ({formatMetrics.comfortScore(summary.attentionRoom.comfortScore)}
+                đ)
               </p>
             </div>
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:col-span-2">
-              <div className="flex items-center gap-1.5 text-2xs font-semibold text-emerald-400 uppercase">
-                <Info className="h-3.5 w-3.5" />
-                <span>Hướng dẫn tra cứu</span>
-              </div>
+              <span className="text-2xs font-semibold text-slate-400 uppercase">
+                Hướng dẫn
+              </span>
               <p className="mt-1 text-xs text-slate-300">
-                Ưu tiên chọn các phòng có nhãn{' '}
-                <strong className="text-emerald-300">Tối ưu</strong> hoặc{' '}
-                <strong className="text-green-300">Tốt</strong> bên dưới để có
-                không gian đọc sách yên tĩnh và trong lành nhất.
+                Chọn phòng đọc bất kỳ trên sơ đồ mặt bằng bên dưới để xem chi tiết vi khí hậu.
               </p>
             </div>
           )}
         </div>
       </section>
 
-      {/* Kiosk Live Architectural Floorplan & Wayfinding Section */}
+      {/* Kiosk Live Architectural Floorplan Section */}
       <section
-        aria-label="Sơ đồ Mặt bằng Nhiệt & Dẫn đường Tầng Thư viện Tạ Quang Bửu"
-        className="mt-8 rounded-2xl border border-slate-800 bg-slate-900/60 p-5"
+        aria-label="Sơ đồ Mặt bằng Nhiệt Tầng Thư viện Tạ Quang Bửu"
+        className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-5"
       >
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-bold text-white">
-              🗺️ Sơ đồ Mặt bằng Không gian &amp; Dẫn đường Trực quan (CAD 1:100 — 76.0m × 57.2m)
-            </h2>
-            <p className="text-xs text-slate-400">
-              Chạm vào phòng đọc hoặc dãy bàn bất kỳ để xem lộ trình đi bộ từ Thang máy trung tâm / Cầu thang bộ
-            </p>
-          </div>
+        <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-bold text-white">
+            Sơ đồ mặt bằng nhiệt
+          </h2>
 
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
@@ -581,7 +548,7 @@ export default function KioskLobbyPage() {
                   onClick={() => setKioskMapLayer(ly.key)}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     kioskMapLayer === ly.key
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-slate-800 text-white'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -604,128 +571,116 @@ export default function KioskLobbyPage() {
           }}
           zoomedRoomId={kioskZoomedRoomId}
           onZoomRoomChange={setKioskZoomedRoomId}
-          showWayfinding
+          defaultLabelDensity="clean"
         />
       </section>
 
-      {/* Floor-by-Floor Visual Room Ranking Board */}
-      <section
-        aria-label="Bảng xếp hạng chất lượng môi trường các phòng đọc theo tầng"
-        className="mt-8 space-y-6"
-      >
-        <div className="flex items-center justify-between">
+      {/* Collapsible Floor-by-Floor Room Ranking Board */}
+      <details className="group mt-6 rounded-2xl border border-slate-800 bg-slate-900/50">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-3.5 text-sm font-semibold text-white">
           <div className="flex items-center gap-2">
-            <Layers className="h-4 w-4 text-brand-400" />
-            <h2 className="text-base font-bold text-white">
-              Trạng thái Không gian Đọc sách theo Tầng
-            </h2>
+            <ChevronDown className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" />
+            <span>Danh sách trạng thái các phòng đọc theo tầng</span>
           </div>
-          <span className="text-2xs font-medium text-slate-400">
-            Cập nhật thời gian thực ({rooms.length} phòng đọc)
+          <span className="text-2xs font-normal text-slate-400">
+            {rooms.length} phòng đọc
           </span>
-        </div>
+        </summary>
 
-        {roomsQuery.isLoading ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <Skeleton className="h-36 w-full bg-slate-900" />
-            <Skeleton className="h-36 w-full bg-slate-900" />
-            <Skeleton className="h-36 w-full bg-slate-900" />
-          </div>
-        ) : roomsByFloor.length === 0 ? (
-          <EmptyState
-            title="Chưa có dữ liệu phòng đọc"
-            description={UI_TEXT_VI.emptySummaryWaiting}
-          />
-        ) : (
-          <div className="space-y-6">
-            {roomsByFloor.map(({ floor, rooms: floorRoomList }) => (
-              <div
-                key={floor}
-                className="rounded-xl border border-slate-800/90 bg-slate-900/50 p-4 md:p-5"
-              >
-                <div className="mb-3.5 flex items-center justify-between border-b border-slate-800 pb-2.5">
-                  <h3 className="text-sm font-bold text-brand-400">
-                    TẦNG {floor}
-                  </h3>
-                  <span className="text-2xs font-medium text-slate-400">
-                    {floorRoomList.length} phòng đọc
-                  </span>
-                </div>
+        <div className="border-t border-slate-800 p-5">
+          {roomsQuery.isLoading ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <Skeleton className="h-32 w-full bg-slate-900" />
+              <Skeleton className="h-32 w-full bg-slate-900" />
+              <Skeleton className="h-32 w-full bg-slate-900" />
+            </div>
+          ) : roomsByFloor.length === 0 ? (
+            <EmptyState
+              title="Chưa có dữ liệu phòng đọc"
+              description={UI_TEXT_VI.emptySummaryWaiting}
+            />
+          ) : (
+            <div className="space-y-5">
+              {roomsByFloor.map(({ floor, rooms: floorRoomList }) => (
+                <div key={floor}>
+                  <div className="mb-2.5 flex items-center justify-between">
+                    <h3 className="text-xs font-bold tracking-wider text-slate-400 uppercase">
+                      Tầng {floor}
+                    </h3>
+                    <span className="text-2xs text-slate-500">
+                      {floorRoomList.length} phòng
+                    </span>
+                  </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {floorRoomList.map((room) => {
-                    const tel = roomTelemetryMap[room.id];
-                    const score = tel?.comfortScore?.overall ?? null;
-                    const grade = tel?.comfortScore?.grade ?? null;
-                    const style = getGradeStyle(grade, score);
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {floorRoomList.map((room) => {
+                      const tel = roomTelemetryMap[room.id];
+                      const score = tel?.comfortScore?.overall ?? null;
+                      const grade = tel?.comfortScore?.grade ?? null;
+                      const style = getGradeStyle(grade, score);
 
-                    return (
-                      <article
-                        key={room.id}
-                        className="flex flex-col justify-between rounded-lg border border-slate-800 bg-slate-950/80 p-3.5 transition-colors hover:border-slate-700"
-                        style={{
-                          borderLeftWidth: '3px',
-                          borderLeftColor: style.hex,
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="font-mono text-2xs text-slate-400">
-                              {room.code}
-                            </span>
-                            <h4 className="text-xs font-semibold text-white">
-                              {room.name}
-                            </h4>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-mono text-lg font-bold text-white">
-                              {formatMetrics.comfortScore(score)}
-                            </span>
-                            <div className="mt-0.5">
+                      return (
+                        <article
+                          key={room.id}
+                          className="flex flex-col justify-between rounded-lg border border-slate-800 bg-slate-950/80 p-3"
+                          style={{
+                            borderLeftWidth: '3px',
+                            borderLeftColor: style.hex,
+                          }}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <span className="font-mono text-2xs text-slate-400">
+                                {room.code}
+                              </span>
+                              <h4 className="truncate text-xs font-semibold text-white">
+                                {room.name}
+                              </h4>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className="font-mono text-sm font-bold text-white">
+                                {formatMetrics.comfortScore(score)}
+                              </span>
                               <GradeBadge grade={grade} score={score} />
                             </div>
                           </div>
-                        </div>
 
-                        <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-800/60 pt-2.5 font-mono text-2xs">
-                          <div>
-                            <span className="block font-sans text-slate-400">
-                              Độ ồn
-                            </span>
-                            <strong className="text-slate-200">
+                          <div className="mt-2.5 grid grid-cols-3 gap-2 border-t border-slate-800/60 pt-2 font-mono text-2xs text-slate-300">
+                            <div>
+                              <span className="block font-sans text-slate-500">
+                                Độ ồn
+                              </span>
                               {formatMetrics.noise(tel?.acoustics?.noiseAvg)}
-                            </strong>
-                          </div>
-                          <div>
-                            <span className="block font-sans text-slate-400">
-                              Bụi PM2.5
-                            </span>
-                            <strong className="text-slate-200">
+                            </div>
+                            <div>
+                              <span className="block font-sans text-slate-500">
+                                PM2.5
+                              </span>
                               {formatMetrics.pm(tel?.airQuality?.pm2_5)}
-                            </strong>
-                          </div>
-                          <div>
-                            <span className="block font-sans text-slate-400">
-                              Nhiệt / Ẩm
-                            </span>
-                            <strong className="text-slate-200">
+                            </div>
+                            <div>
+                              <span className="block font-sans text-slate-500">
+                                Nhiệt / Ẩm
+                              </span>
                               {formatMetrics.temperature(
                                 tel?.environment?.temperature
                               )}{' '}
                               ·{' '}
-                              {formatMetrics.humidity(tel?.environment?.humidity)}
-                            </strong>
+                              {formatMetrics.humidity(
+                                tel?.environment?.humidity
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </article>
-                    );
-                  })}
+                        </article>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </div>
+      </details>
     </main>
   );
 }

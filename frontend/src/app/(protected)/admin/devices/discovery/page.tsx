@@ -193,14 +193,7 @@ export default function DeviceDiscoveryPage() {
         </div>
 
         <div className="page-header pt-1">
-          <div>
-            <h1 className="page-title">
-              Tự động Phát hiện & Cấp phát ESP32
-            </h1>
-            <p className="page-subtitle">
-              Danh sách trạm đo mới cắm điện đang phát tin MQTT nhưng chưa đăng ký vào hệ thống
-            </p>
-          </div>
+          <h1 className="page-title">Phát hiện thiết bị mới</h1>
 
           <button
             type="button"
@@ -208,7 +201,7 @@ export default function DeviceDiscoveryPage() {
             className="btn-secondary btn-sm"
           >
             <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Quét lại hàng đợi</span>
+            <span>Làm mới</span>
           </button>
         </div>
       </div>

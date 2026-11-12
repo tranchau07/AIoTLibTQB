@@ -11,6 +11,7 @@ import React, {
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Info,
@@ -137,6 +138,80 @@ export function ConnectionBadge({
       <span className="dot bg-slate-400" aria-hidden="true" />
       Mất kết nối
     </span>
+  );
+}
+
+// 5.5. Collapsible Section for Progressive Disclosure
+export function CollapsibleSection({
+  title,
+  summary,
+  badge,
+  actions,
+  defaultOpen = false,
+  compact = false,
+  className = '',
+  children,
+}: {
+  title: string;
+  summary?: string;
+  badge?: React.ReactNode;
+  actions?: React.ReactNode;
+  defaultOpen?: boolean;
+  compact?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div
+      className={`rounded-xl border border-slate-200/80 bg-white ${className}`}
+    >
+      <div
+        className={`flex items-center justify-between gap-3 ${
+          compact ? 'px-3 py-2' : 'px-4 py-2.5'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-150 ${
+              open ? 'rotate-180 text-slate-700' : ''
+            }`}
+            aria-hidden="true"
+          />
+          <span
+            className={`truncate font-semibold text-slate-900 ${
+              compact ? 'text-xs' : 'text-[13px]'
+            }`}
+          >
+            {title}
+          </span>
+          {badge && <span className="shrink-0">{badge}</span>}
+          {summary && (
+            <span className="hidden truncate text-xs text-slate-500 sm:inline">
+              · {summary}
+            </span>
+          )}
+        </button>
+        {actions && (
+          <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        )}
+      </div>
+      {open && (
+        <div
+          className={`border-t border-slate-100 ${
+            compact ? 'p-3' : 'px-4 py-3.5'
+          }`}
+        >
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 

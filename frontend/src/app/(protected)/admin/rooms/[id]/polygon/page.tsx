@@ -510,22 +510,14 @@ export default function RoomPolygonEditorPage() {
         </div>
 
         <div className="page-header pt-1">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="page-title">Mặt bằng: {room.name}</h1>
-              <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-2xs font-medium text-slate-700">
-                {room.code} · Tầng {room.floor} · Khung chuẩn 76.0m × 57.2m
-              </span>
-              {isDirty && (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-2xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                  Có thay đổi chưa lưu
-                </span>
-              )}
-            </div>
-            <p className="page-subtitle">
-              Vẽ biên đa giác trực tiếp trên nền Bản vẽ Kiến trúc AutoCAD 1:100 Thư viện Tạ Quang Bửu và định vị trạm cảm biến ESP32
-            </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="page-title">{room.name}</h1>
+            <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-2xs font-medium text-slate-700">
+              {room.code} · Tầng {room.floor}
+            </span>
+            {isDirty && (
+              <span className="badge-warning">Có thay đổi chưa lưu</span>
+            )}
           </div>
 
           {/* Mode Selector */}
@@ -537,10 +529,7 @@ export default function RoomPolygonEditorPage() {
                 mode === 'polygon' ? 'segmented-item-active' : ''
               }`}
             >
-              <span className="inline-flex items-center gap-1.5">
-                <Pentagon className="h-3.5 w-3.5 text-brand-600" />
-                Vẽ đa giác ({vertices.length} đỉnh)
-              </span>
+              Vẽ đa giác ({vertices.length})
             </button>
             <button
               type="button"
@@ -549,10 +538,7 @@ export default function RoomPolygonEditorPage() {
                 mode === 'device' ? 'segmented-item-active' : ''
               }`}
             >
-              <span className="inline-flex items-center gap-1.5">
-                <MapPin className="h-3.5 w-3.5 text-emerald-600" />
-                Định vị trạm đo ({roomDevices.length})
-              </span>
+              Định vị trạm ({roomDevices.length})
             </button>
           </div>
         </div>
@@ -564,19 +550,18 @@ export default function RoomPolygonEditorPage() {
         <div className="card flex flex-col justify-between p-4 lg:col-span-8">
           <div>
             {/* Toolbar with TQB CAD Preset Loader */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => setShowCadUnderlay((v) => !v)}
-                  className={`btn-sm rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+                  className={`btn-sm rounded-md border px-2.5 py-1 text-xs font-medium ${
                     showCadUnderlay
-                      ? 'border-sky-500 bg-sky-50 text-sky-900'
+                      ? 'border-slate-900 bg-slate-900 text-white'
                       : 'border-slate-200 bg-white text-slate-600'
                   }`}
                 >
-                  <Layers className="mr-1 inline h-3.5 w-3.5" />
-                  Nền CAD TQB ({showCadUnderlay ? 'Bật' : 'Tắt'})
+                  Nền CAD
                 </button>
 
                 {floorPresets.length > 0 && (
@@ -596,10 +581,9 @@ export default function RoomPolygonEditorPage() {
                     <button
                       type="button"
                       onClick={() => handleApplyTqbPreset()}
-                      className="btn-sm inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                      className="btn-secondary btn-sm"
                     >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>Nạp đa giác chuẩn từ Bản vẽ TQB</span>
+                      Áp dụng mẫu CAD
                     </button>
                   </div>
                 )}
@@ -611,7 +595,6 @@ export default function RoomPolygonEditorPage() {
                       onClick={handleApplySampleRectangle}
                       className="btn-secondary btn-sm"
                     >
-                      <Square className="h-3.5 w-3.5" aria-hidden="true" />
                       Mẫu chữ nhật
                     </button>
                     <button
@@ -619,8 +602,7 @@ export default function RoomPolygonEditorPage() {
                       onClick={handleResetPolygon}
                       className="btn-secondary btn-sm"
                     >
-                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                      Làm lại
+                      Đặt lại
                     </button>
                   </>
                 )}
@@ -635,7 +617,6 @@ export default function RoomPolygonEditorPage() {
                   onClick={handleSavePolygon}
                   className="btn-primary btn-sm"
                 >
-                  <Save className="h-3.5 w-3.5" aria-hidden="true" />
                   {updateRoomMutation.isPending ? 'Đang lưu...' : 'Lưu đa giác'}
                 </button>
               )}

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ChevronRight, Map, Radio } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import type { BucketInterval } from '@/types/api';
 import { useRoomDetailQuery } from '@/features/rooms/queries';
 import {
@@ -27,6 +27,7 @@ import {
 import { getGradeStyle } from '@/config/thresholds';
 import { ERROR_MESSAGES_VI } from '@/messages/vi';
 import {
+  CollapsibleSection,
   ErrorBanner,
   GradeBadge,
   Skeleton,
@@ -68,6 +69,7 @@ export default function RoomDetailPage() {
     toLocalDateTimeInputValue(new Date())
   );
   const [interval, setIntervalState] = useState<BucketInterval>('15m');
+  const [showCustomRange, setShowCustomRange] = useState<boolean>(false);
 
   const startIso = useMemo(() => {
     const d = new Date(startLocal);
@@ -182,7 +184,6 @@ export default function RoomDetailPage() {
 
           <div className="flex items-center gap-2">
             <Link href="/floorplan" className="btn-secondary btn-sm">
-              <Map className="h-4 w-4" aria-hidden="true" />
               Bản đồ tầng
             </Link>
           </div>
@@ -206,7 +207,7 @@ export default function RoomDetailPage() {
         <div className="card flex flex-col justify-between p-5 lg:col-span-5">
           <div>
             <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
-              <h2 className="section-title">Chỉ số tiện nghi tổng hợp</h2>
+              <h2 className="section-title">Điểm tiện nghi</h2>
               <GradeBadge grade={grade} score={overallScore} />
             </div>
 
@@ -293,191 +294,234 @@ export default function RoomDetailPage() {
           <div className="mt-4 border-t border-slate-100 pt-2.5 text-2xs text-slate-400">
             {latest?.timestamp ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span>Trạm phát: <strong className="font-mono text-slate-600">{latest.metadata?.hardwareId}</strong></span>
-                <span>{formatRelativeTimeVi(latest.timestamp)} ({formatVietnamDateTime(latest.timestamp)})</span>
+                <span className="font-mono text-slate-500">
+                  {latest.metadata?.hardwareId}
+                </span>
+                <span>{formatRelativeTimeVi(latest.timestamp)}</span>
               </div>
             ) : (
-              <span>Đang chờ bản tin đầu tiên từ trạm đo...</span>
+              <span>Chờ bản tin cảm biến...</span>
             )}
           </div>
         </div>
 
         {/* Live Telemetry Matrix */}
-        <div className="card p-5 lg:col-span-7">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-            <div>
-              <h2 className="section-title">Thông số cảm biến thời gian thực</h2>
-              <p className="text-xs text-slate-500">
-                Kênh luồng trực tiếp `/topic/rooms/{roomId}/telemetry`
-              </p>
+        <div className="card flex flex-col justify-between p-5 lg:col-span-7">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <h2 className="section-title">Thông số thời gian thực</h2>
+              <span className="badge-neutral">
+                <span
+                  className={`dot ${
+                    stompConnected ? 'bg-emerald-500' : 'bg-slate-400'
+                  }`}
+                  aria-hidden="true"
+                />
+                {stompConnected ? 'Trực tiếp' : 'Định kỳ 15s'}
+              </span>
             </div>
-            <span className="badge-neutral">
-              <Radio className={`h-3 w-3 ${stompConnected ? 'text-emerald-500 animate-pulse' : 'text-slate-400'}`} />
-              {stompConnected ? 'STOMP Trực tiếp' : 'Định kỳ 15s'}
-            </span>
+
+            {latestQuery.isLoading ? (
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <Skeleton className="h-16" />
+                <Skeleton className="h-16" />
+                <Skeleton className="h-16" />
+                <Skeleton className="h-16" />
+                <Skeleton className="h-16" />
+                <Skeleton className="h-16" />
+              </div>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <span className="metric-label">Nhiệt độ</span>
+                  <span className="mt-1 block metric-value">
+                    {formatMetrics.temperature(
+                      latest?.environment?.temperature
+                    )}
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <span className="metric-label">Độ ẩm</span>
+                  <span className="mt-1 block metric-value">
+                    {formatMetrics.humidity(latest?.environment?.humidity)}
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <span className="metric-label">Ánh sáng</span>
+                  <span className="mt-1 block metric-value">
+                    {formatMetrics.lux(latest?.environment?.lux)}
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <span className="metric-label">Độ ồn TB</span>
+                  <span className="mt-1 block metric-value">
+                    {formatMetrics.noise(latest?.acoustics?.noiseAvg)}
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <span className="metric-label">Bụi PM2.5</span>
+                  <span className="mt-1 block metric-value">
+                    {formatMetrics.pm(latest?.airQuality?.pm2_5)}
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                  <span className="metric-label">Wi-Fi RSSI</span>
+                  <span className="mt-1 block metric-value">
+                    {formatMetrics.rssi(latest?.wifiRssi)}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {latestQuery.isLoading ? (
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-            </div>
-          ) : (
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="metric-label">Nhiệt độ phòng</span>
-                <span className="mt-1 block metric-value">
-                  {formatMetrics.temperature(latest?.environment?.temperature)}
-                </span>
-                <span className="text-2xs text-slate-400">Khuyến nghị: 22 – 25 °C</span>
+          {/* Collapsible Secondary Metrics & Standard Thresholds */}
+          <div className="mt-4">
+            <CollapsibleSection
+              title="Thông số phụ & Ngưỡng tiêu chuẩn"
+              compact
+              defaultOpen={false}
+            >
+              <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                <div>
+                  <span className="text-2xs text-slate-400">Độ ồn đỉnh</span>
+                  <p className="font-mono font-medium text-slate-800">
+                    {formatMetrics.noise(latest?.acoustics?.noisePeak)}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-2xs text-slate-400">Bụi PM1.0</span>
+                  <p className="font-mono font-medium text-slate-800">
+                    {formatMetrics.pm(latest?.airQuality?.pm1_0)}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-2xs text-slate-400">Bụi PM4.0</span>
+                  <p className="font-mono font-medium text-slate-800">
+                    {formatMetrics.pm(latest?.airQuality?.pm4_0)}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-2xs text-slate-400">Bụi PM10</span>
+                  <p className="font-mono font-medium text-slate-800">
+                    {formatMetrics.pm(latest?.airQuality?.pm10)}
+                  </p>
+                </div>
               </div>
-
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="metric-label">Độ ẩm tương đối</span>
-                <span className="mt-1 block metric-value">
-                  {formatMetrics.humidity(latest?.environment?.humidity)}
-                </span>
-                <span className="text-2xs text-slate-400">Khuyến nghị: 45 – 65 %</span>
+              <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-2 text-2xs text-slate-500">
+                <span>Nhiệt độ chuẩn: 22–25°C</span>
+                <span>Độ ẩm chuẩn: 45–65%RH</span>
+                <span>Ánh sáng chuẩn: 300–500 lux</span>
+                <span>Độ ồn chuẩn: &lt; 45 dBA</span>
               </div>
-
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="metric-label">Cường độ ánh sáng</span>
-                <span className="mt-1 block metric-value">
-                  {formatMetrics.lux(latest?.environment?.lux)}
-                </span>
-                <span className="text-2xs text-slate-400">Khuyến nghị: 300 – 500 lux</span>
-              </div>
-
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="metric-label">Độ ồn TB (LAeq)</span>
-                <span className="mt-1 block metric-value">
-                  {formatMetrics.noise(latest?.acoustics?.noiseAvg)}
-                </span>
-                <span className="text-2xs text-slate-400">
-                  Đỉnh: {formatMetrics.noise(latest?.acoustics?.noisePeak)}
-                </span>
-              </div>
-
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="metric-label">Bụi mịn PM2.5</span>
-                <span className="mt-1 block metric-value">
-                  {formatMetrics.pm(latest?.airQuality?.pm2_5)}
-                </span>
-                <span className="text-2xs text-slate-400">
-                  PM1.0: {formatMetrics.pm(latest?.airQuality?.pm1_0)} · PM10: {formatMetrics.pm(latest?.airQuality?.pm10)}
-                </span>
-              </div>
-
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="metric-label">Tín hiệu Wi-Fi</span>
-                <span className="mt-1 block metric-value">
-                  {formatMetrics.rssi(latest?.wifiRssi)}
-                </span>
-                <span className="text-2xs text-slate-400">
-                  PM4.0: {formatMetrics.pm(latest?.airQuality?.pm4_0)}
-                </span>
-              </div>
-            </div>
-          )}
+            </CollapsibleSection>
+          </div>
         </div>
       </div>
 
       {/* Historical Downsampled Buckets Chart Section */}
       <section
         aria-label="Biểu đồ chuỗi thời gian nén Min-Max-Avg"
-        className="card p-5 space-y-4"
+        className="card space-y-4 p-5"
       >
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
-          <div>
-            <h2 className="section-title">
-              Biểu đồ lịch sử chuỗi thời gian nén (Min – Max – Avg)
-            </h2>
-            <p className="text-xs text-slate-500">
-              Tổng hợp từ các bucket nén MongoDB Aggregation (tối đa 1000 điểm dữ liệu/truy vấn)
-            </p>
-          </div>
+          <h2 className="section-title">Biểu đồ lịch sử (Min – Max – Avg)</h2>
 
-          {/* Quick Presets */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => applyQuickPreset(6, '15m')}
-              className="btn-secondary btn-sm"
-            >
-              6 giờ (15m)
-            </button>
-            <button
-              type="button"
-              onClick={() => applyQuickPreset(24, '15m')}
-              className="btn-secondary btn-sm"
-            >
-              24 giờ (15m)
-            </button>
-            <button
-              type="button"
-              onClick={() => applyQuickPreset(24 * 7, '1h')}
-              className="btn-secondary btn-sm"
-            >
-              7 ngày (1h)
-            </button>
-            <button
-              type="button"
-              onClick={() => applyQuickPreset(24 * 30, '1d')}
-              className="btn-secondary btn-sm"
-            >
-              30 ngày (1d)
-            </button>
-          </div>
-        </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Presets */}
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => applyQuickPreset(6, '15m')}
+                className="btn-secondary btn-sm h-7 px-2 text-xs"
+              >
+                6h
+              </button>
+              <button
+                type="button"
+                onClick={() => applyQuickPreset(24, '15m')}
+                className="btn-secondary btn-sm h-7 px-2 text-xs"
+              >
+                24h
+              </button>
+              <button
+                type="button"
+                onClick={() => applyQuickPreset(24 * 7, '1h')}
+                className="btn-secondary btn-sm h-7 px-2 text-xs"
+              >
+                7 ngày
+              </button>
+              <button
+                type="button"
+                onClick={() => applyQuickPreset(24 * 30, '1d')}
+                className="btn-secondary btn-sm h-7 px-2 text-xs"
+              >
+                30 ngày
+              </button>
+            </div>
 
-        {/* Date-Time Range & Interval Controls */}
-        <div className="flex flex-wrap items-end gap-3 rounded-lg bg-slate-50 p-3 border border-slate-100">
-          <div className="w-full sm:w-auto flex-1 min-w-[200px]">
-            <label htmlFor="bucket-start" className="label">
-              Bắt đầu
-            </label>
-            <input
-              id="bucket-start"
-              type="datetime-local"
-              value={startLocal}
-              onChange={(e) => setStartLocal(e.target.value)}
-              className="input text-xs"
-            />
-          </div>
-
-          <div className="w-full sm:w-auto flex-1 min-w-[200px]">
-            <label htmlFor="bucket-end" className="label">
-              Kết thúc
-            </label>
-            <input
-              id="bucket-end"
-              type="datetime-local"
-              value={endLocal}
-              onChange={(e) => setEndLocal(e.target.value)}
-              className="input text-xs"
-            />
-          </div>
-
-          <div className="w-full sm:w-auto">
-            <span className="label">Độ mịn (Interval)</span>
-            <div className="segmented">
+            {/* Interval Selector */}
+            <div className="segmented" role="group" aria-label="Độ mịn">
               {(['15m', '1h', '1d'] as BucketInterval[]).map((iv) => (
                 <button
                   key={iv}
                   type="button"
                   onClick={() => setIntervalState(iv)}
-                  className={`segmented-item ${interval === iv ? 'segmented-item-active' : ''}`}
+                  className={`segmented-item px-2 py-0.5 text-xs ${
+                    interval === iv ? 'segmented-item-active' : ''
+                  }`}
                 >
-                  {iv === '15m' ? '15m' : iv === '1h' ? '1h' : '1d'}
+                  {iv}
                 </button>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowCustomRange((v) => !v)}
+              className={`btn-secondary btn-sm h-7 px-2.5 text-xs ${
+                showCustomRange ? 'bg-slate-100 text-slate-900' : ''
+              }`}
+            >
+              Tùy chỉnh
+            </button>
           </div>
         </div>
+
+        {/* Expandable Custom Date-Time Range Controls */}
+        {showCustomRange && (
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+            <div className="min-w-[200px] flex-1">
+              <label htmlFor="bucket-start" className="label">
+                Bắt đầu
+              </label>
+              <input
+                id="bucket-start"
+                type="datetime-local"
+                value={startLocal}
+                onChange={(e) => setStartLocal(e.target.value)}
+                className="input text-xs"
+              />
+            </div>
+
+            <div className="min-w-[200px] flex-1">
+              <label htmlFor="bucket-end" className="label">
+                Kết thúc
+              </label>
+              <input
+                id="bucket-end"
+                type="datetime-local"
+                value={endLocal}
+                onChange={(e) => setEndLocal(e.target.value)}
+                className="input text-xs"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Client-side Bucket Range Guard Banner */}
         {!bucketValidation.valid && (

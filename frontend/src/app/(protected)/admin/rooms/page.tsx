@@ -221,23 +221,17 @@ export default function AdminRoomsPage() {
     <div className="page">
       {/* Header */}
       <div className="page-header">
-        <div>
-          <h1 className="page-title">Phòng đọc</h1>
-          <p className="page-subtitle">
-            Danh mục phòng, sức chứa, điểm tiện nghi mục tiêu và đa giác mặt bằng.
-          </p>
-        </div>
+        <h1 className="page-title">Phòng đọc</h1>
 
         <div className="flex items-center gap-2">
-          <Link href="/floorplan" className="btn-secondary">
-            <Map className="h-4 w-4 text-slate-500" aria-hidden="true" />
-            Bản đồ nhiệt
+          <Link href="/floorplan" className="btn-secondary btn-sm">
+            Bản đồ mặt bằng
           </Link>
           {capabilities.canManageRooms && (
             <button
               type="button"
               onClick={openCreateModal}
-              className="btn-primary"
+              className="btn-primary btn-sm"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               Thêm phòng

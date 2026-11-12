@@ -213,12 +213,7 @@ export default function TelemetryExplorerPage() {
     <div className="page">
       {/* Header */}
       <div className="page-header">
-        <div>
-          <h1 className="page-title">Tra cứu Dữ liệu Cảm biến Thô & Xuất CSV</h1>
-          <p className="page-subtitle">
-            Truy vấn và kiểm toán gói tin cảm biến gốc (Phạm vi tối đa 24 giờ/lần)
-          </p>
-        </div>
+        <h1 className="page-title">Dữ liệu cảm biến</h1>
 
         <button
           type="button"
