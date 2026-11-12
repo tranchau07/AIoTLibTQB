@@ -97,10 +97,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const handleIncomingAlert = useCallback(
     (alert: AlertResponse) => {
       if (alert.status === 'FIRING') {
+        const isHighOrCritical =
+          alert.severity === 'HIGH' || alert.severity === 'CRITICAL';
         pushToast({
-          title: 'Cảnh báo mới',
-          message: alert.message || `Thiết bị ${alert.hardwareId} phát cảnh báo`,
+          title: isHighOrCritical
+            ? `Cảnh báo ${alert.severity === 'CRITICAL' ? 'khẩn cấp' : 'mức cao'}`
+            : 'Cảnh báo mới',
+          message:
+            alert.message || `Thiết bị ${alert.hardwareId} phát cảnh báo`,
           variant: 'danger',
+          sticky: isHighOrCritical,
+          playSound: isHighOrCritical,
         });
       }
     },

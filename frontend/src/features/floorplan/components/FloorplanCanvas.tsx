@@ -13,6 +13,8 @@ import {
 } from '@/config/tqb-floorplan-presets';
 import { type HeatmapLayerMetric } from '@/config/thresholds';
 import {
+  clampViewportTransform,
+  computePinchScale,
   normalizedToPixel,
   pixelToNormalized,
 } from '@/lib/floorplan/coords';
@@ -130,6 +132,8 @@ export interface FloorplanCanvasProps {
   showTechOverlay?: boolean;
   /** Danh sách mã Zone phụ trách của ZONE_MANAGER để làm nổi bật */
   highlightedZoneIds?: readonly string[];
+  /** Danh sách roomId đang có cảnh báo FIRING để vẽ vòng nhấp nháy cảnh báo (GĐ3.5) */
+  firingRoomIds?: readonly string[];
   /** Mật độ hiển thị nhãn khởi tạo; người dùng vẫn đổi được qua nút gạt trên bản đồ */
   defaultLabelDensity?: LabelDensity;
 }
@@ -150,6 +154,7 @@ export function FloorplanCanvas({
   showBlindspots = false,
   showTechOverlay = false,
   highlightedZoneIds,
+  firingRoomIds = [],
   defaultLabelDensity,
 }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -177,6 +182,15 @@ export function FloorplanCanvas({
   const [cadImageLoadedFloor, setCadImageLoadedFloor] = useState<number | null>(
     null
   );
+  const [gestureViewport, setGestureViewport] = useState<{
+    scale: number;
+    tx: number;
+    ty: number;
+  } | null>(null);
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(
+    new Map()
+  );
+  const pinchStartRef = useRef<{ dist: number; scale: number } | null>(null);
 
   useEffect(() => {
     if (defaultLabelDensity) {
@@ -255,9 +269,22 @@ export function FloorplanCanvas({
     return map;
   }, [rooms]);
 
+  const firingRoomSet = useMemo(
+    () => new Set(firingRoomIds),
+    [firingRoomIds]
+  );
+
   // Tính toán khung nhìn Phóng đại 2 cấp (Level 1: Toàn tầng 1.0x <-> Level 2: Phóng to phòng 2.15x)
   const zoomViewport = useMemo(() => {
     if (!zoomedRoomId) {
+      if (gestureViewport && gestureViewport.scale > 1.01) {
+        return {
+          scale: gestureViewport.scale,
+          tx: gestureViewport.tx,
+          ty: gestureViewport.ty,
+          isZoomed: true,
+        };
+      }
       return { scale: 1, tx: 0, ty: 0, isZoomed: false };
     }
     const target = enrichedRooms.find((er) => er.room.id === zoomedRoomId);
@@ -290,12 +317,18 @@ export function FloorplanCanvas({
     const minTy = canvasSize.height * (1 - scale);
 
     return {
-      scale,
-      tx: Math.max(minTx, Math.min(0, rawTx)),
-      ty: Math.max(minTy, Math.min(0, rawTy)),
+      scale: gestureViewport?.scale ?? scale,
+      tx: gestureViewport?.tx ?? Math.max(minTx, Math.min(0, rawTx)),
+      ty: gestureViewport?.ty ?? Math.max(minTy, Math.min(0, rawTy)),
       isZoomed: true,
     };
-  }, [zoomedRoomId, enrichedRooms, canvasSize.width, canvasSize.height]);
+  }, [
+    zoomedRoomId,
+    enrichedRooms,
+    canvasSize.width,
+    canvasSize.height,
+    gestureViewport,
+  ]);
 
   const toScreenPx = (normPt: Point2D): Point2D => {
     const base = normalizedToPixel(normPt, canvasSize.width, canvasSize.height);
@@ -698,6 +731,9 @@ export function FloorplanCanvas({
         if (isSelected || isZoomTarget) {
           ctx.lineWidth = 3.2 / Math.sqrt(zoomViewport.scale);
           ctx.strokeStyle = '#38BDF8';
+        } else if (firingRoomSet.has(room.id)) {
+          ctx.lineWidth = 3.0 / Math.sqrt(zoomViewport.scale);
+          ctx.strokeStyle = '#EF4444';
         } else if (isZoneHighlighted) {
           ctx.lineWidth = 2.6 / Math.sqrt(zoomViewport.scale);
           ctx.strokeStyle = '#F59E0B';
@@ -706,6 +742,20 @@ export function FloorplanCanvas({
           ctx.strokeStyle = wallColor;
         }
         ctx.stroke();
+
+        // Vòng nhấp nháy (pulse ring) cho phòng đang có cảnh báo FIRING (GĐ3.5)
+        if (firingRoomSet.has(room.id)) {
+          const centroid = computePolygonCentroid(polygon);
+          const centerPx = normalizedToPixel(centroid, width, height);
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(centerPx.x, centerPx.y, 18 / zoomViewport.scale, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.85)';
+          ctx.lineWidth = 2.2 / zoomViewport.scale;
+          ctx.setLineDash([4, 3]);
+          ctx.stroke();
+          ctx.restore();
+        }
 
         // Render Structural Columns (BTCT) & Door Opening (CUA) when zoomed in or for large halls
         if (
@@ -768,12 +818,16 @@ export function FloorplanCanvas({
           Math.round(Math.abs(computePolygonSignedArea(polygon)) * 4347.2);
         const isSmallGroupRoom = areaM2 < 65;
 
+        const isSyntheticRoom =
+          room.id.startsWith('PRESET_') || Boolean(roomLatest?.isSynthetic);
         const codeLabel = preset?.code ?? room.code;
         const shortCode = codeLabel.replace(/^TQB_/, 'P.');
         const metricLabel = hasOnlineTelemetry
           ? formatLayerMetricValue(primaryValue, layer)
           : 'Offline';
-        const compactText = `${shortCode} · ${metricLabel}`;
+        const compactText = isSyntheticRoom
+          ? `${shortCode} · ${metricLabel} (MP)`
+          : `${shortCode} · ${metricLabel}`;
 
         const values = idwSamples.map((s) => s.value);
         const minVal = values.length > 1 ? Math.min(...values) : null;
@@ -800,7 +854,9 @@ export function FloorplanCanvas({
           }
         }
 
-        const titleLine = codeLabel;
+        const titleLine = isSyntheticRoom
+          ? `${codeLabel} · Mô phỏng`
+          : codeLabel;
         const subLine =
           zoomViewport.isZoomed && spreadText
             ? `${metricLabel} · ${spreadText}`
@@ -1215,6 +1271,72 @@ export function FloorplanCanvas({
     }
   };
 
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    activePointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY,
+    });
+    if (activePointersRef.current.size === 2) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchStartRef.current = { dist, scale: zoomViewport.scale };
+    }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const prev = activePointersRef.current.get(e.pointerId);
+    if (!prev) return;
+    activePointersRef.current.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY,
+    });
+
+    if (activePointersRef.current.size === 2 && pinchStartRef.current) {
+      const pts = Array.from(activePointersRef.current.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const nextScale = computePinchScale(
+        pinchStartRef.current.scale,
+        pinchStartRef.current.dist,
+        dist
+      );
+      setGestureViewport(
+        clampViewportTransform(
+          nextScale,
+          zoomViewport.tx,
+          zoomViewport.ty,
+          canvasSize.width,
+          canvasSize.height
+        )
+      );
+    } else if (
+      activePointersRef.current.size === 1 &&
+      zoomViewport.scale > 1.01
+    ) {
+      const dx = e.clientX - prev.x;
+      const dy = e.clientY - prev.y;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+        setGestureViewport(
+          clampViewportTransform(
+            zoomViewport.scale,
+            zoomViewport.tx + dx,
+            zoomViewport.ty + dy,
+            canvasSize.width,
+            canvasSize.height
+          )
+        );
+      }
+    }
+  };
+
+  const handlePointerUpOrCancel = (
+    e: React.PointerEvent<HTMLCanvasElement>
+  ) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size < 2) {
+      pinchStartRef.current = null;
+    }
+  };
+
   const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1350,9 +1472,13 @@ export function FloorplanCanvas({
         ref={canvasRef}
         onMouseMove={handleCanvasMouseMove}
         onMouseLeave={handleCanvasMouseLeave}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUpOrCancel}
+        onPointerCancel={handlePointerUpOrCancel}
         onClick={handleCanvasClick}
         onDoubleClick={handleCanvasDoubleClick}
-        className="block cursor-pointer select-none"
+        className="block cursor-pointer touch-none select-none"
         aria-label="Bản đồ không gian mặt bằng và Heatmap 2D Thư viện Tạ Quang Bửu"
       />
 

@@ -1,8 +1,10 @@
 import { httpClient } from '@/lib/http/client';
 import type {
   PageResponse,
+  PublicRoomStatusResponse,
   RoomCreationRequest,
   RoomResponse,
+  RoomThresholdConfig,
   RoomUpdateRequest,
 } from '@/types/api';
 
@@ -29,6 +31,14 @@ export const roomsApi = {
 
   update: (id: string, body: RoomUpdateRequest) =>
     httpClient.put<RoomResponse>(`/rooms/${id}`, body),
+
+  updateThresholds: (id: string, body: RoomThresholdConfig) =>
+    httpClient.put<RoomResponse>(`/rooms/${id}/thresholds`, body),
+
+  listPublic: (floor?: number) => {
+    const query = floor !== undefined ? `?floor=${floor}` : '';
+    return httpClient.get<PublicRoomStatusResponse[]>(`/public/rooms${query}`);
+  },
 
   remove: (id: string) => httpClient.delete<void>(`/rooms/${id}`),
 };

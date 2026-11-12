@@ -42,3 +42,22 @@ export function formatRelativeTimeVi(
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays} ngày trước`;
 }
+
+export const STALE_TELEMETRY_MS = 5 * 60 * 1000;
+
+/**
+ * Kiểm tra xem bản tin Telemetry đã cũ quá 5 phút hay chưa (> 300.000 ms).
+ * Bỏ qua dữ liệu giả lập (`isSynthetic === true`).
+ */
+export function isTelemetryStale(
+  isoString: string | null | undefined,
+  nowMs: number = Date.now(),
+  isSynthetic?: boolean
+): boolean {
+  if (isSynthetic) return false;
+  if (!isoString) return false;
+  const targetMs = new Date(isoString).getTime();
+  if (Number.isNaN(targetMs)) return false;
+  return nowMs - targetMs > STALE_TELEMETRY_MS;
+}
+

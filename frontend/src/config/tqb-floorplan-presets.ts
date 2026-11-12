@@ -2370,3 +2370,76 @@ export function computeWayfindingPath(
     distanceMeters: Math.max(4, Math.round(distanceMeters)),
   };
 }
+
+/**
+ * Tạo Telemetry mẫu thực tế theo đặc trưng từng phòng TQB cho các phòng Preset chưa có bản ghi trực tiếp từ Backend
+ * (gắn cờ isSynthetic: true để minh bạch dữ liệu mô phỏng).
+ */
+export function buildPresetFallbackTelemetry(
+  room: RoomResponse,
+  indexOnFloor: number
+): TelemetryResponse {
+  const preset = resolveRoomPreset(room, indexOnFloor);
+  const isStorage = (preset?.roomType ?? room.type) === 'BOOK_STORAGE';
+  const isHall = (preset?.roomType ?? room.type) === 'CIRCULATION_HALL';
+  const isGroup = (preset?.areaM2 ?? 100) < 60;
+
+  const seed = (indexOnFloor + 1) * 1.7 + room.floor * 0.9;
+  const temp = isStorage
+    ? 21.8 + (seed % 1.4)
+    : isGroup
+      ? 22.4 + (seed % 1.6)
+      : 22.6 + (seed % 2.1);
+  const humidity = isStorage ? 55.0 + (seed % 6.5) : 52.0 + (seed % 7.0);
+  const noiseAvg = isStorage
+    ? 36.5 + (seed % 4.0)
+    : isHall
+      ? 48.0 + (seed % 6.0)
+      : isGroup
+        ? 45.5 + (seed % 6.5)
+        : 39.2 + (seed % 5.5);
+  const lux = isStorage ? 240 + ((seed * 30) % 80) : 390 + ((seed * 45) % 160);
+  const pm25 = 11.5 + (seed % 7.5);
+  const overall = Math.round(
+    Math.max(
+      68,
+      Math.min(96, 92 - (noiseAvg - 38) * 0.6 - Math.abs(temp - 22.8) * 3)
+    )
+  );
+
+  return {
+    id: `SYNTH_TEL_${room.id}`,
+    timestamp: new Date().toISOString(),
+    metadata: {
+      deviceId: `SYNTH_DEV_${room.id}`,
+      hardwareId: `TQB_SIM_${room.code}`,
+      roomId: room.id,
+    },
+    acoustics: {
+      noiseAvg: +noiseAvg.toFixed(1),
+      noisePeak: +(noiseAvg + 5.2).toFixed(1),
+    },
+    airQuality: {
+      pm1_0: +(pm25 * 0.65).toFixed(1),
+      pm2_5: +pm25.toFixed(1),
+      pm4_0: +(pm25 * 1.25).toFixed(1),
+      pm10: +(pm25 * 1.55).toFixed(1),
+    },
+    environment: {
+      temperature: +temp.toFixed(1),
+      humidity: +humidity.toFixed(1),
+      lux: Math.round(lux),
+    },
+    comfortScore: {
+      overall,
+      grade: overall >= 90 ? 'Platinum' : overall >= 75 ? 'Gold' : 'Silver',
+      acousticScore: Math.round(Math.max(60, 100 - (noiseAvg - 35) * 1.4)),
+      airScore: Math.round(Math.max(70, 100 - pm25 * 0.9)),
+      thermalScore: Math.round(Math.max(65, 100 - Math.abs(temp - 22.5) * 7)),
+      lightScore: 90,
+    },
+    wifiRssi: Math.round(-54 - ((seed * 4) % 18)),
+    isSynthetic: true,
+  };
+}
+

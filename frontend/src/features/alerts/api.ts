@@ -10,6 +10,8 @@ export interface AlertFilterParams {
   roomId?: string;
   type?: AlertType | '';
   status?: AlertStatus | '';
+  sortBy?: 'startedAt' | 'severity';
+  direction?: 'ASC' | 'DESC';
   page?: number;
   size?: number;
 }
@@ -22,6 +24,8 @@ export const alertsApi = {
     if (params.roomId) search.set('roomId', params.roomId);
     if (params.type) search.set('type', params.type);
     if (params.status) search.set('status', params.status);
+    if (params.sortBy) search.set('sortBy', params.sortBy);
+    if (params.direction) search.set('direction', params.direction);
     return httpClient.get<PageResponse<AlertResponse>>(
       `/alerts?${search.toString()}`
     );

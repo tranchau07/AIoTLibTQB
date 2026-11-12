@@ -10,7 +10,46 @@ import {
   WifiOff,
   Cpu,
 } from 'lucide-react';
-import type { AlertStatus, AlertType } from '@/types/api';
+import type { AlertSeverity, AlertStatus, AlertType } from '@/types/api';
+
+export interface SeverityMetaConfig {
+  labelVi: string;
+  badgeClass: string;
+}
+
+export const ALERT_SEVERITY_META: Record<AlertSeverity, SeverityMetaConfig> = {
+  CRITICAL: {
+    labelVi: 'Khẩn cấp',
+    badgeClass: 'border-rose-300 bg-rose-100 text-rose-900 font-semibold',
+  },
+  HIGH: {
+    labelVi: 'Cao',
+    badgeClass: 'border-red-200 bg-red-50 text-red-700 font-semibold',
+  },
+  MEDIUM: {
+    labelVi: 'Trung bình',
+    badgeClass: 'border-amber-200 bg-amber-50 text-amber-800',
+  },
+  LOW: {
+    labelVi: 'Thấp',
+    badgeClass: 'border-slate-200 bg-slate-100 text-slate-700',
+  },
+};
+
+export function AlertSeverityBadge({
+  severity = 'MEDIUM',
+}: {
+  severity?: AlertSeverity;
+}) {
+  const meta = ALERT_SEVERITY_META[severity] ?? ALERT_SEVERITY_META.MEDIUM;
+  return (
+    <span
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${meta.badgeClass}`}
+    >
+      {meta.labelVi}
+    </span>
+  );
+}
 
 export interface BadgeStyleConfig {
   labelVi: string;

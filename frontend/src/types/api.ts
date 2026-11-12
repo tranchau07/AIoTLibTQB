@@ -149,6 +149,17 @@ export interface Point2D {
   y: number;
 }
 
+export interface RoomThresholdConfig {
+  noiseAvgMax?: number | null;
+  noisePeakMax?: number | null;
+  noisePeakImmediate?: number | null;
+  tempMin?: number | null;
+  tempMax?: number | null;
+  humidityMin?: number | null;
+  humidityMax?: number | null;
+  pm25Max?: number | null;
+}
+
 export interface RoomResponse {
   id: string;
   code: string;
@@ -158,9 +169,25 @@ export interface RoomResponse {
   description?: string;
   targetComfortScore?: number;
   type?: RoomType;
+  thresholds?: RoomThresholdConfig | null;
   boundaryPolygon?: Point2D[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface PublicRoomStatusResponse {
+  id: string;
+  code: string;
+  name: string;
+  floor: number;
+  capacity?: number;
+  type?: RoomType;
+  boundaryPolygon?: Point2D[];
+  timestamp?: string | null;
+  acoustics?: AcousticMetrics | null;
+  airQuality?: AirQualityMetrics | null;
+  environment?: EnvironmentMetrics | null;
+  comfortScore?: ComfortScoreRecord | null;
 }
 
 export interface RoomCreationRequest {
@@ -306,6 +333,7 @@ export interface TelemetryResponse {
   environment?: EnvironmentMetrics | null;
   comfortScore?: ComfortScoreRecord | null;
   wifiRssi: number | null;
+  isSynthetic?: boolean;
 }
 
 export interface RoomSummaryInfo {
@@ -382,10 +410,12 @@ export interface AlertResponse {
   roomId: string | null;
   type: AlertType;
   severity?: AlertSeverity;
+  severityRank?: number;
   status: AlertStatus;
   currentValue: number | null;
   threshold: number | null;
   message: string;
+  recommendedAction?: string | null;
   startedAt: string;
   acknowledgedAt: string | null;
   resolvedAt: string | null;

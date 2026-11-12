@@ -7,7 +7,10 @@ import type { RoomResponse } from '@/types/api';
 import { useRoomLatestTelemetryQuery } from '@/features/telemetry/queries';
 import { useRoomTelemetryStream } from '@/lib/realtime/use-room-stream';
 import { formatMetrics } from '@/lib/format/metrics';
-import { formatRelativeTimeVi } from '@/lib/format/datetime';
+import {
+  formatRelativeTimeVi,
+  isTelemetryStale,
+} from '@/lib/format/datetime';
 import { GradeBadge, Skeleton } from '@/components/ui/primitives';
 
 export interface RoomTelemetryCardProps {
@@ -60,12 +63,30 @@ function RoomTelemetryCardComponent({
         {/* Card Header: Code, Floor, Name & Comfort Score + Grade Badge */}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-2xs text-slate-500">
+            <div className="flex flex-wrap items-center gap-1.5 text-2xs text-slate-500">
               <span className="font-mono font-semibold text-slate-700">
                 {room.code}
               </span>
               <span>·</span>
               <span>Tầng {room.floor}</span>
+              {(room.id.startsWith('PRESET_') || latest?.isSynthetic) && (
+                <span className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                  Mô phỏng
+                </span>
+              )}
+              {latest &&
+                isTelemetryStale(
+                  latest.timestamp,
+                  Date.now(),
+                  latest.isSynthetic
+                ) && (
+                  <span
+                    className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+                    title="Chưa nhận mẫu đo mới trong hơn 5 phút"
+                  >
+                    Dữ liệu cũ
+                  </span>
+                )}
             </div>
             <h3 className="mt-0.5 truncate text-sm font-semibold text-slate-900">
               {room.name}

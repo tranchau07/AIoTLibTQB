@@ -4,6 +4,8 @@ import React, { useMemo, useState } from 'react';
 import {
   RotateCw,
   ShieldAlert,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import {
   EmptyState,
@@ -21,6 +23,7 @@ import {
 import {
   ALERT_STATUS_META,
   ALERT_TYPE_META,
+  AlertSeverityBadge,
   AlertStatusBadge,
   AlertTypeBadge,
 } from '@/features/alerts/components/AlertBadges';
@@ -54,11 +57,12 @@ const ALERT_STATUSES: AlertStatus[] = [
 
 export default function AlertsCenterPage() {
   const capabilities = useAuthStore((s) => s.capabilities);
-  const { pushToast } = useToast();
+  const { pushToast, audioMuted, setAudioMuted } = useToast();
 
   const [selectedRoomId, setSelectedRoomId] = useState<string>('');
   const [selectedType, setSelectedType] = useState<AlertType | ''>('');
   const [selectedStatus, setSelectedStatus] = useState<AlertStatus | ''>('');
+  const [sortBy, setSortBy] = useState<'startedAt' | 'severity'>('startedAt');
   const [page, setPage] = useState<number>(0);
 
   const stompConnected = useStompConnectionState();
@@ -74,10 +78,12 @@ export default function AlertsCenterPage() {
       roomId: selectedRoomId || undefined,
       type: selectedType || undefined,
       status: selectedStatus || undefined,
+      sortBy,
+      direction: 'DESC' as const,
       page,
       size: PAGE_SIZE,
     }),
-    [selectedRoomId, selectedType, selectedStatus, page]
+    [selectedRoomId, selectedType, selectedStatus, sortBy, page]
   );
 
   const alertsQuery = useAlertsQuery(filterParams, capabilities.canViewAlerts);
@@ -169,6 +175,39 @@ export default function AlertsCenterPage() {
         <h1 className="page-title">Cảnh báo &amp; Sự cố</h1>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setAudioMuted(!audioMuted)}
+            className="btn-secondary btn-sm"
+            title={
+              audioMuted
+                ? 'Bật âm báo sự cố khẩn cấp'
+                : 'Tắt âm báo sự cố khẩn cấp'
+            }
+          >
+            {audioMuted ? (
+              <VolumeX className="h-3.5 w-3.5 text-slate-400" />
+            ) : (
+              <Volume2 className="h-3.5 w-3.5 text-brand-600" />
+            )}
+            <span>{audioMuted ? 'Đã tắt chuông' : 'Chuông báo'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setSortBy((prev) =>
+                prev === 'startedAt' ? 'severity' : 'startedAt'
+              )
+            }
+            className="btn-secondary btn-sm"
+          >
+            <span>
+              Sắp xếp:{' '}
+              {sortBy === 'severity' ? 'Mức độ ưu tiên' : 'Mới nhất'}
+            </span>
+          </button>
+
           <span className="badge-neutral">
             <span
               className={`dot ${
@@ -367,11 +406,11 @@ export default function AlertsCenterPage() {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Trạng thái</th>
+                    <th>Trạng thái &amp; Mức độ</th>
                     <th>Loại sự cố</th>
-                    <th>Phòng đọc & Thiết bị</th>
+                    <th>Phòng đọc &amp; Thiết bị</th>
                     <th>Giá trị / Ngưỡng</th>
-                    <th>Nội dung cảnh báo</th>
+                    <th>Nội dung &amp; Quy trình xử lý (SOP)</th>
                     <th>Thời gian</th>
                     <th className="text-right">Thao tác FSM</th>
                   </tr>
@@ -398,7 +437,10 @@ export default function AlertsCenterPage() {
                     return (
                       <tr key={alert.id}>
                         <td className="whitespace-nowrap">
-                          <AlertStatusBadge status={alert.status} />
+                          <div className="flex flex-col items-start gap-1">
+                            <AlertStatusBadge status={alert.status} />
+                            <AlertSeverityBadge severity={alert.severity} />
+                          </div>
                         </td>
 
                         <td className="whitespace-nowrap">
@@ -424,7 +466,13 @@ export default function AlertsCenterPage() {
                         </td>
 
                         <td className="max-w-xs text-xs text-slate-700">
-                          {alert.message || '--'}
+                          <div>{alert.message || '--'}</div>
+                          {alert.recommendedAction && (
+                            <div className="mt-1 rounded border border-amber-200 bg-amber-50/70 px-2 py-1 text-2xs text-amber-900">
+                              <strong className="font-semibold">SOP:</strong>{' '}
+                              {alert.recommendedAction}
+                            </div>
+                          )}
                         </td>
 
                         <td className="whitespace-nowrap text-xs text-slate-500 tabular">

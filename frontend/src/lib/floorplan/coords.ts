@@ -27,3 +27,46 @@ export function pixelToNormalized(
     y: Number(Math.max(0, Math.min(1, pixel.y / canvasHeight)).toFixed(4)),
   };
 }
+
+export interface ViewportTransform {
+  scale: number;
+  tx: number;
+  ty: number;
+}
+
+/**
+ * Clamp pan translation (tx, ty) for a given zoom scale [1.0, 3.0] so the floorplan stays in bounds.
+ */
+export function clampViewportTransform(
+  scale: number,
+  tx: number,
+  ty: number,
+  canvasWidth: number,
+  canvasHeight: number
+): ViewportTransform {
+  const safeScale = Math.max(1, Math.min(3, scale));
+  if (safeScale <= 1.001) {
+    return { scale: 1, tx: 0, ty: 0 };
+  }
+  const minTx = canvasWidth * (1 - safeScale);
+  const minTy = canvasHeight * (1 - safeScale);
+  return {
+    scale: Number(safeScale.toFixed(3)),
+    tx: Math.max(minTx, Math.min(0, tx)),
+    ty: Math.max(minTy, Math.min(0, ty)),
+  };
+}
+
+/**
+ * Compute new pinch-zoom scale from initial distance and current distance between two pointers.
+ */
+export function computePinchScale(
+  initialScale: number,
+  initialDistancePx: number,
+  currentDistancePx: number
+): number {
+  if (initialDistancePx <= 1) return Math.max(1, Math.min(3, initialScale));
+  const ratio = currentDistancePx / initialDistancePx;
+  return Number(Math.max(1, Math.min(3, initialScale * ratio)).toFixed(3));
+}
+

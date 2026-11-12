@@ -17,6 +17,7 @@ import {
   useDeleteRoomMutation,
   useRoomsQuery,
   useUpdateRoomMutation,
+  useUpdateRoomThresholdsMutation,
 } from '@/features/rooms/queries';
 import { ApiError } from '@/lib/http/error-mapper';
 import { ERROR_MESSAGES_VI, UI_TEXT_VI } from '@/messages/vi';
@@ -38,6 +39,13 @@ interface RoomFormState {
   targetComfortScore: string;
   type: RoomType;
   description: string;
+  noiseAvgMax: string;
+  noisePeakMax: string;
+  tempMin: string;
+  tempMax: string;
+  humidityMin: string;
+  humidityMax: string;
+  pm25Max: string;
 }
 
 const DEFAULT_FORM: RoomFormState = {
@@ -48,6 +56,13 @@ const DEFAULT_FORM: RoomFormState = {
   targetComfortScore: '80',
   type: 'STUDY_ROOM',
   description: '',
+  noiseAvgMax: '65',
+  noisePeakMax: '75',
+  tempMin: '18',
+  tempMax: '32',
+  humidityMin: '35',
+  humidityMax: '70',
+  pm25Max: '50',
 };
 
 export default function AdminRoomsPage() {
@@ -70,6 +85,7 @@ export default function AdminRoomsPage() {
 
   const createMutation = useCreateRoomMutation();
   const updateMutation = useUpdateRoomMutation();
+  const updateThresholdsMutation = useUpdateRoomThresholdsMutation();
   const deleteMutation = useDeleteRoomMutation();
 
   // Create / Edit Modal state
@@ -94,6 +110,7 @@ export default function AdminRoomsPage() {
 
   const openEditModal = (room: RoomResponse) => {
     setEditingRoom(room);
+    const th = room.thresholds;
     setForm({
       code: room.code,
       name: room.name,
@@ -105,6 +122,13 @@ export default function AdminRoomsPage() {
           : '80',
       type: room.type ?? 'STUDY_ROOM',
       description: room.description ?? '',
+      noiseAvgMax: String(th?.noiseAvgMax ?? 65),
+      noisePeakMax: String(th?.noisePeakMax ?? 75),
+      tempMin: String(th?.tempMin ?? 18),
+      tempMax: String(th?.tempMax ?? 32),
+      humidityMin: String(th?.humidityMin ?? 45),
+      humidityMax: String(th?.humidityMax ?? 60),
+      pm25Max: String(th?.pm25Max ?? 50),
     });
     setFormError(null);
     setFormOpen(true);
@@ -148,6 +172,18 @@ export default function AdminRoomsPage() {
             targetComfortScore: parsedTarget,
             type: form.type,
             description: form.description.trim() || undefined,
+          },
+        });
+        await updateThresholdsMutation.mutateAsync({
+          id: editingRoom.id,
+          body: {
+            noiseAvgMax: Number(form.noiseAvgMax) || 65,
+            noisePeakMax: Number(form.noisePeakMax) || 75,
+            tempMin: Number(form.tempMin) || 18,
+            tempMax: Number(form.tempMax) || 32,
+            humidityMin: Number(form.humidityMin) || 40,
+            humidityMax: Number(form.humidityMax) || 60,
+            pm25Max: Number(form.pm25Max) || 50,
           },
         });
         pushToast({
@@ -590,6 +626,124 @@ export default function AdminRoomsPage() {
                 className="textarea"
               />
             </div>
+
+            {editingRoom && (
+              <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                <p className="text-xs font-semibold text-slate-800">
+                  Ngưỡng cảnh báo vận hành theo phòng (Alert Engine)
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  <div>
+                    <label htmlFor="th-noise-avg" className="label text-2xs">
+                      Ồn TB tối đa (dBA)
+                    </label>
+                    <input
+                      id="th-noise-avg"
+                      type="number"
+                      step="0.5"
+                      value={form.noiseAvgMax}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          noiseAvgMax: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="th-noise-peak" className="label text-2xs">
+                      Ồn đỉnh (dBA)
+                    </label>
+                    <input
+                      id="th-noise-peak"
+                      type="number"
+                      step="0.5"
+                      value={form.noisePeakMax}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          noisePeakMax: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="th-temp-max" className="label text-2xs">
+                      Nhiệt tối đa (°C)
+                    </label>
+                    <input
+                      id="th-temp-max"
+                      type="number"
+                      step="0.5"
+                      value={form.tempMax}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          tempMax: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="th-pm25-max" className="label text-2xs">
+                      PM2.5 tối đa (µg/m³)
+                    </label>
+                    <input
+                      id="th-pm25-max"
+                      type="number"
+                      step="1"
+                      value={form.pm25Max}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          pm25Max: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="th-hum-min" className="label text-2xs">
+                      Độ ẩm tối thiểu (%RH)
+                    </label>
+                    <input
+                      id="th-hum-min"
+                      type="number"
+                      step="1"
+                      value={form.humidityMin}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          humidityMin: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="th-hum-max" className="label text-2xs">
+                      Độ ẩm tối đa (%RH)
+                    </label>
+                    <input
+                      id="th-hum-max"
+                      type="number"
+                      step="1"
+                      value={form.humidityMax}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          humidityMax: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="-mx-5 -mb-4 flex justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-5 py-3">

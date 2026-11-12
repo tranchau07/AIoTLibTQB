@@ -1,6 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { roomsApi } from './api';
-import type { RoomCreationRequest, RoomUpdateRequest } from '@/types/api';
+import type {
+  RoomCreationRequest,
+  RoomThresholdConfig,
+  RoomUpdateRequest,
+} from '@/types/api';
 
 export const roomKeys = {
   all: ['rooms'] as const,
@@ -47,6 +51,27 @@ export function useUpdateRoomMutation() {
       void qc.invalidateQueries({ queryKey: roomKeys.all });
       void qc.invalidateQueries({ queryKey: roomKeys.detail(vars.id) });
     },
+  });
+}
+
+export function useUpdateRoomThresholdsMutation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: RoomThresholdConfig }) =>
+      roomsApi.updateThresholds(id, body),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: roomKeys.all });
+      void qc.invalidateQueries({ queryKey: roomKeys.detail(vars.id) });
+    },
+  });
+}
+
+export function usePublicRoomsQuery(floor?: number, enabled = true) {
+  return useQuery({
+    queryKey: ['public-rooms', floor] as const,
+    queryFn: () => roomsApi.listPublic(floor),
+    enabled,
+    refetchInterval: 15000,
   });
 }
 

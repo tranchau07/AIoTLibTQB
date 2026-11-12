@@ -34,13 +34,17 @@ import {
   Skeleton,
 } from '@/components/ui/primitives';
 import { useAuthStore } from '@/features/auth/store';
-import { useRoomsQuery } from '@/features/rooms/queries';
+import { usePublicRoomsQuery, useRoomsQuery } from '@/features/rooms/queries';
 import {
   telemetryKeys,
   useOverviewSummaryQuery,
 } from '@/features/telemetry/queries';
 import { telemetryApi } from '@/features/telemetry/api';
-import type { RoomResponse, TelemetryResponse } from '@/types/api';
+import type {
+  ComfortGrade,
+  RoomResponse,
+  TelemetryResponse,
+} from '@/types/api';
 
 function KioskRoomStreamSubscriber({ roomId }: { roomId: string }) {
   useRoomTelemetryStream(roomId);
@@ -91,11 +95,22 @@ export default function KioskLobbyPage() {
 
   const summaryQuery = useOverviewSummaryQuery(hasSession, 10000);
   const roomsQuery = useRoomsQuery({ page: 0, size: 50 }, hasSession);
+  const publicRoomsQuery = usePublicRoomsQuery(undefined, !hasSession);
 
-  const rooms: RoomResponse[] = useMemo(
-    () => (hasSession ? roomsQuery.data?.content ?? [] : []),
-    [hasSession, roomsQuery.data]
-  );
+  const rooms: RoomResponse[] = useMemo(() => {
+    if (hasSession) {
+      return roomsQuery.data?.content ?? [];
+    }
+    return (publicRoomsQuery.data ?? []).map((pr) => ({
+      id: pr.id,
+      code: pr.code,
+      name: pr.name,
+      floor: pr.floor,
+      capacity: pr.capacity,
+      type: pr.type,
+      boundaryPolygon: pr.boundaryPolygon,
+    }));
+  }, [hasSession, roomsQuery.data, publicRoomsQuery.data]);
 
   const roomMap = useMemo(() => {
     const map = new Map<string, RoomResponse>();
@@ -117,11 +132,57 @@ export default function KioskLobbyPage() {
 
   const roomTelemetryMap = useMemo(() => {
     const map: Record<string, TelemetryResponse | null | undefined> = {};
-    rooms.forEach((room, idx) => {
-      map[room.id] = roomLatestQueries[idx]?.data ?? null;
-    });
+    if (hasSession) {
+      rooms.forEach((room, idx) => {
+        map[room.id] = roomLatestQueries[idx]?.data ?? null;
+      });
+    } else {
+      (publicRoomsQuery.data ?? []).forEach((pr) => {
+        if (
+          pr.timestamp ||
+          pr.comfortScore != null ||
+          pr.environment?.temperature != null
+        ) {
+          map[pr.id] = {
+            id: `PUBLIC_${pr.id}`,
+            timestamp: pr.timestamp ?? new Date().toISOString(),
+            metadata: {
+              deviceId: 'PUBLIC',
+              hardwareId: 'PUBLIC',
+              roomId: pr.id,
+            },
+            acoustics: pr.acoustics ?? {
+              noiseAvg: null,
+              noisePeak: null,
+            },
+            airQuality: pr.airQuality ?? {
+              pm1_0: null,
+              pm2_5: null,
+              pm4_0: null,
+              pm10: null,
+            },
+            environment: pr.environment ?? {
+              temperature: null,
+              humidity: null,
+              lux: null,
+            },
+            comfortScore: pr.comfortScore ?? {
+              overall: null,
+              grade: null,
+              acousticScore: null,
+              airScore: null,
+              thermalScore: null,
+              lightScore: null,
+            },
+            wifiRssi: null,
+          };
+        } else {
+          map[pr.id] = null;
+        }
+      });
+    }
     return map;
-  }, [rooms, roomLatestQueries]);
+  }, [hasSession, rooms, roomLatestQueries, publicRoomsQuery.data]);
 
   // Group and rank rooms by floor (sorted by comfortScore descending)
   const roomsByFloor = useMemo(() => {
@@ -142,7 +203,55 @@ export default function KioskLobbyPage() {
     });
   }, [rooms, roomTelemetryMap]);
 
-  const summary = summaryQuery.data;
+  const summary = useMemo(() => {
+    if (hasSession) {
+      return summaryQuery.data;
+    }
+    const pubList = publicRoomsQuery.data ?? [];
+    if (pubList.length === 0) return undefined;
+    const scored = pubList.filter(
+      (r) => typeof r.comfortScore?.overall === 'number'
+    );
+    const avgScore =
+      scored.length > 0
+        ? Math.round(
+            scored.reduce(
+              (acc, r) => acc + (r.comfortScore?.overall ?? 0),
+              0
+            ) / scored.length
+          )
+        : null;
+    const optimalCount = scored.filter(
+      (r) => (r.comfortScore?.overall ?? 0) >= 75
+    ).length;
+    const best =
+      [...scored].sort(
+        (a, b) =>
+          (b.comfortScore?.overall ?? -1) - (a.comfortScore?.overall ?? -1)
+      )[0] ?? null;
+    return {
+      totalRooms: pubList.length,
+      activeDevices: 0,
+      offlineDevices: 0,
+      activeAlertsCount: 0,
+      averageComfortScore: avgScore,
+      overallGrade: (best?.comfortScore?.grade as ComfortGrade) ?? 'Gold',
+      optimalRoomsCount: optimalCount,
+      bestRoom: best
+        ? {
+            roomId: best.id,
+            roomName: `${best.code} — ${best.name}`,
+            comfortScore: best.comfortScore?.overall ?? null,
+            grade: (best.comfortScore?.grade as ComfortGrade) ?? 'Gold',
+            noiseAvg: best.acoustics?.noiseAvg ?? null,
+            pm25: best.airQuality?.pm2_5 ?? null,
+            temperature: best.environment?.temperature ?? null,
+            humidity: best.environment?.humidity ?? null,
+          }
+        : null,
+      attentionRoom: null,
+    };
+  }, [hasSession, summaryQuery.data, publicRoomsQuery.data]);
   const bestRoomInfo = summary?.bestRoom ?? null;
   const bestRoomEntity = bestRoomInfo
     ? roomMap.get(bestRoomInfo.roomId)
@@ -211,6 +320,7 @@ export default function KioskLobbyPage() {
             lightScore: 90,
           },
           wifiRssi: -56,
+          isSynthetic: true,
         };
       }
     });
@@ -242,50 +352,17 @@ export default function KioskLobbyPage() {
     );
   }
 
-  // Unauthenticated Kiosk setup screen
-  if (!hasSession) {
-    return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-950 p-6 text-slate-100">
-        <div className="max-w-md rounded-xl border border-slate-800 bg-slate-900/80 p-8 text-center shadow-xl">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-brand-400">
-            <Building2 className="h-6 w-6" />
-          </div>
-
-          <div className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-2xs font-medium text-slate-300">
-            <span>M02</span>
-            <span>·</span>
-            <span>Màn hình TV Sảnh Thư viện</span>
-          </div>
-
-          <h1 className="mt-3 text-lg font-bold text-white">
-            {UI_TEXT_VI.appName} — Kiosk Môi trường
-          </h1>
-          <p className="mt-2 text-xs leading-relaxed text-slate-400">
-            Màn hình Kiosk yêu cầu khởi tạo phiên đăng nhập bằng tài khoản{' '}
-            <strong className="text-slate-200">VIEWER</strong> hoặc{' '}
-            <strong className="text-slate-200">USER</strong> với tùy chọn{' '}
-            <em>Duy trì chế độ Kiosk</em> để hiển thị liên tục 24/7.
-          </p>
-          <div className="mt-6 flex justify-center">
-            <Link
-              href="/login"
-              className="btn-primary inline-flex items-center gap-2"
-            >
-              <span>Đăng nhập kích hoạt Kiosk</span>
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </div>
-        </div>
-      </main>
-    );
-  }
+  const isLoadingOverview = hasSession
+    ? summaryQuery.isLoading
+    : publicRoomsQuery.isLoading;
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-6 text-slate-100 lg:px-10">
-      {/* Subscribe live STOMP telemetry for all rooms */}
-      {rooms.map((room) => (
-        <KioskRoomStreamSubscriber key={room.id} roomId={room.id} />
-      ))}
+      {/* Subscribe live STOMP telemetry for all rooms when authenticated */}
+      {hasSession &&
+        rooms.map((room) => (
+          <KioskRoomStreamSubscriber key={room.id} roomId={room.id} />
+        ))}
 
       {/* Top Bar: Library Identity + Live Clock */}
       <header className="flex flex-col justify-between gap-4 border-b border-slate-800/80 pb-5 lg:flex-row lg:items-center">
@@ -293,7 +370,9 @@ export default function KioskLobbyPage() {
           <div className="flex items-center gap-2.5">
             <span
               className={`h-2.5 w-2.5 rounded-full ${
-                stompConnected ? 'bg-emerald-400' : 'bg-amber-400'
+                stompConnected || !hasSession
+                  ? 'bg-emerald-400'
+                  : 'bg-amber-400'
               }`}
             />
             <span className="text-2xs font-semibold tracking-wider text-slate-400 uppercase">
@@ -306,24 +385,38 @@ export default function KioskLobbyPage() {
         </div>
 
         <div className="flex items-center gap-4 lg:gap-6">
-          {/* Quick Exit / Back navigation for operators */}
+          {/* Quick Exit / Back navigation for operators or Public Login link */}
           <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
-              title="Quay lại Bảng điều khiển quản trị"
-            >
-              <LayoutDashboard className="h-3.5 w-3.5 text-slate-400" />
-              <span>Bảng điều khiển</span>
-            </Link>
-            <button
-              type="button"
-              onClick={handleExitKiosk}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/70 p-1.5 text-xs text-slate-400 transition-colors hover:border-red-900/50 hover:bg-red-950/40 hover:text-red-300"
-              title="Thoát chế độ Kiosk"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-            </button>
+            {hasSession ? (
+              <>
+                <Link
+                  href="/dashboard"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+                  title="Quay lại Bảng điều khiển quản trị"
+                >
+                  <LayoutDashboard className="h-3.5 w-3.5 text-slate-400" />
+                  <span>Bảng điều khiển</span>
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleExitKiosk}
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/70 p-1.5 text-xs text-slate-400 transition-colors hover:border-red-900/50 hover:bg-red-950/40 hover:text-red-300"
+                  title="Thoát chế độ Kiosk"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+                title="Đăng nhập dành cho Thủ thư & Quản trị viên"
+              >
+                <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                <span>Đăng nhập vận hành</span>
+                <ArrowRight className="h-3 w-3 text-slate-400" />
+              </Link>
+            )}
           </div>
 
           <div className="text-right">
@@ -341,11 +434,15 @@ export default function KioskLobbyPage() {
       </header>
 
       {/* Error Banner if summary fails */}
-      {summaryQuery.isError && (
+      {(summaryQuery.isError || publicRoomsQuery.isError) && (
         <div className="mt-6">
           <ErrorBanner
             message="Đang gián đoạn kết nối tới máy chủ tổng hợp số liệu. Hệ thống sẽ tự động thử lại."
-            onRetry={() => void summaryQuery.refetch()}
+            onRetry={() =>
+              void (hasSession
+                ? summaryQuery.refetch()
+                : publicRoomsQuery.refetch())
+            }
           />
         </div>
       )}
@@ -357,7 +454,7 @@ export default function KioskLobbyPage() {
       >
         {/* Best Room Spotlight Card (7 cols) */}
         <div className="flex flex-col justify-between rounded-xl border border-border-strong bg-slate-900/70 p-6 backdrop-blur-sm lg:col-span-7">
-          {summaryQuery.isLoading ? (
+          {isLoadingOverview ? (
             <Skeleton className="h-48 w-full bg-slate-900" />
           ) : !bestRoomInfo ? (
             <div className="py-8">
@@ -588,7 +685,7 @@ export default function KioskLobbyPage() {
         </summary>
 
         <div className="border-t border-slate-800 p-5">
-          {roomsQuery.isLoading ? (
+          {(hasSession ? roomsQuery.isLoading : publicRoomsQuery.isLoading) ? (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <Skeleton className="h-32 w-full bg-slate-900" />
               <Skeleton className="h-32 w-full bg-slate-900" />

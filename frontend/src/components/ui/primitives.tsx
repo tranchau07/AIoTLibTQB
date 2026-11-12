@@ -335,14 +335,24 @@ export interface ToastItem {
   title: string;
   message: string;
   variant: 'info' | 'success' | 'warning' | 'danger';
+  sticky?: boolean;
+  playSound?: boolean;
+}
+
+export function shouldAutoDismissToast(item: Pick<ToastItem, 'sticky'>): boolean {
+  return !item.sticky;
 }
 
 interface ToastContextValue {
   pushToast: (item: Omit<ToastItem, 'id'>) => void;
+  audioMuted: boolean;
+  setAudioMuted: (muted: boolean) => void;
 }
 
 const ToastContext = createContext<ToastContextValue>({
   pushToast: () => {},
+  audioMuted: false,
+  setAudioMuted: () => {},
 });
 
 export function useToast() {
@@ -358,6 +368,43 @@ const TOAST_ICON: Record<ToastItem['variant'], React.ReactNode> = {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [audioMuted, setAudioMuted] = useState<boolean>(false);
+  const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unlock = () => setAudioUnlocked(true);
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  const playAlertChime = useCallback(() => {
+    if (audioMuted || !audioUnlocked || typeof window === 'undefined') return;
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(660, ctx.currentTime + 0.14);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.32);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.32);
+    } catch {
+      // Ignore browser audio policy errors
+    }
+  }, [audioMuted, audioUnlocked]);
 
   const dismiss = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -367,13 +414,18 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     (item: Omit<ToastItem, 'id'>) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       setToasts((prev) => [...prev.slice(-4), { ...item, id }]);
-      setTimeout(() => dismiss(id), 5000);
+      if (item.playSound) {
+        playAlertChime();
+      }
+      if (shouldAutoDismissToast(item)) {
+        setTimeout(() => dismiss(id), 5000);
+      }
     },
-    [dismiss]
+    [dismiss, playAlertChime]
   );
 
   return (
-    <ToastContext.Provider value={{ pushToast }}>
+    <ToastContext.Provider value={{ pushToast, audioMuted, setAudioMuted }}>
       {children}
       <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-full max-w-sm flex-col gap-2">
         {toasts.map((t) => (

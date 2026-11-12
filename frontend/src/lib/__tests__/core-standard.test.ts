@@ -13,7 +13,11 @@ import {
   recommendIntervalForRange,
   validateBucketRange,
 } from '@/lib/format/metrics';
-import { formatRelativeTimeVi } from '@/lib/format/datetime';
+import {
+  formatRelativeTimeVi,
+  isTelemetryStale,
+} from '@/lib/format/datetime';
+import { shouldAutoDismissToast } from '@/components/ui/primitives';
 import {
   getGradeStyle,
   getMetricColorHex,
@@ -35,6 +39,7 @@ import {
 import {
   TQB_BUILDING_ASPECT_RATIO,
   TQB_ROOM_PRESETS,
+  buildPresetFallbackTelemetry,
   computeWayfindingPath,
   resolveRoomPreset,
   synthesizeAnonymousMicroZones,
@@ -47,7 +52,12 @@ import {
   computeLabelPlacements,
   getLodConfig,
 } from '@/lib/floorplan/labelLayout';
-import { normalizedToPixel, pixelToNormalized } from '@/lib/floorplan/coords';
+import {
+  clampViewportTransform,
+  computePinchScale,
+  normalizedToPixel,
+  pixelToNormalized,
+} from '@/lib/floorplan/coords';
 import {
   mergeRealtimeTelemetry,
   upsertRealtimeAlertList,
@@ -792,4 +802,57 @@ describe('9. Label declutter LOD & collision avoidance', () => {
     expect(zoomedFromClean.bayStyle).toBe('pill');
   });
 });
+
+describe('10. Synthetic Data Transparency, Stale Telemetry, Sticky Toast & Touch Pinch/Pan', () => {
+  it('marks preset fallback telemetry with isSynthetic: true', () => {
+    const preset = TQB_ROOM_PRESETS[0];
+    const mockRoom = {
+      id: `PRESET_${preset.code}`,
+      code: preset.code,
+      name: preset.name,
+      floor: preset.floor,
+      capacity: preset.capacity,
+      type: preset.roomType,
+      boundaryPolygon: [...preset.boundaryPolygon],
+    };
+    const synthTel = buildPresetFallbackTelemetry(mockRoom, 0);
+    expect(synthTel.isSynthetic).toBe(true);
+    expect(synthTel.id).toContain('SYNTH_TEL_');
+  });
+
+  it('evaluates isTelemetryStale boundary cases (4m59s, 5m00s, 5m01s, and synthetic)', () => {
+    const nowMs = Date.parse('2026-11-12T12:05:00.000Z');
+    // 4m59s old -> false
+    expect(isTelemetryStale('2026-11-12T12:00:01.000Z', nowMs)).toBe(false);
+    // 5m00s old (exact 300,000ms) -> false (> 300_000 is stale)
+    expect(isTelemetryStale('2026-11-12T12:00:00.000Z', nowMs)).toBe(false);
+    // 5m01s old -> true
+    expect(isTelemetryStale('2026-11-12T11:59:59.000Z', nowMs)).toBe(true);
+    // Synthetic data is never flagged as stale sensor data
+    expect(isTelemetryStale('2026-11-12T10:00:00.000Z', nowMs, true)).toBe(
+      false
+    );
+  });
+
+  it('prevents auto-dismiss for sticky HIGH/CRITICAL alert toasts', () => {
+    expect(shouldAutoDismissToast({ sticky: true })).toBe(false);
+    expect(shouldAutoDismissToast({ sticky: false })).toBe(true);
+    expect(shouldAutoDismissToast({})).toBe(true);
+  });
+
+  it('clamps viewport transform and computes pinch scale within [1.0, 3.0]', () => {
+    expect(computePinchScale(1, 100, 250)).toBeCloseTo(2.5, 3);
+    expect(computePinchScale(1, 100, 600)).toBe(3.0);
+    expect(computePinchScale(1.5, 200, 50)).toBe(1.0);
+
+    const resetAtOne = clampViewportTransform(1, 120, -80, 960, 720);
+    expect(resetAtOne).toEqual({ scale: 1, tx: 0, ty: 0 });
+
+    const clamped = clampViewportTransform(2, 900, -900, 960, 720);
+    expect(clamped.scale).toBe(2);
+    expect(clamped.tx).toBeLessThanOrEqual(0);
+    expect(clamped.ty).toBeGreaterThanOrEqual(-720);
+  });
+});
+
 
