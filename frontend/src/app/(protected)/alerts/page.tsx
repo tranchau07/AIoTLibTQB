@@ -1,7 +1,10 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
+  MapPin,
   RotateCw,
   ShieldAlert,
   Volume2,
@@ -14,6 +17,7 @@ import {
   Skeleton,
   useToast,
 } from '@/components/ui/primitives';
+import { resolveAlertFloorplanTarget } from '@/features/alerts/navigation';
 import {
   useAcknowledgeAlertMutation,
   useAlertsQuery,
@@ -28,6 +32,7 @@ import {
   AlertTypeBadge,
 } from '@/features/alerts/components/AlertBadges';
 import { useAuthStore } from '@/features/auth/store';
+import { useDevicesQuery } from '@/features/devices/queries';
 import { useRoomsQuery } from '@/features/rooms/queries';
 import {
   formatRelativeTimeVi,
@@ -56,6 +61,7 @@ const ALERT_STATUSES: AlertStatus[] = [
 ];
 
 export default function AlertsCenterPage() {
+  const router = useRouter();
   const capabilities = useAuthStore((s) => s.capabilities);
   const { pushToast, audioMuted, setAudioMuted } = useToast();
 
@@ -71,6 +77,10 @@ export default function AlertsCenterPage() {
   const roomsQuery = useRoomsQuery(
     { page: 0, size: 100 },
     capabilities.canViewAlerts
+  );
+  const devicesQuery = useDevicesQuery(
+    { page: 0, size: 100 },
+    capabilities.canViewDevices
   );
 
   const filterParams = useMemo(
@@ -90,13 +100,22 @@ export default function AlertsCenterPage() {
   const acknowledgeMutation = useAcknowledgeAlertMutation();
   const resolveMutation = useResolveAlertMutation();
 
+  const rooms = useMemo(
+    () => roomsQuery.data?.content ?? [],
+    [roomsQuery.data]
+  );
+  const devices = useMemo(
+    () => devicesQuery.data?.content ?? [],
+    [devicesQuery.data]
+  );
+
   const roomsMap = useMemo(() => {
     const map = new Map<string, string>();
-    for (const r of roomsQuery.data?.content ?? []) {
+    for (const r of rooms) {
       map.set(r.id, `${r.name} (${r.code})`);
     }
     return map;
-  }, [roomsQuery.data]);
+  }, [rooms]);
 
   const resolveRoomLabel = (roomId?: string | null) => {
     if (!roomId) return 'Toàn cục';
@@ -106,11 +125,13 @@ export default function AlertsCenterPage() {
   const handleAcknowledge = async (alert: AlertResponse) => {
     try {
       await acknowledgeMutation.mutateAsync(alert.id);
+      const target = resolveAlertFloorplanTarget(alert, rooms, devices);
       pushToast({
-        title: 'Đã tiếp nhận sự cố',
-        message: `Sự cố ${alert.id.slice(0, 8)} đã được chuyển sang trạng thái đã tiếp nhận.`,
+        title: 'Đã tiếp nhận & định vị bản đồ nhiệt',
+        message: `Đang chuyển tới ${resolveRoomLabel(target.roomId)} · Node ${target.hardwareId ?? target.deviceId ?? alert.id.slice(0, 8)} trên bản đồ nhiệt.`,
         variant: 'success',
       });
+      router.push(target.href);
     } catch (err) {
       const msg =
         err instanceof ApiError
@@ -420,6 +441,11 @@ export default function AlertsCenterPage() {
                     const typeMeta = ALERT_TYPE_META[alert.type];
                     const unit = typeMeta?.unit;
                     const decimals = typeMeta?.decimals ?? 1;
+                    const floorplanTarget = resolveAlertFloorplanTarget(
+                      alert,
+                      rooms,
+                      devices
+                    );
 
                     const canShowAck =
                       capabilities.canAcknowledgeAlert &&
@@ -448,12 +474,22 @@ export default function AlertsCenterPage() {
                         </td>
 
                         <td>
-                          <div className="font-medium text-slate-900">
-                            {resolveRoomLabel(alert.roomId)}
-                          </div>
-                          <div className="font-mono text-2xs text-slate-400">
-                            {alert.hardwareId || '--'}
-                          </div>
+                          <Link
+                            href={floorplanTarget.href}
+                            className="group inline-flex flex-col rounded-md px-1 py-0.5 -mx-1 transition-colors hover:bg-slate-100"
+                            title="Mở đúng phòng & node cảnh báo trên bản đồ nhiệt"
+                          >
+                            <span className="inline-flex items-center gap-1 font-medium text-slate-900 group-hover:text-brand-600">
+                              <MapPin
+                                className="h-3.5 w-3.5 text-rose-500 shrink-0"
+                                aria-hidden="true"
+                              />
+                              <span>{resolveRoomLabel(floorplanTarget.roomId ?? alert.roomId)}</span>
+                            </span>
+                            <span className="font-mono text-2xs text-slate-500 group-hover:text-slate-700">
+                              Node: {floorplanTarget.hardwareId || alert.hardwareId || '--'}
+                            </span>
+                          </Link>
                         </td>
 
                         <td className="whitespace-nowrap tabular">
@@ -492,10 +528,20 @@ export default function AlertsCenterPage() {
                                 disabled={isMutatingThis}
                                 onClick={() => void handleAcknowledge(alert)}
                                 className="btn-primary btn-sm"
+                                title="Tiếp nhận sự cố và định vị ngay tới phòng & node trên bản đồ nhiệt"
                               >
-                                Tiếp nhận
+                                <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                                <span>Tiếp nhận</span>
                               </button>
                             )}
+                            <Link
+                              href={floorplanTarget.href}
+                              className="btn-secondary btn-sm"
+                              title="Định vị phòng & node cảnh báo trên bản đồ nhiệt 2D"
+                            >
+                              <MapPin className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
+                              <span>Bản đồ nhiệt</span>
+                            </Link>
                             {canShowResolve && (
                               <button
                                 type="button"
@@ -505,13 +551,6 @@ export default function AlertsCenterPage() {
                               >
                                 Đóng sự cố
                               </button>
-                            )}
-                            {!canShowAck && !canShowResolve && (
-                              <span className="text-xs text-slate-400 italic">
-                                {alert.status === 'RESOLVED'
-                                  ? 'Đã hoàn tất'
-                                  : '--'}
-                              </span>
                             )}
                           </div>
                         </td>

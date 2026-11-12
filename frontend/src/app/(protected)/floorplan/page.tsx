@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQueries } from '@tanstack/react-query';
 import {
   ArrowUpRight,
   ChevronRight,
+  MapPin,
   ShieldAlert,
   X,
 } from 'lucide-react';
@@ -38,6 +39,7 @@ import {
   useAlertsQuery,
   useResolveAlertMutation,
 } from '@/features/alerts/queries';
+import { resolveAlertFloorplanTarget } from '@/features/alerts/navigation';
 import { useAuthStore } from '@/features/auth/store';
 import { useRoomsQuery } from '@/features/rooms/queries';
 import { useDevicesQuery } from '@/features/devices/queries';
@@ -173,6 +175,12 @@ export default function FloorplanPage() {
     floor: selectedFloor,
   });
 
+  // Truy vấn danh sách toàn bộ phòng để phân giải tầng khi điều hướng deep-link từ Cảnh báo
+  const allRoomsQuery = useRoomsQuery({
+    page: 0,
+    size: 100,
+  });
+
   // FE-VIZ-09: Khi ở góc nhìn USER/VIEWER, tuyệt đối không hiển thị danh sách thiết bị phần cứng
   const devicesQuery = useDevicesQuery(
     { page: 0, size: 100 },
@@ -186,6 +194,11 @@ export default function FloorplanPage() {
   );
   const ackAlertMutation = useAcknowledgeAlertMutation();
   const resolveAlertMutation = useResolveAlertMutation();
+
+  const allBackendRooms = useMemo(
+    () => allRoomsQuery.data?.content ?? [],
+    [allRoomsQuery.data]
+  );
 
   const backendFloorRooms = useMemo(
     () => roomsQuery.data?.content ?? [],
@@ -261,10 +274,56 @@ export default function FloorplanPage() {
     [floorRooms]
   );
 
-  const floorDevices = useMemo(
+  // Active Backend Alerts (FIRING / ACKNOWLEDGED) across the building
+  const activeAlerts = useMemo(() => {
+    const all = alertsQuery.data?.content ?? [];
+    return all.filter(
+      (a) => a.status === 'FIRING' || a.status === 'ACKNOWLEDGED'
+    );
+  }, [alertsQuery.data]);
+
+  const realFloorDevices = useMemo(
     () => allDevices.filter((d) => d.roomId && floorRoomIds.has(d.roomId)),
     [allDevices, floorRoomIds]
   );
+
+  // Đảm bảo mọi node phát sinh cảnh báo trên tầng luôn có chân pin hiển thị trên bản đồ nhiệt
+  // ngay cả khi vai trò hiện tại là Thủ thư hoặc node chưa đồng bộ trong danh sách thiết bị
+  const floorDevices = useMemo(() => {
+    if (isStudentView) return [];
+    const list = [...realFloorDevices];
+    const seenIds = new Set<string>();
+    for (const d of list) {
+      seenIds.add(d.id);
+      if (d.hardwareId) seenIds.add(d.hardwareId);
+    }
+
+    for (const alert of activeAlerts) {
+      if (!alert.roomId || !floorRoomIds.has(alert.roomId)) continue;
+      const nodeId = alert.deviceId ?? alert.hardwareId;
+      const hwId = alert.hardwareId ?? alert.deviceId;
+      if (!nodeId || !hwId) continue;
+      if (seenIds.has(nodeId) || seenIds.has(hwId)) continue;
+
+      seenIds.add(nodeId);
+      seenIds.add(hwId);
+      list.push({
+        id: nodeId,
+        hardwareId: hwId,
+        name: `Trạm cảnh báo ${hwId}`,
+        roomId: alert.roomId,
+        zoneId: 'ZONE_A',
+        deviceType: 'ESP32_NODE',
+        active: true,
+        online: alert.type !== 'DEVICE_OFFLINE',
+        connectionState:
+          alert.type === 'DEVICE_OFFLINE' ? 'OFFLINE' : 'ONLINE',
+        lastSeenAt: null,
+        lastOfflineAt: null,
+      });
+    }
+    return list;
+  }, [isStudentView, realFloorDevices, activeAlerts, floorRoomIds]);
 
   const realFloorRooms = useMemo(
     () => floorRooms.filter((r) => !r.id.startsWith('PRESET_')),
@@ -280,7 +339,7 @@ export default function FloorplanPage() {
   });
 
   const deviceLatestQueries = useQueries({
-    queries: floorDevices.map((device) => ({
+    queries: realFloorDevices.map((device) => ({
       queryKey: telemetryKeys.deviceLatest(device.id),
       queryFn: () => telemetryApi.getDeviceLatest(device.id),
       refetchInterval: stompConnected ? (false as const) : 15000,
@@ -309,11 +368,17 @@ export default function FloorplanPage() {
 
   const deviceTelemetryMap = useMemo(() => {
     const map: Record<string, TelemetryResponse | null | undefined> = {};
-    floorDevices.forEach((device, index) => {
+    realFloorDevices.forEach((device, index) => {
       map[device.id] = deviceLatestQueries[index]?.data ?? null;
     });
+    // Fallback sang dữ liệu đo của phòng cho các trạm chưa có bản ghi telemetry riêng
+    floorDevices.forEach((device) => {
+      if (!map[device.id] && device.roomId) {
+        map[device.id] = roomTelemetryMap[device.roomId] ?? null;
+      }
+    });
     return map;
-  }, [floorDevices, deviceLatestQueries]);
+  }, [realFloorDevices, floorDevices, deviceLatestQueries, roomTelemetryMap]);
 
   const unconfiguredRooms = useMemo(
     () =>
@@ -369,18 +434,140 @@ export default function FloorplanPage() {
     [selectedRoom, floorDevices]
   );
 
-  // Active Backend Alerts (FIRING / ACKNOWLEDGED) on this floor and for the selected room
-  const activeAlerts = useMemo(() => {
-    const all = alertsQuery.data?.content ?? [];
-    return all.filter(
-      (a) => a.status === 'FIRING' || a.status === 'ACKNOWLEDGED'
-    );
-  }, [alertsQuery.data]);
-
   const selectedRoomAlerts: AlertResponse[] = useMemo(() => {
     if (!selectedRoom) return [];
     return activeAlerts.filter((a) => a.roomId === selectedRoom.id);
   }, [activeAlerts, selectedRoom]);
+
+  const focusedDevice = useMemo(() => {
+    if (!focusedDeviceId) return null;
+    return (
+      floorDevices.find(
+        (d) => d.id === focusedDeviceId || d.hardwareId === focusedDeviceId
+      ) ?? null
+    );
+  }, [floorDevices, focusedDeviceId]);
+
+  const alertingDeviceIds = useMemo(
+    () =>
+      activeAlerts
+        .flatMap((a) => [a.deviceId, a.hardwareId])
+        .filter((id): id is string => Boolean(id)),
+    [activeAlerts]
+  );
+
+  // Hàm định vị trực tiếp tới đúng tầng, đúng phòng, đúng lớp bản đồ nhiệt và đúng node cảnh báo
+  const focusAlertOnMap = useCallback(
+    (alert: AlertResponse) => {
+      const target = resolveAlertFloorplanTarget(
+        alert,
+        allBackendRooms.length > 0 ? allBackendRooms : floorRooms,
+        allDevices.length > 0 ? allDevices : floorDevices
+      );
+      if (target.floor && target.floor !== selectedFloor) {
+        setSelectedFloor(target.floor);
+      }
+      setSelectedLayer(target.layer);
+      if (target.roomId) {
+        setSelectedRoomId(target.roomId);
+        setZoomedRoomId(target.roomId);
+      }
+      const targetNode = target.deviceId ?? target.hardwareId;
+      if (targetNode) {
+        setFocusedDeviceId(targetNode);
+      }
+    },
+    [allBackendRooms, floorRooms, allDevices, floorDevices, selectedFloor]
+  );
+
+  // Đồng bộ tham số URL (?floor=...&roomId=...&deviceId=...&hardwareId=...&layer=...&alertId=...)
+  // khi điều hướng từ nút "Tiếp nhận" ở trang Cảnh báo (/alerts) hoặc Tổng quan (/dashboard)
+  const appliedDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const search = window.location.search;
+    if (!search) return;
+
+    const params = new URLSearchParams(search);
+    const qFloor = Number(params.get('floor'));
+    const qRoomId = params.get('roomId');
+    const qDeviceId = params.get('deviceId');
+    const qHardwareId = params.get('hardwareId');
+    const qLayer = params.get('layer') as HeatmapLayerMetric | null;
+    const qAlertId = params.get('alertId');
+
+    // Khóa chữ ký bao gồm trạng thái đã tải danh sách phòng/thiết bị để tinh chỉnh chính xác khi dữ liệu API về
+    const dataReadySig = `${search}|rooms:${allBackendRooms.length}:${floorRooms.length}|devs:${floorDevices.length}|alerts:${activeAlerts.length}`;
+    if (appliedDeepLinkRef.current === dataReadySig) return;
+    appliedDeepLinkRef.current = dataReadySig;
+
+    // Nếu có alertId và tìm thấy bản ghi cảnh báo, ưu tiên phân giải đầy đủ từ cảnh báo
+    const matchedAlert = qAlertId
+      ? (alertsQuery.data?.content ?? []).find((a) => a.id === qAlertId)
+      : undefined;
+
+    if (matchedAlert && !qRoomId && !qDeviceId && !qHardwareId) {
+      focusAlertOnMap(matchedAlert);
+      return;
+    }
+
+    const effectiveRoomId = qRoomId ?? matchedAlert?.roomId ?? null;
+    const effectiveDeviceId = qDeviceId ?? matchedAlert?.deviceId ?? null;
+    const effectiveHardwareId = qHardwareId ?? matchedAlert?.hardwareId ?? null;
+
+    // Xác định tầng từ query hoặc từ danh sách phòng toàn tòa nhà
+    const matchedRoomAcrossBuilding = effectiveRoomId
+      ? allBackendRooms.find((r) => r.id === effectiveRoomId)
+      : undefined;
+    const targetFloor =
+      Number.isFinite(qFloor) && qFloor >= 1 && qFloor <= 5
+        ? qFloor
+        : matchedRoomAcrossBuilding?.floor;
+
+    if (
+      typeof targetFloor === 'number' &&
+      targetFloor >= 1 &&
+      targetFloor <= 5 &&
+      targetFloor !== selectedFloor
+    ) {
+      setSelectedFloor(targetFloor);
+    }
+
+    if (
+      qLayer &&
+      LAYER_OPTIONS.some((opt) => opt.key === qLayer) &&
+      qLayer !== selectedLayer
+    ) {
+      setSelectedLayer(qLayer);
+    }
+
+    if (effectiveRoomId) {
+      setSelectedRoomId(effectiveRoomId);
+      setZoomedRoomId(effectiveRoomId);
+    }
+
+    if (effectiveDeviceId || effectiveHardwareId) {
+      const matchedFloorDevice = floorDevices.find(
+        (d) =>
+          (effectiveDeviceId && d.id === effectiveDeviceId) ||
+          (effectiveHardwareId &&
+            (d.hardwareId === effectiveHardwareId ||
+              d.id === effectiveHardwareId))
+      );
+      setFocusedDeviceId(
+        matchedFloorDevice?.id ?? effectiveDeviceId ?? effectiveHardwareId
+      );
+    }
+  }, [
+    allBackendRooms,
+    floorRooms.length,
+    floorDevices,
+    activeAlerts.length,
+    alertsQuery.data,
+    focusAlertOnMap,
+    selectedFloor,
+    selectedLayer,
+  ]);
 
   // ============================================================================
   // ROLE 1 (USER / VIEWER): Smart Study Spot Finder ("Tìm Chỗ Ngồi Học Lý Tưởng")
@@ -1038,6 +1225,8 @@ export default function FloorplanPage() {
                   if (room) setSelectedRoomId(room.id);
                   setFocusedDeviceId(device.id);
                 }}
+                focusedDeviceId={focusedDeviceId}
+                alertingDeviceIds={alertingDeviceIds}
                 zoomedRoomId={zoomedRoomId}
                 onZoomRoomChange={setZoomedRoomId}
                 selectedBayId={selectedBayId}
@@ -1268,6 +1457,38 @@ export default function FloorplanPage() {
                 </div>
               </div>
 
+              {/* Focused Sensor Node Callout (when deep-linked from Alert Acknowledge or selected on map) */}
+              {!isStudentView &&
+                focusedDevice &&
+                focusedDevice.roomId === selectedRoom.id && (
+                  <div className="rounded-lg border border-rose-300 bg-rose-50/70 p-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 font-semibold text-rose-900">
+                        <MapPin className="h-3.5 w-3.5 text-rose-600" />
+                        <span>Node cảm biến đang định vị</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setFocusedDeviceId(null)}
+                        className="text-2xs font-medium text-rose-700 hover:underline"
+                      >
+                        Bỏ ghim
+                      </button>
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between gap-2 rounded border border-rose-200 bg-white px-2.5 py-1.5">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-900">
+                          {focusedDevice.name}
+                        </p>
+                        <p className="font-mono text-2xs text-rose-700">
+                          {focusedDevice.hardwareId}
+                        </p>
+                      </div>
+                      <ConnectionBadge online={focusedDevice.online} />
+                    </div>
+                  </div>
+                )}
+
               {/* Active Room Alerts (only when present) */}
               {!isStudentView && selectedRoomAlerts.length > 0 && (
                 <div className="space-y-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2.5">
@@ -1296,18 +1517,29 @@ export default function FloorplanPage() {
                           SOP: {alert.recommendedAction}
                         </p>
                       )}
-                      <div className="mt-1.5 flex items-center gap-1.5">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         {alert.status === 'FIRING' &&
                           capabilities.canAcknowledgeAlert && (
                             <button
                               type="button"
                               disabled={ackAlertMutation.isPending}
-                              onClick={() => ackAlertMutation.mutate(alert.id)}
+                              onClick={() => {
+                                focusAlertOnMap(alert);
+                                ackAlertMutation.mutate(alert.id);
+                              }}
                               className="rounded bg-slate-900 px-2 py-0.5 text-2xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                             >
-                              Tiếp nhận
+                              Tiếp nhận & Định vị node
                             </button>
                           )}
+                        <button
+                          type="button"
+                          onClick={() => focusAlertOnMap(alert)}
+                          className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-2xs font-medium text-rose-800 hover:bg-rose-100"
+                        >
+                          <MapPin className="h-3 w-3" />
+                          <span>Định vị node</span>
+                        </button>
                         {(alert.status === 'FIRING' ||
                           alert.status === 'ACKNOWLEDGED') &&
                           capabilities.canResolveAlert && (
@@ -1385,65 +1617,71 @@ export default function FloorplanPage() {
               )}
 
               {/* Collapsible 2: Hardware Devices (Default collapsed, strict FE-VIZ-09) */}
-              {!isStudentView && capabilities.canViewDevices && (
-                <CollapsibleSection
-                  title="Thiết bị cảm biến"
-                  badge={
-                    <span className="badge-neutral">
-                      {selectedRoomDevices.length} trạm
-                    </span>
-                  }
-                  compact
-                  defaultOpen={false}
-                >
-                  {selectedRoomDevices.length === 0 ? (
-                    <p className="text-2xs text-slate-400">
-                      Chưa gắn trạm đo vật lý.
-                    </p>
-                  ) : (
-                    <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
-                      {selectedRoomDevices.map((d) => {
-                        const devTel = deviceTelemetryMap[d.id];
-                        const devVal = extractLayerMetricValue(
-                          devTel,
-                          selectedLayer
-                        );
-                        return (
-                          <div
-                            key={d.id}
-                            onClick={() => setFocusedDeviceId(d.id)}
-                            className={`flex cursor-pointer items-center justify-between rounded-md border p-2 text-xs transition-colors ${
-                              focusedDeviceId === d.id
-                                ? 'border-slate-900 bg-slate-50'
-                                : 'border-slate-100 bg-slate-50/40 hover:bg-slate-100/60'
-                            }`}
-                          >
-                            <div className="min-w-0 pr-2">
-                              <p className="truncate font-medium text-slate-800">
-                                {d.name}
-                              </p>
-                              <p className="font-mono text-2xs text-slate-400">
-                                {d.hardwareId}
-                              </p>
+              {!isStudentView &&
+                (capabilities.canViewDevices ||
+                  selectedRoomDevices.length > 0) && (
+                  <CollapsibleSection
+                    key={focusedDeviceId ? 'dev-open' : 'dev-closed'}
+                    title="Thiết bị cảm biến"
+                    badge={
+                      <span className="badge-neutral">
+                        {selectedRoomDevices.length} trạm
+                      </span>
+                    }
+                    compact
+                    defaultOpen={Boolean(focusedDeviceId)}
+                  >
+                    {selectedRoomDevices.length === 0 ? (
+                      <p className="text-2xs text-slate-400">
+                        Chưa gắn trạm đo vật lý.
+                      </p>
+                    ) : (
+                      <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+                        {selectedRoomDevices.map((d) => {
+                          const devTel = deviceTelemetryMap[d.id];
+                          const devVal = extractLayerMetricValue(
+                            devTel,
+                            selectedLayer
+                          );
+                          const isDevFocused =
+                            focusedDeviceId === d.id ||
+                            focusedDeviceId === d.hardwareId;
+                          return (
+                            <div
+                              key={d.id}
+                              onClick={() => setFocusedDeviceId(d.id)}
+                              className={`flex cursor-pointer items-center justify-between rounded-md border p-2 text-xs transition-colors ${
+                                isDevFocused
+                                  ? 'border-rose-500 bg-rose-50/60 ring-1 ring-rose-300'
+                                  : 'border-slate-100 bg-slate-50/40 hover:bg-slate-100/60'
+                              }`}
+                            >
+                              <div className="min-w-0 pr-2">
+                                <p className="truncate font-medium text-slate-800">
+                                  {d.name}
+                                </p>
+                                <p className="font-mono text-2xs text-slate-400">
+                                  {d.hardwareId}
+                                </p>
+                              </div>
+                              <div className="flex shrink-0 flex-col items-end gap-1">
+                                <ConnectionBadge online={d.online} />
+                                {devVal !== null && (
+                                  <span className="font-mono text-2xs font-semibold tabular text-slate-700">
+                                    {formatLayerMetricValue(
+                                      devVal,
+                                      selectedLayer
+                                    )}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex shrink-0 flex-col items-end gap-1">
-                              <ConnectionBadge online={d.online} />
-                              {devVal !== null && (
-                                <span className="font-mono text-2xs font-semibold tabular text-slate-700">
-                                  {formatLayerMetricValue(
-                                    devVal,
-                                    selectedLayer
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </CollapsibleSection>
-              )}
+                          );
+                        })}
+                      </div>
+                    )}
+                  </CollapsibleSection>
+                )}
 
               {/* Action Buttons */}
               {!selectedRoom.id.startsWith('PRESET_') && (

@@ -49,6 +49,10 @@ import {
   formatLayerMetricValue,
 } from '@/features/floorplan/components/FloorplanCanvas';
 import {
+  resolveAlertFloorplanTarget,
+  resolveAlertHeatmapLayer,
+} from '@/features/alerts/navigation';
+import {
   computeLabelPlacements,
   getLodConfig,
 } from '@/lib/floorplan/labelLayout';
@@ -854,5 +858,76 @@ describe('10. Synthetic Data Transparency, Stale Telemetry, Sticky Toast & Touch
     expect(clamped.ty).toBeGreaterThanOrEqual(-720);
   });
 });
+
+describe('11. Alert Acknowledge Deep-Link to Floorplan Room & Sensor Node', () => {
+  it('maps alert types to the exact 2D heatmap layer metric', () => {
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'NOISE_EXCEEDED',
+        message: 'Độ ồn vượt ngưỡng 68 dBA',
+      })
+    ).toBe('noiseAvg');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        message: 'Bụi mịn PM2.5 vượt ngưỡng',
+      })
+    ).toBe('pm2_5');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'DEVICE_OFFLINE',
+        message: 'Trạm mất kết nối MQTT',
+      })
+    ).toBe('wifiRssi');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'SENSOR_MALFUNCTION',
+        message: 'Độ ẩm kho sách vượt 62%RH',
+      })
+    ).toBe('humidity');
+  });
+
+  it('builds floorplan deep-link with floor, roomId, deviceId, hardwareId, layer, and alertId', () => {
+    const rooms = [
+      { id: 'room-402', code: 'P402', name: 'Kho sách Tự chọn T4', floor: 4 },
+    ];
+    const devices = [
+      {
+        id: 'dev-node-09',
+        hardwareId: 'ESP32-NODE-09',
+        name: 'Trạm Kho sách 402',
+        roomId: 'room-402',
+        online: true,
+      },
+    ];
+    const alert: AlertResponse = {
+      id: 'alert-999',
+      deviceId: 'dev-node-09',
+      hardwareId: 'ESP32-NODE-09',
+      roomId: 'room-402',
+      type: 'NOISE_EXCEEDED',
+      severity: 'HIGH',
+      status: 'FIRING',
+      message: 'Độ ồn vượt ngưỡng 65 dBA',
+      currentValue: 67.4,
+      threshold: 55.0,
+      startedAt: '2026-11-12T10:00:00Z',
+      acknowledgedAt: null,
+      resolvedAt: null,
+      acknowledgedBy: null,
+    };
+
+    const target = resolveAlertFloorplanTarget(alert, rooms, devices);
+    expect(target.floor).toBe(4);
+    expect(target.roomId).toBe('room-402');
+    expect(target.deviceId).toBe('dev-node-09');
+    expect(target.hardwareId).toBe('ESP32-NODE-09');
+    expect(target.layer).toBe('noiseAvg');
+    expect(target.href).toBe(
+      '/floorplan?floor=4&roomId=room-402&deviceId=dev-node-09&hardwareId=ESP32-NODE-09&layer=noiseAvg&alertId=alert-999'
+    );
+  });
+});
+
 
 

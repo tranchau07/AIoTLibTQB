@@ -134,6 +134,10 @@ export interface FloorplanCanvasProps {
   highlightedZoneIds?: readonly string[];
   /** Danh sách roomId đang có cảnh báo FIRING để vẽ vòng nhấp nháy cảnh báo (GĐ3.5) */
   firingRoomIds?: readonly string[];
+  /** Node cảm biến đang được định vị / chọn trực tiếp từ cảnh báo */
+  focusedDeviceId?: string | null;
+  /** Danh sách ID hoặc hardwareId của các node cảm biến đang có cảnh báo FIRING / ACKNOWLEDGED */
+  alertingDeviceIds?: readonly string[];
   /** Mật độ hiển thị nhãn khởi tạo; người dùng vẫn đổi được qua nút gạt trên bản đồ */
   defaultLabelDensity?: LabelDensity;
 }
@@ -155,6 +159,8 @@ export function FloorplanCanvas({
   showTechOverlay = false,
   highlightedZoneIds,
   firingRoomIds = [],
+  focusedDeviceId = null,
+  alertingDeviceIds = [],
   defaultLabelDensity,
 }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -343,18 +349,40 @@ export function FloorplanCanvas({
     [labelDensity, zoomViewport.isZoomed]
   );
 
-  // Devices that have normalized coordinates on this floor (Role ADMIN / LIBRARIAN / MAINTENANCE)
-  const positionedDevices = useMemo(
-    () =>
-      devices.filter(
-        (d) =>
-          d.roomId &&
-          roomById.has(d.roomId) &&
-          typeof d.posX === 'number' &&
-          typeof d.posY === 'number'
-      ),
-    [devices, roomById]
-  );
+  // Devices on this floor (Role ADMIN / LIBRARIAN / MAINTENANCE), falling back to room centroid if posX/posY not yet set
+  const positionedDevices = useMemo(() => {
+    const polygonByRoomId = new Map<string, readonly Point2D[]>();
+    for (const item of enrichedRooms) {
+      polygonByRoomId.set(item.room.id, item.polygon);
+    }
+    const perRoomIdx = new Map<string, number>();
+
+    return devices
+      .filter((d) => d.roomId && roomById.has(d.roomId))
+      .map((d) => {
+        if (typeof d.posX === 'number' && typeof d.posY === 'number') {
+          return d;
+        }
+        const poly = polygonByRoomId.get(d.roomId!);
+        const center =
+          poly && poly.length >= 3
+            ? computePolygonCentroid(poly)
+            : { x: 0.5, y: 0.5 };
+        const idxInRoom = perRoomIdx.get(d.roomId!) ?? 0;
+        perRoomIdx.set(d.roomId!, idxInRoom + 1);
+        const angle = idxInRoom * 1.25;
+        const radius = idxInRoom === 0 ? 0 : 0.022;
+        return {
+          ...d,
+          posX: Number(
+            Math.max(0.02, Math.min(0.98, center.x + Math.cos(angle) * radius)).toFixed(4)
+          ),
+          posY: Number(
+            Math.max(0.02, Math.min(0.98, center.y + Math.sin(angle) * radius)).toFixed(4)
+          ),
+        };
+      });
+  }, [devices, roomById, enrichedRooms]);
 
   // Wayfinding architectural landmarks on this floor (Stairs, Elevators, WC, Gate)
   const floorLandmarks = useMemo(
@@ -1667,12 +1695,27 @@ export function FloorplanCanvas({
 
           const isInZoomedRoom =
             zoomViewport.isZoomed && device.roomId === zoomedRoomId;
-          const usePinStyle = zoomViewport.isZoomed
-            ? isInZoomedRoom
-            : lodConfig.sensorStyle === 'pin';
-          const showBadge = zoomViewport.isZoomed
-            ? isInZoomedRoom
-            : lodConfig.showSensorBadge;
+          const isFocusedDevice = Boolean(
+            focusedDeviceId &&
+              (device.id === focusedDeviceId ||
+                device.hardwareId === focusedDeviceId)
+          );
+          const isAlertingDevice =
+            alertingDeviceIds.includes(device.id) ||
+            alertingDeviceIds.includes(device.hardwareId);
+
+          const usePinStyle =
+            isFocusedDevice ||
+            isAlertingDevice ||
+            (zoomViewport.isZoomed
+              ? isInZoomedRoom
+              : lodConfig.sensorStyle === 'pin');
+          const showBadge =
+            isFocusedDevice ||
+            isAlertingDevice ||
+            (zoomViewport.isZoomed
+              ? isInZoomedRoom
+              : lodConfig.showSensorBadge);
           const dotSizeClass =
             labelDensity === 'clean' && !zoomViewport.isZoomed
               ? 'h-2.5 w-2.5'
@@ -1684,13 +1727,30 @@ export function FloorplanCanvas({
               style={{
                 left: `${px.x}px`,
                 top: `${px.y}px`,
+                zIndex: isFocusedDevice ? 35 : isAlertingDevice ? 25 : undefined,
               }}
               className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
             >
-              {isAbnormal && (
+              {(isFocusedDevice || isAlertingDevice || isAbnormal) && (
                 <span
-                  className="pointer-events-none absolute -inset-2 animate-ping rounded-full opacity-60"
-                  style={{ backgroundColor: colorHex }}
+                  className={`pointer-events-none absolute rounded-full ${
+                    isFocusedDevice
+                      ? '-inset-3.5 animate-ping bg-rose-500 opacity-80'
+                      : isAlertingDevice
+                        ? '-inset-2.5 animate-ping bg-rose-500 opacity-65'
+                        : '-inset-2 animate-ping opacity-60'
+                  }`}
+                  style={
+                    !isFocusedDevice && !isAlertingDevice
+                      ? { backgroundColor: colorHex }
+                      : undefined
+                  }
+                />
+              )}
+              {isFocusedDevice && (
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute -inset-2 rounded-full border-2 border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.9)]"
                 />
               )}
               {usePinStyle ? (
@@ -1709,16 +1769,20 @@ export function FloorplanCanvas({
                     device.online ? 'Trực tuyến' : 'Mất kết nối'
                   }`}
                   className={`relative group flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all hover:scale-125 focus:scale-125 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
-                    device.online
-                      ? 'border-2 border-white shadow-lg'
-                      : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
+                    isFocusedDevice
+                      ? 'scale-125 border-2 border-rose-300 ring-2 ring-rose-500 shadow-xl'
+                      : device.online
+                        ? 'border-2 border-white shadow-lg'
+                        : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
                   }`}
                   style={
                     device.online
                       ? {
-                          backgroundColor: colorHex,
-                          color: '#0F172A',
-                          boxShadow: `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
+                          backgroundColor: isFocusedDevice ? '#F43F5E' : colorHex,
+                          color: isFocusedDevice ? '#FFFFFF' : '#0F172A',
+                          boxShadow: isFocusedDevice
+                            ? '0 0 18px #F43F5E, 0 2px 6px rgba(0,0,0,0.75)'
+                            : `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
                           transition:
                             'background-color 0.4s ease-out, box-shadow 0.4s ease-out',
                         }
@@ -1760,26 +1824,43 @@ export function FloorplanCanvas({
                 />
               )}
 
-              {showBadge && activeVal !== null && (
+              {(showBadge && activeVal !== null) || isFocusedDevice ? (
                 <div
                   className="pointer-events-none mt-1 -translate-x-0 rounded border px-1.5 py-0.5 text-center font-mono text-2xs font-bold shadow-md"
                   style={{
-                    backgroundColor: 'rgba(15, 23, 42, 0.92)',
-                    borderColor: device.online ? colorHex : '#64748B',
+                    backgroundColor: isFocusedDevice
+                      ? 'rgba(136, 19, 55, 0.95)'
+                      : 'rgba(15, 23, 42, 0.92)',
+                    borderColor: isFocusedDevice
+                      ? '#FB7185'
+                      : device.online
+                        ? colorHex
+                        : '#64748B',
                     color: '#F8FAFC',
                     whiteSpace: 'nowrap',
                     transition: 'border-color 0.4s ease-out',
                   }}
                 >
-                  {formatLayerMetricValue(activeVal, layer)}
+                  {isFocusedDevice
+                    ? `${device.hardwareId}${activeVal !== null ? ` · ${formatLayerMetricValue(activeVal, layer)}` : ''}`
+                    : formatLayerMetricValue(activeVal, layer)}
                 </div>
-              )}
+              ) : null}
 
-              {isHovered && (
+              {(isHovered || isFocusedDevice) && (
                 <div
                   role="tooltip"
-                  className="pointer-events-none absolute bottom-9 left-1/2 z-30 w-56 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800 shadow-lg"
+                  className={`pointer-events-none absolute bottom-10 left-1/2 z-30 w-56 -translate-x-1/2 rounded-lg border bg-white p-2.5 text-xs text-slate-800 shadow-lg ${
+                    isFocusedDevice
+                      ? 'border-rose-400 ring-2 ring-rose-500/30'
+                      : 'border-slate-200'
+                  }`}
                 >
+                  {isFocusedDevice && (
+                    <div className="mb-1.5 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                      Node cảnh báo đang định vị
+                    </div>
+                  )}
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-semibold text-slate-900">
                       {device.name}

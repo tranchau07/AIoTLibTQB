@@ -2,8 +2,9 @@
 
 import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, MapPin } from 'lucide-react';
 import { useAuthStore } from '@/features/auth/store';
+import { resolveAlertFloorplanTarget } from '@/features/alerts/navigation';
 import { useOverviewSummaryQuery } from '@/features/telemetry/queries';
 import { useRoomsQuery } from '@/features/rooms/queries';
 import {
@@ -412,25 +413,48 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {recentAlertsQuery.data?.content.map((alert) => (
-                    <tr key={alert.id}>
-                      <td>
-                        <AlertStatusBadge status={alert.status} />
-                      </td>
-                      <td>
-                        <AlertTypeBadge type={alert.type} />
-                      </td>
-                      <td className="font-medium text-slate-900">
-                        {alert.roomId
-                          ? resolveDisplayRoomName(alert.roomId, alert.roomId)
-                          : alert.hardwareId}
-                      </td>
-                      <td>{alert.message}</td>
-                      <td className="whitespace-nowrap tabular text-slate-500 text-xs">
-                        {formatVietnamDateTime(alert.startedAt)}
-                      </td>
-                    </tr>
-                  ))}
+                  {recentAlertsQuery.data?.content.map((alert) => {
+                    const target = resolveAlertFloorplanTarget(alert, rooms);
+                    return (
+                      <tr key={alert.id}>
+                        <td>
+                          <AlertStatusBadge status={alert.status} />
+                        </td>
+                        <td>
+                          <AlertTypeBadge type={alert.type} />
+                        </td>
+                        <td>
+                          <Link
+                            href={target.href}
+                            className="inline-flex items-center gap-1 font-medium text-slate-900 hover:text-brand-600"
+                            title="Mở đúng phòng & node cảnh báo trên bản đồ nhiệt"
+                          >
+                            <MapPin
+                              className="h-3.5 w-3.5 text-rose-500 shrink-0"
+                              aria-hidden="true"
+                            />
+                            <span>
+                              {alert.roomId
+                                ? resolveDisplayRoomName(
+                                    alert.roomId,
+                                    alert.roomId
+                                  )
+                                : alert.hardwareId}
+                            </span>
+                            {alert.roomId && alert.hardwareId && (
+                              <span className="font-mono text-2xs text-slate-400">
+                                ({alert.hardwareId})
+                              </span>
+                            )}
+                          </Link>
+                        </td>
+                        <td>{alert.message}</td>
+                        <td className="whitespace-nowrap tabular text-slate-500 text-xs">
+                          {formatVietnamDateTime(alert.startedAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
