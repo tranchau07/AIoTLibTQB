@@ -373,12 +373,15 @@ export type AlertType =
 
 export type AlertStatus = 'PENDING' | 'FIRING' | 'ACKNOWLEDGED' | 'RESOLVED';
 
+export type AlertSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
 export interface AlertResponse {
   id: string;
   deviceId: string;
   hardwareId: string;
   roomId: string | null;
   type: AlertType;
+  severity?: AlertSeverity;
   status: AlertStatus;
   currentValue: number | null;
   threshold: number | null;
@@ -387,4 +390,5 @@ export interface AlertResponse {
   acknowledgedAt: string | null;
   resolvedAt: string | null;
   acknowledgedBy: string | null;
+  resolvedBy?: string | null;
 }

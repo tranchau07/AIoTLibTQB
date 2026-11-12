@@ -3,6 +3,7 @@ package com.example.AIoTLibTQB.service;
 import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
+import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import com.example.AIoTLibTQB.repository.AlertRepository;
@@ -73,6 +74,7 @@ public class AlertRuleEngine {
                     state.setThreshold(alert.getThreshold());
                     state.setLastValue(alert.getCurrentValue());
                     state.setAlertType(alert.getType());
+                    state.setSeverity(alert.getSeverity());
                     state.setMetricType(metricType);
                     state.setDeviceId(alert.getDeviceId());
                     state.setHardwareId(alert.getHardwareId());
@@ -98,6 +100,7 @@ public class AlertRuleEngine {
         Double lastValue;
         Double threshold;
         AlertType alertType;
+        AlertSeverity severity;
         String metricType;
         String deviceId;
         String hardwareId;
@@ -115,19 +118,19 @@ public class AlertRuleEngine {
         if (data.getAcoustics() != null && data.getAcoustics().getNoiseAvg() != null) {
             double noiseAvg = data.getAcoustics().getNoiseAvg();
             evaluateMetric(targetId, "NOISE_AVG", noiseAvg > THRESHOLD_NOISE_AVG, noiseAvg,
-                    THRESHOLD_NOISE_AVG, AlertType.NOISE_EXCEEDED,
+                    THRESHOLD_NOISE_AVG, AlertType.NOISE_EXCEEDED, AlertSeverity.MEDIUM,
                     String.format("Average noise level (%.1f dBA) exceeded threshold (%.1f dBA)", noiseAvg, THRESHOLD_NOISE_AVG),
-                    deviceId, hardwareId, roomId);
+                    deviceId, hardwareId, roomId, false);
         }
 
-        // 2. noisePeak > 75 dBA (Instantaneous spike - safe handling for null)
+        // 2. noisePeak > 75 dBA (Instantaneous spike - immediate firing without 30s debounce)
         if (data.getAcoustics() != null) {
             Double noisePeak = data.getAcoustics().getNoisePeak();
             if (noisePeak != null) {
                 evaluateMetric(targetId, "NOISE_PEAK", noisePeak > THRESHOLD_NOISE_PEAK, noisePeak,
-                        THRESHOLD_NOISE_PEAK, AlertType.NOISE_EXCEEDED,
+                        THRESHOLD_NOISE_PEAK, AlertType.NOISE_EXCEEDED, AlertSeverity.HIGH,
                         String.format("Peak noise spike (%.1f dBA) exceeded threshold (%.1f dBA)", noisePeak, THRESHOLD_NOISE_PEAK),
-                        deviceId, hardwareId, roomId);
+                        deviceId, hardwareId, roomId, true);
             }
         }
 
@@ -135,18 +138,18 @@ public class AlertRuleEngine {
         if (data.getEnvironment() != null && data.getEnvironment().getTemperature() != null) {
             double temp = data.getEnvironment().getTemperature();
             evaluateMetric(targetId, "TEMPERATURE", temp > THRESHOLD_TEMP, temp,
-                    THRESHOLD_TEMP, AlertType.AIR_UNHEALTHY,
+                    THRESHOLD_TEMP, AlertType.AIR_UNHEALTHY, AlertSeverity.MEDIUM,
                     String.format("Temperature (%.1f °C) exceeded threshold (%.1f °C)", temp, THRESHOLD_TEMP),
-                    deviceId, hardwareId, roomId);
+                    deviceId, hardwareId, roomId, false);
         }
 
         // 4. pm2.5 > 50 µg/m³
         if (data.getAirQuality() != null && data.getAirQuality().getPm2_5() != null) {
             double pm25 = data.getAirQuality().getPm2_5();
             evaluateMetric(targetId, "PM2_5", pm25 > THRESHOLD_PM25, pm25,
-                    THRESHOLD_PM25, AlertType.AIR_UNHEALTHY,
+                    THRESHOLD_PM25, AlertType.AIR_UNHEALTHY, AlertSeverity.HIGH,
                     String.format("PM2.5 particulate level (%.1f µg/m³) exceeded threshold (%.1f µg/m³)", pm25, THRESHOLD_PM25),
-                    deviceId, hardwareId, roomId);
+                    deviceId, hardwareId, roomId, false);
         }
     }
 
@@ -157,10 +160,12 @@ public class AlertRuleEngine {
             double currentValue,
             double threshold,
             AlertType alertType,
+            AlertSeverity severity,
             String message,
             String deviceId,
             String hardwareId,
-            String roomId
+            String roomId,
+            boolean immediateFire
     ) {
         String key = targetId + ":" + metricType;
         Instant now = clock.instant();
@@ -173,19 +178,52 @@ public class AlertRuleEngine {
             if (state == null) {
                 // NORMAL state
                 if (isBreached) {
-                    // Enter PENDING (30s) in memory without DB write
-                    FsmState newState = new FsmState();
-                    newState.setStatus(AlertStatus.PENDING);
-                    newState.setPendingSince(now);
-                    newState.setLastValue(currentValue);
-                    newState.setThreshold(threshold);
-                    newState.setAlertType(alertType);
-                    newState.setMetricType(metricType);
-                    newState.setDeviceId(deviceId);
-                    newState.setHardwareId(hardwareId);
-                    newState.setRoomId(roomId);
-                    log.debug("Alert FSM entered PENDING: key={}, value={}, threshold={}", key, currentValue, threshold);
-                    return newState;
+                    if (immediateFire) {
+                        // Instantaneous metric: transition immediately to FIRING
+                        FsmState newState = new FsmState();
+                        newState.setStatus(AlertStatus.FIRING);
+                        newState.setFiringSince(now);
+                        newState.setRecoverySince(null);
+                        newState.setLastValue(currentValue);
+                        newState.setThreshold(threshold);
+                        newState.setAlertType(alertType);
+                        newState.setSeverity(severity);
+                        newState.setMetricType(metricType);
+                        newState.setDeviceId(deviceId);
+                        newState.setHardwareId(hardwareId);
+                        newState.setRoomId(roomId);
+
+                        alertToSave[0] = Alert.builder()
+                                .deviceId(deviceId)
+                                .hardwareId(hardwareId)
+                                .roomId(roomId)
+                                .type(alertType)
+                                .severity(severity)
+                                .status(AlertStatus.FIRING)
+                                .currentValue(currentValue)
+                                .threshold(threshold)
+                                .message(message)
+                                .startedAt(now)
+                                .build();
+                        shouldFire[0] = true;
+                        log.info("Alert FSM entered FIRING immediately (instantaneous metric): key={}, value={}, threshold={}", key, currentValue, threshold);
+                        return newState;
+                    } else {
+                        // Enter PENDING (30s) in memory without DB write
+                        FsmState newState = new FsmState();
+                        newState.setStatus(AlertStatus.PENDING);
+                        newState.setPendingSince(now);
+                        newState.setLastValue(currentValue);
+                        newState.setThreshold(threshold);
+                        newState.setAlertType(alertType);
+                        newState.setSeverity(severity);
+                        newState.setMetricType(metricType);
+                        newState.setDeviceId(deviceId);
+                        newState.setHardwareId(hardwareId);
+                        newState.setRoomId(roomId);
+                        log.debug("Alert FSM entered PENDING: key={}, value={}, threshold={}", key, currentValue, threshold);
+                        return newState;
+                    }
                 }
                 return null;
             }
@@ -206,6 +244,7 @@ public class AlertRuleEngine {
                                 .hardwareId(hardwareId)
                                 .roomId(roomId)
                                 .type(alertType)
+                                .severity(severity)
                                 .status(AlertStatus.FIRING)
                                 .currentValue(currentValue)
                                 .threshold(threshold)
@@ -268,6 +307,7 @@ public class AlertRuleEngine {
             alertRepository.findById(resolveAlertId[0]).ifPresent(alert -> {
                 alert.setStatus(AlertStatus.RESOLVED);
                 alert.setResolvedAt(now);
+                alert.setResolvedBy("SYSTEM");
                 Alert saved = alertRepository.save(alert);
                 realtimePublisher.publishAlert(toAlertResponse(saved));
                 log.info("Alert FSM resolved after 60s hysteresis: key={}, alertId={}", key, alert.getId());
@@ -292,6 +332,7 @@ public class AlertRuleEngine {
                     .hardwareId(hardwareId)
                     .roomId(roomId)
                     .type(AlertType.DEVICE_OFFLINE)
+                    .severity(AlertSeverity.HIGH)
                     .status(AlertStatus.FIRING)
                     .currentValue(0.0)
                     .threshold(0.0)
@@ -303,6 +344,7 @@ public class AlertRuleEngine {
             newState.setStatus(AlertStatus.FIRING);
             newState.setFiringSince(now);
             newState.setAlertType(AlertType.DEVICE_OFFLINE);
+            newState.setSeverity(AlertSeverity.HIGH);
             newState.setMetricType("DEVICE_OFFLINE");
             newState.setDeviceId(deviceId);
             newState.setHardwareId(hardwareId);
@@ -332,6 +374,7 @@ public class AlertRuleEngine {
                     alertRepository.findById(state.getAlertId()).ifPresent(alert -> {
                         alert.setStatus(AlertStatus.RESOLVED);
                         alert.setResolvedAt(now);
+                        alert.setResolvedBy("SYSTEM");
                         Alert saved = alertRepository.save(alert);
                         realtimePublisher.publishAlert(toAlertResponse(saved));
                         log.info("Resolved in-memory DEVICE_OFFLINE alert: hardwareId={}, alertId={}", hardwareId, alert.getId());
@@ -355,6 +398,7 @@ public class AlertRuleEngine {
         for (Alert a : firingAlerts) {
             a.setStatus(AlertStatus.RESOLVED);
             a.setResolvedAt(now);
+            a.setResolvedBy("SYSTEM");
             alertRepository.save(a);
             realtimePublisher.publishAlert(toAlertResponse(a));
         }
@@ -389,6 +433,7 @@ public class AlertRuleEngine {
                 .hardwareId(alert.getHardwareId())
                 .roomId(alert.getRoomId())
                 .type(alert.getType())
+                .severity(alert.getSeverity())
                 .status(alert.getStatus())
                 .currentValue(alert.getCurrentValue())
                 .threshold(alert.getThreshold())
@@ -397,6 +442,7 @@ public class AlertRuleEngine {
                 .acknowledgedAt(alert.getAcknowledgedAt())
                 .resolvedAt(alert.getResolvedAt())
                 .acknowledgedBy(alert.getAcknowledgedBy())
+                .resolvedBy(alert.getResolvedBy())
                 .build();
     }
 }

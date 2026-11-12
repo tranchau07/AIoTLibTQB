@@ -4,6 +4,7 @@ import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
+import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import com.example.AIoTLibTQB.enums.ErrorCode;
@@ -171,6 +172,7 @@ class AlertServiceTest {
         Alert saved = alertCaptor.getValue();
         assertThat(saved.getStatus()).isEqualTo(AlertStatus.FIRING);
         assertThat(saved.getType()).isEqualTo(AlertType.NOISE_EXCEEDED);
+        assertThat(saved.getSeverity()).isEqualTo(AlertSeverity.MEDIUM);
         assertThat(saved.getDeviceId()).isEqualTo("dev-1");
         assertThat(saved.getRoomId()).isEqualTo("room-1");
         assertThat(saved.getCurrentValue()).isEqualTo(71.0);
@@ -256,7 +258,7 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("noisePeak > 75 dBA kích hoạt cảnh báo NOISE_EXCEEDED sau 30s")
+    @DisplayName("noisePeak > 75 dBA kích hoạt cảnh báo NOISE_EXCEEDED ngay lập tức (không chờ 30s)")
     void evaluate_noisePeakExceeded_triggersNoiseExceededAlert() {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> {
             Alert a = invocation.getArgument(0);
@@ -265,15 +267,13 @@ class AlertServiceTest {
         });
 
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 80.0));
-        assertThat(alertRuleEngine.getFsmMap()).containsKey("dev-1:NOISE_PEAK");
-
-        mutableClock.advance(Duration.ofSeconds(30));
-        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 82.0));
 
         ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository).save(captor.capture());
         assertThat(captor.getValue().getType()).isEqualTo(AlertType.NOISE_EXCEEDED);
-        assertThat(captor.getValue().getCurrentValue()).isEqualTo(82.0);
+        assertThat(captor.getValue().getStatus()).isEqualTo(AlertStatus.FIRING);
+        assertThat(captor.getValue().getSeverity()).isEqualTo(AlertSeverity.HIGH);
+        assertThat(captor.getValue().getCurrentValue()).isEqualTo(80.0);
         assertThat(captor.getValue().getThreshold()).isEqualTo(75.0);
     }
 
@@ -368,5 +368,72 @@ class AlertServiceTest {
         alertService.resolveDeviceOfflineAlert("HW-OFFLINE");
         verify(alertRepository, times(2)).save(any(Alert.class));
         assertThat(offlineAlert.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+        assertThat(offlineAlert.getResolvedBy()).isEqualTo("SYSTEM");
+    }
+
+    @Test
+    @DisplayName("FSM: Xung âm tức thời (noisePeak spike) kích hoạt FIRING ngay với severity HIGH, duy trì qua hysteresis")
+    void evaluate_noisePeakSpike_transitionsToFiringWithout30sContinuousBreach() {
+        when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> {
+            Alert a = invocation.getArgument(0);
+            if (a.getId() == null) a.setId("alert-peak-001");
+            return a;
+        });
+
+        // t = 0s: Xuất hiện xung âm tức thời 82.0 dBA (> 75.0 dBA), noiseAvg bình thường (50.0 dBA)
+        TelemetryPayload.TelemetryData spikeData = createAcousticsData(50.0, 82.0);
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", spikeData);
+
+        // Với cơ chế tức thời cho xung âm đỉnh, cảnh báo phải FIRING ngay lập tức (không chờ 30s)
+        ArgumentCaptor<Alert> alertCaptor = ArgumentCaptor.forClass(Alert.class);
+        verify(alertRepository, times(1)).save(alertCaptor.capture());
+        Alert saved = alertCaptor.getValue();
+        assertThat(saved.getStatus()).isEqualTo(AlertStatus.FIRING);
+        assertThat(saved.getType()).isEqualTo(AlertType.NOISE_EXCEEDED);
+        assertThat(saved.getSeverity()).isEqualTo(AlertSeverity.HIGH);
+        assertThat(saved.getCurrentValue()).isEqualTo(82.0);
+        assertThat(saved.getThreshold()).isEqualTo(75.0);
+        assertThat(saved.getMessage()).contains("Peak noise spike");
+
+        verify(realtimePublisher, times(1)).publishAlert(any(AlertResponse.class));
+
+        // t = 5s: Xung âm đã dứt, noisePeak hạ về 52.0 dBA (hoặc null)
+        mutableClock.advance(Duration.ofSeconds(5));
+        TelemetryPayload.TelemetryData calmData = createAcousticsData(50.0, 52.0);
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", calmData);
+
+        // Cảnh báo vẫn duy trì FIRING (đang trong cửa sổ hysteresis 60s), không bị xóa mất
+        assertThat(alertRuleEngine.getFsmMap()).containsKey("dev-1:NOISE_PEAK");
+        assertThat(alertRuleEngine.getFsmMap().get("dev-1:NOISE_PEAK").getStatus()).isEqualTo(AlertStatus.FIRING);
+
+        // t = 65s (sau 60s không còn peak nào nữa) -> Chuyển sang RESOLVED
+        when(alertRepository.findById("alert-peak-001")).thenReturn(Optional.of(saved));
+        mutableClock.advance(Duration.ofSeconds(60));
+        alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", calmData);
+
+        verify(alertRepository, times(2)).save(any(Alert.class));
+        assertThat(saved.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+        assertThat(saved.getResolvedBy()).isEqualTo("SYSTEM");
+    }
+
+    @Test
+    @DisplayName("resolveAlert() - Lưu đúng resolvedBy khi thủ thư giải quyết cảnh báo thủ công")
+    void resolveAlert_success_setsResolvedBy() {
+        Alert alert = Alert.builder()
+                .id("alert-manual-01")
+                .status(AlertStatus.FIRING)
+                .type(AlertType.NOISE_EXCEEDED)
+                .severity(AlertSeverity.HIGH)
+                .build();
+
+        when(alertRepository.findById("alert-manual-01")).thenReturn(Optional.of(alert));
+        when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        AlertResponse response = alertService.resolveAlert("alert-manual-01", "librarian_lan");
+
+        assertThat(response.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+        assertThat(response.getResolvedBy()).isEqualTo("librarian_lan");
+        assertThat(alert.getResolvedBy()).isEqualTo("librarian_lan");
+        verify(alertRepository, times(1)).save(alert);
     }
 }

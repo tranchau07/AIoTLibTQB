@@ -1,5 +1,6 @@
 package com.example.AIoTLibTQB.document;
 
+import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import lombok.*;
@@ -39,6 +40,8 @@ public class Alert {
 
     AlertType type;
 
+    AlertSeverity severity;
+
     AlertStatus status;
 
     Double currentValue;
@@ -55,4 +58,6 @@ public class Alert {
     Instant resolvedAt;
 
     String acknowledgedBy;
+
+    String resolvedBy;
 }

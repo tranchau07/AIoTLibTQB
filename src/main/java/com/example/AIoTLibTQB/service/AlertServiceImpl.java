@@ -168,6 +168,7 @@ public class AlertServiceImpl implements AlertService {
         if (alert.getStatus() != AlertStatus.RESOLVED) {
             alert.setStatus(AlertStatus.RESOLVED);
             alert.setResolvedAt(clock.instant());
+            alert.setResolvedBy(username);
             alert = alertRepository.save(alert);
 
             alertRuleEngine.onResolve(id);

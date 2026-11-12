@@ -1,5 +1,6 @@
 package com.example.AIoTLibTQB.dto.response;
 
+import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import lombok.*;
@@ -19,6 +20,7 @@ public class AlertResponse {
     String hardwareId;
     String roomId;
     AlertType type;
+    AlertSeverity severity;
     AlertStatus status;
     Double currentValue;
     Double threshold;
@@ -27,4 +29,5 @@ public class AlertResponse {
     Instant acknowledgedAt;
     Instant resolvedAt;
     String acknowledgedBy;
+    String resolvedBy;
 }

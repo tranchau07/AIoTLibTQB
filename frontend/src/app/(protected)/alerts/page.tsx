@@ -166,12 +166,7 @@ export default function AlertsCenterPage() {
     <div className="page">
       {/* Header */}
       <div className="page-header">
-        <div>
-          <h1 className="page-title">Trung tâm Cảnh báo & Xử lý Sự cố</h1>
-          <p className="page-subtitle">
-            Theo dõi máy trạng thái FSM (Chờ xác nhận → Kích hoạt → Tiếp nhận → Đã đóng)
-          </p>
-        </div>
+        <h1 className="page-title">Cảnh báo &amp; Sự cố</h1>
 
         <div className="flex items-center gap-2">
           <span className="badge-neutral">
@@ -181,11 +176,7 @@ export default function AlertsCenterPage() {
               }`}
               aria-hidden="true"
             />
-            <span>
-              {stompConnected
-                ? 'Kênh thời gian thực trực tuyến'
-                : 'Đang kết nối lại kênh realtime...'}
-            </span>
+            <span>{stompConnected ? 'Trực tiếp' : 'Đang kết nối lại...'}</span>
           </span>
         </div>
       </div>
