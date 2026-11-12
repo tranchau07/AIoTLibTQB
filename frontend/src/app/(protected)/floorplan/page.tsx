@@ -4,30 +4,12 @@ import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQueries } from '@tanstack/react-query';
 import {
-  AlertTriangle,
   ArrowUpRight,
-  CheckCircle2,
   ChevronRight,
-  Compass,
-  Droplets,
-  Eye,
-  Layers,
-  Navigation,
-  Radio,
   ShieldAlert,
-  Sparkles,
-  Sun,
-  Thermometer,
-  Users,
-  Volume2,
-  Wifi,
-  Wind,
-  Wrench,
   X,
 } from 'lucide-react';
 import {
-  TQB_ROOM_PRESETS,
-  computeWayfindingPath,
   getFloorRoomPresets,
   resolveRoomPolygon,
   resolveRoomPreset,
@@ -42,6 +24,7 @@ import {
   useStompConnectionState,
 } from '@/lib/realtime/use-room-stream';
 import {
+  CollapsibleSection,
   ConnectionBadge,
   EmptyState,
   ErrorBanner,
@@ -76,7 +59,7 @@ import type {
   TelemetryResponse,
 } from '@/types/api';
 
-const FLOOR_OPTIONS = [1, 2, 3, 4, 5, 0];
+const FLOOR_OPTIONS = [1, 2, 3, 4, 5];
 
 const LAYER_OPTIONS: Array<{
   key: HeatmapLayerMetric;
@@ -220,7 +203,6 @@ export default function FloorplanPage() {
   const [focusedDeviceId, setFocusedDeviceId] = useState<string | null>(null);
   const [selectedBayId, setSelectedBayId] = useState<string | null>(null);
   const [studyFilter, setStudyFilter] = useState<StudyFilterMode>('quiet');
-  const [showWayfinding, setShowWayfinding] = useState<boolean>(true);
   const [showBlindspots, setShowBlindspots] = useState<boolean>(false);
   const [onlyAssignedZones, setOnlyAssignedZones] = useState<boolean>(false);
   const [includeTqbArchitecturePresets, setIncludeTqbArchitecturePresets] =
@@ -445,16 +427,6 @@ export default function FloorplanPage() {
     [selectedRoom, selectedRoomTelemetry, selectedRoomIdx]
   );
 
-  const selectedRoomWayfinding = useMemo(() => {
-    if (!selectedRoom) return null;
-    const bay = selectedRoomMicroZones.find((b) => b.bayId === selectedBayId);
-    return computeWayfindingPath(
-      selectedRoom,
-      bay ? { x: bay.posX, y: bay.posY } : null,
-      selectedRoomIdx
-    );
-  }, [selectedRoom, selectedRoomMicroZones, selectedBayId, selectedRoomIdx]);
-
   const selectedRoomDevices = useMemo(
     () =>
       selectedRoom
@@ -486,8 +458,6 @@ export default function FloorplanPage() {
       areaM2: number;
       score: number;
       reasonVi: string;
-      routeMeters: number;
-      fromLandmarkLabel: string;
     }> = [];
 
     visibleFloorRooms.forEach((room, idx) => {
@@ -501,15 +471,6 @@ export default function FloorplanPage() {
       const areaM2 = preset?.areaM2 ?? 120;
 
       for (const bay of bays) {
-        const route = computeWayfindingPath(
-          room,
-          { x: bay.posX, y: bay.posY },
-          idx
-        );
-        const routeMeters = route?.distanceMeters ?? 18;
-        const fromLandmarkLabel =
-          route?.fromLandmark.shortLabel ?? 'Thang trung tâm';
-
         let matchScore = bay.metrics.comfortScore;
         let reasonVi = `${bay.metrics.temperature}°C · ${bay.metrics.noiseAvg} dBA · ${bay.metrics.lux} lx`;
 
@@ -551,8 +512,6 @@ export default function FloorplanPage() {
           areaM2,
           score: matchScore,
           reasonVi,
-          routeMeters,
-          fromLandmarkLabel,
         });
       }
     });
@@ -741,462 +700,314 @@ export default function FloorplanPage() {
         <RoomStreamSubscriber key={r.id} roomId={r.id} />
       ))}
 
-      {/* Admin Role View Switcher Bar (Allows ADMIN to preview & verify all 4 Role Operational Modes) */}
-      {capabilities.isAdmin && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50/70 px-4 py-2.5 text-xs">
-          <div className="flex items-center gap-2 text-indigo-950">
-            <Eye className="h-4 w-4 text-indigo-600 shrink-0" />
-            <span className="font-semibold">
-              Chế độ Góc nhìn Tác nghiệp theo Role (Admin Preview):
-            </span>
-            <span className="hidden text-indigo-700 sm:inline">
-              Kiểm thử giao diện chuyên biệt của từng nhóm người dùng ngay trên mặt bằng TQB
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {(
-              [
-                {
-                  role: 'USER',
-                  label: '🎓 Độc giả / Sinh viên (Tìm chỗ học)',
-                },
-                {
-                  role: 'LIBRARIAN',
-                  label: '📚 Thủ thư & Quản lý Khu (Xử lý Alert)',
-                },
-                {
-                  role: 'MAINTENANCE',
-                  label: '🔧 Kỹ thuật Bảo trì (ĐHKK / Vùng mù / RSSI)',
-                },
-                {
-                  role: 'ADMIN',
-                  label: '🛡️ Quản trị Hệ thống (Toàn quyền)',
-                },
-              ] as const
-            ).map((item) => (
+      {/* Unified Header & Controls Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="page-title">Bản đồ mặt bằng</h1>
+
+          {/* Floor Selector */}
+          <div className="segmented" role="group" aria-label="Chọn tầng">
+            {FLOOR_OPTIONS.map((f) => (
               <button
-                key={item.role}
+                key={f}
                 type="button"
                 onClick={() => {
-                  setAdminRoleOverride(item.role);
-                  if (item.role === 'MAINTENANCE') {
-                    setShowBlindspots(true);
-                  } else {
-                    setShowBlindspots(false);
-                  }
+                  setSelectedFloor(f);
+                  setSelectedRoomId(null);
+                  setZoomedRoomId(null);
+                  setFocusedDeviceId(null);
+                  setSelectedBayId(null);
                 }}
-                className={`rounded-lg px-2.5 py-1 text-2xs font-semibold transition-all ${
-                  effectiveRole === item.role
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-white text-indigo-900 hover:bg-indigo-100 border border-indigo-200'
+                className={`segmented-item ${
+                  selectedFloor === f ? 'segmented-item-active' : ''
                 }`}
               >
-                {item.label}
+                Tầng {f}
               </button>
             ))}
           </div>
         </div>
-      )}
 
-      {/* Header & Controls */}
-      <div className="page-header">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="page-title">
-              Bản đồ Không gian & Heatmap 2D — Thư viện Tạ Quang Bửu
-            </h1>
-            <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 font-mono text-2xs font-semibold text-sky-800">
-              CAD 1:100 · 76.0m × 57.2m
-            </span>
-          </div>
-          <p className="page-subtitle">
-            Mặt bằng kiến trúc AutoCAD đa tỷ lệ kết hợp nội suy trường nhiệt động học Gaussian thích ứng diện tích phòng (`adaptiveSigma`)
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Floor Selector */}
-          <div>
-            <span className="sr-only">Chọn tầng</span>
-            <div className="segmented">
-              {FLOOR_OPTIONS.map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => {
-                    setSelectedFloor(f);
-                    setSelectedRoomId(null);
-                    setZoomedRoomId(null);
-                    setFocusedDeviceId(null);
-                    setSelectedBayId(null);
-                  }}
-                  className={`segmented-item ${
-                    selectedFloor === f ? 'segmented-item-active' : ''
-                  }`}
-                >
-                  {f === 0
-                    ? 'Tầng Trệt (0)'
-                    : f === 1
-                      ? 'Tầng 1 (Sảnh/Kho)'
-                      : f === 3
-                        ? 'Tầng 3 (Multimedia)'
-                        : f === 5
-                          ? 'Tầng 5 (P.Nhóm)'
-                          : `Tầng ${f}`}
-                </button>
-              ))}
-            </div>
-          </div>
-
+        <div className="flex flex-wrap items-center gap-2">
           {/* Toggle Full TQB Architectural Rooms */}
           <button
             type="button"
             onClick={() => setIncludeTqbArchitecturePresets((v) => !v)}
             className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
               includeTqbArchitecturePresets
-                ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                ? 'border-slate-900 bg-slate-900 text-white'
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
             }`}
-            title="Hiển thị đầy đủ các phòng đọc, kho sách và cụm phòng nhóm từ bản vẽ CAD Thư viện Tạ Quang Bửu"
+            title="Hiển thị đầy đủ các phòng từ bản vẽ CAD Thư viện Tạ Quang Bửu"
           >
-            🏛️ Đầy đủ Phòng Bản vẽ TQB ({visibleFloorRooms.length})
+            Đủ phòng CAD ({visibleFloorRooms.length})
           </button>
+
+          {/* Compact Admin Role Switcher */}
+          {capabilities.isAdmin && (
+            <div className="flex items-center gap-1.5">
+              <label
+                htmlFor="role-view-select"
+                className="text-xs text-slate-500"
+              >
+                Góc nhìn:
+              </label>
+              <select
+                id="role-view-select"
+                value={effectiveRole}
+                onChange={(e) => {
+                  const nextRole = e.target.value as EffectiveRoleView;
+                  setAdminRoleOverride(nextRole);
+                  setShowBlindspots(nextRole === 'MAINTENANCE');
+                }}
+                className="select h-8 py-0 text-xs font-medium"
+              >
+                <option value="ADMIN">Quản trị viên</option>
+                <option value="LIBRARIAN">Thủ thư & Quản lý khu</option>
+                <option value="MAINTENANCE">Kỹ thuật bảo trì</option>
+                <option value="USER">Độc giả / Sinh viên</option>
+              </select>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* 7-Layer Metric Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 pl-1">
-          <Layers className="h-4 w-4 text-brand-600" />
-          <span>7 Lớp Chỉ số Vi khí hậu & Hạ tầng:</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
+      {/* Compact 7-Layer Metric Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-white px-3 py-2">
+        <span className="text-xs font-medium text-slate-500">Lớp hiển thị</span>
+        <div
+          className="flex flex-wrap items-center gap-1"
+          role="group"
+          aria-label="Chọn lớp chỉ số"
+        >
           {LAYER_OPTIONS.map((opt) => (
             <button
               key={opt.key}
               type="button"
               onClick={() => setSelectedLayer(opt.key)}
-              className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                 selectedLayer === opt.key
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
-              <span>{opt.label}</span>
-              <span className="font-mono text-2xs opacity-75">
-                ({opt.unitLabel})
-              </span>
+              {opt.shortLabel}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ========================================================================
-          ROLE-SPECIFIC OPERATIONAL PANEL
-          1. USER / VIEWER: Smart Study Spot Finder ("Tìm Chỗ Ngồi Học Lý Tưởng")
-          2. MAINTENANCE: Tech & HVAC Diagnostics ("Chẩn đoán Kỹ thuật & Hạ tầng")
-          3. LIBRARIAN / ZONE_MANAGER / ADMIN: Operations & Live Alert FSM Dispatch
-         ======================================================================== */}
+      {/* Collapsible Role-Specific Operational Panel (Default collapsed so map stays front & center) */}
       {isStudentView ? (
-        <div className="card border-sky-200/80 bg-gradient-to-r from-sky-50/60 via-white to-emerald-50/40 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 pb-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-600 text-white shadow-sm">
-                <Compass className="h-4 w-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="text-sm font-bold text-slate-900">
-                  Tìm Chỗ Ngồi Học Lý Tưởng (Smart Study Spot Finder)
-                </h2>
-                <p className="text-2xs text-slate-600">
-                  Chọn nhu cầu học tập để hệ thống định vị dãy bàn tối ưu nhất và vẽ lộ trình đi bộ từ thang máy/cầu thang
-                </p>
-              </div>
-            </div>
-
-            {/* 4 Quick Study Filter Modes */}
+        <CollapsibleSection
+          title="Gợi ý chỗ ngồi học tối ưu"
+          summary={
+            studyRecommendations[0]
+              ? `Đề xuất #1: ${studyRecommendations[0].bay.nameVi} (${studyRecommendations[0].room.code} · ${studyRecommendations[0].bay.metrics.comfortScore}đ)`
+              : 'Chọn nhu cầu học tập để định vị dãy bàn'
+          }
+          badge={
+            <span className="badge-neutral">
+              {studyRecommendations.length} đề xuất
+            </span>
+          }
+          defaultOpen={false}
+        >
+          <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setStudyFilter('quiet');
-                  setSelectedLayer('noiseAvg');
-                }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                  studyFilter === 'quiet'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                🤫 Cần yên tĩnh tuyệt đối (&lt; 42 dBA)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setStudyFilter('group');
-                  if (selectedFloor !== 5) {
-                    setSelectedFloor(5);
-                    setZoomedRoomId(null);
-                  }
-                }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                  studyFilter === 'group'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                👥 Thảo luận nhóm (Cụm P.Nhóm Tầng 5)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setStudyFilter('bright_cool');
-                  setSelectedLayer('lux');
-                }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                  studyFilter === 'bright_cool'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                ☀️ Đủ sáng & Mát mẻ (300–550 lx, ≤ 23.5°C)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setStudyFilter('multimedia');
-                  setSelectedLayer('comfortScore');
-                }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                  studyFilter === 'multimedia'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                💻 Multimedia / Tra cứu CSDL
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {studyRecommendations.map((rec, idx) => {
-              const isChosen =
-                selectedRoomId === rec.room.id &&
-                selectedBayId === rec.bay.bayId;
-              return (
+              {(
+                [
+                  {
+                    key: 'quiet',
+                    label: 'Yên tĩnh (< 42 dBA)',
+                    layer: 'noiseAvg' as HeatmapLayerMetric,
+                  },
+                  {
+                    key: 'group',
+                    label: 'Thảo luận nhóm (Tầng 5)',
+                    layer: 'comfortScore' as HeatmapLayerMetric,
+                  },
+                  {
+                    key: 'bright_cool',
+                    label: 'Đủ sáng & Mát mẻ',
+                    layer: 'lux' as HeatmapLayerMetric,
+                  },
+                  {
+                    key: 'multimedia',
+                    label: 'Multimedia / PC',
+                    layer: 'comfortScore' as HeatmapLayerMetric,
+                  },
+                ] as const
+              ).map((item) => (
                 <button
-                  key={rec.bay.bayId}
+                  key={item.key}
                   type="button"
                   onClick={() => {
-                    setSelectedRoomId(rec.room.id);
-                    setSelectedBayId(rec.bay.bayId);
-                    setZoomedRoomId(rec.room.id);
-                    setShowWayfinding(true);
+                    setStudyFilter(item.key);
+                    setSelectedLayer(item.layer);
+                    if (item.key === 'group' && selectedFloor !== 5) {
+                      setSelectedFloor(5);
+                      setZoomedRoomId(null);
+                    }
                   }}
-                  className={`flex flex-col justify-between rounded-xl border p-3 text-left transition-all ${
-                    isChosen
-                      ? 'border-sky-600 bg-sky-50/90 ring-2 ring-sky-500/20'
-                      : 'border-slate-200 bg-white hover:border-sky-300 hover:shadow-sm'
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    studyFilter === item.key
+                      ? 'bg-slate-900 text-white'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                   }`}
                 >
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-2xs font-bold text-emerald-800">
-                        #{idx + 1} Đề xuất tối ưu
-                      </span>
-                      <span className="font-mono text-xs font-bold text-sky-700">
-                        {rec.bay.metrics.comfortScore} điểm
-                      </span>
-                    </div>
-                    <h3 className="mt-1.5 text-xs font-bold text-slate-900">
-                      {rec.bay.nameVi}
-                    </h3>
-                    <p className="text-2xs font-medium text-slate-500">
-                      {rec.room.code} — {rec.room.name}
-                    </p>
-                    <p className="mt-1 text-2xs text-slate-600">
-                      {rec.reasonVi}
-                    </p>
-                  </div>
-                  <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2 text-2xs font-semibold text-sky-700">
-                    <span>
-                      🚶 ~{rec.routeMeters}m từ {rec.fromLandmarkLabel}
-                    </span>
-                    <span className="inline-flex items-center gap-0.5">
-                      <span>Dẫn đường</span>
-                      <Navigation className="h-3 w-3" />
-                    </span>
-                  </div>
+                  {item.label}
                 </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : isMaintenanceView ? (
-        <div className="card border-amber-200/90 bg-amber-50/30 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200/60 pb-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-600 text-white shadow-sm">
-                <Wrench className="h-4 w-4" aria-hidden="true" />
-              </span>
-              <div>
-                <h2 className="text-sm font-bold text-slate-900">
-                  Chẩn đoán Kỹ thuật, Độ phủ Sóng & Cân bằng Nhiệt ĐHKK (Maintenance Tech Overlay)
-                </h2>
-                <p className="text-2xs text-slate-600">
-                  Giám sát suy hao sóng Wi-Fi qua vách BTCT, phát hiện vùng mù cảm biến (`fieldPresence &lt; 0.25`) và lệch nhiệt nhánh ống gió FCU
-                </p>
-              </div>
+              ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+              {studyRecommendations.map((rec, idx) => {
+                const isChosen =
+                  selectedRoomId === rec.room.id &&
+                  selectedBayId === rec.bay.bayId;
+                return (
+                  <button
+                    key={rec.bay.bayId}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRoomId(rec.room.id);
+                      setSelectedBayId(rec.bay.bayId);
+                      setZoomedRoomId(rec.room.id);
+                    }}
+                    className={`flex flex-col justify-between rounded-lg border p-3 text-left transition-colors ${
+                      isChosen
+                        ? 'border-slate-900 bg-slate-50'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-2xs font-medium text-slate-500">
+                          #{idx + 1} · {rec.room.code}
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-slate-900">
+                          {rec.bay.metrics.comfortScore}đ
+                        </span>
+                      </div>
+                      <h3 className="mt-1 truncate text-xs font-semibold text-slate-900">
+                        {rec.bay.nameVi}
+                      </h3>
+                      <p className="mt-0.5 truncate text-2xs text-slate-500">
+                        {rec.reasonVi}
+                      </p>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-1.5 text-2xs text-slate-500">
+                      <span>{rec.bay.seatCapacity} chỗ</span>
+                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700">
+                        <span>Định vị</span>
+                        <ArrowUpRight className="h-3 w-3" />
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </CollapsibleSection>
+      ) : isMaintenanceView ? (
+        <CollapsibleSection
+          title="Chẩn đoán kỹ thuật & Hạ tầng"
+          summary={`${maintenanceDiagnostics.onlineCount}/${maintenanceDiagnostics.totalDevices} trạm trực tuyến · ${maintenanceDiagnostics.hvacImbalanceRooms.length} lệch nhiệt · ${maintenanceDiagnostics.blindspotRooms.length} vùng mù`}
+          actions={
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => setShowBlindspots((v) => !v)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all ${
+                className={`rounded-md border px-2 py-1 text-2xs font-medium transition-colors ${
                   showBlindspots
-                    ? 'border-amber-600 bg-amber-600 text-white shadow-sm'
-                    : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                📡 Hiển thị Vùng mù Cảm biến (fieldPresence &lt; 0.25):{' '}
-                {showBlindspots ? 'ĐANG BẬT' : 'TẮT'}
+                Vùng mù: {showBlindspots ? 'Bật' : 'Tắt'}
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedLayer('wifiRssi')}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-2xs font-medium text-slate-600 hover:bg-slate-50"
               >
-                📶 Chuyển sang Bản đồ Suy hao Wi-Fi (RSSI)
+                Lớp Wi-Fi
               </button>
             </div>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <span className="text-2xs font-medium text-slate-500">
-                Trạng thái Trạm ESP32 trên tầng
-              </span>
-              <p className="mt-1 text-base font-bold text-slate-900">
+          }
+          defaultOpen={false}
+        >
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Trạm ESP32</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
                 {maintenanceDiagnostics.onlineCount} /{' '}
-                {maintenanceDiagnostics.totalDevices} Trực tuyến
-              </p>
-              <p className="mt-0.5 text-2xs text-slate-500">
-                {maintenanceDiagnostics.offlineDevices.length > 0
-                  ? `${maintenanceDiagnostics.offlineDevices.length} trạm mất kết nối cần kiểm tra nguồn`
-                  : '100% trạm đo hoạt động ổn định'}
+                {maintenanceDiagnostics.totalDevices} trực tuyến
               </p>
             </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <span className="text-2xs font-medium text-slate-500">
-                Cân bằng Nhiệt ĐHKK Nội phòng (ΔT)
-              </span>
-              <p className="mt-1 text-base font-bold text-amber-700">
-                {maintenanceDiagnostics.hvacImbalanceRooms.length} phòng lệch
-                nhiệt nhẹ
-              </p>
-              <p className="mt-0.5 text-2xs text-slate-500">
-                {maintenanceDiagnostics.hvacImbalanceRooms[0]
-                  ? `${maintenanceDiagnostics.hvacImbalanceRooms[0].room.code}: chênh ΔT ${maintenanceDiagnostics.hvacImbalanceRooms[0].deltaT}°C (${maintenanceDiagnostics.hvacImbalanceRooms[0].minT}–${maintenanceDiagnostics.hvacImbalanceRooms[0].maxT}°C)`
-                  : 'Các nhánh FCU phân phối nhiệt đồng đều'}
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Lệch nhiệt (ΔT)</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                {maintenanceDiagnostics.hvacImbalanceRooms.length} phòng
               </p>
             </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <span className="text-2xs font-medium text-slate-500">
-                Phân tích Vùng mù Cảm biến (Blindspots)
-              </span>
-              <p className="mt-1 text-base font-bold text-slate-900">
-                {maintenanceDiagnostics.blindspotRooms.length} phòng lớn cần bổ
-                sung node
-              </p>
-              <p className="mt-0.5 text-2xs text-slate-500">
-                {maintenanceDiagnostics.blindspotRooms[0]
-                  ? `${maintenanceDiagnostics.blindspotRooms[0].room.code} có ~${maintenanceDiagnostics.blindspotRooms[0].blindspotPct}% diện tích ngoài bán kính phủ chính`
-                  : 'Độ phủ Gaussian bao phủ tốt toàn tầng'}
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Vùng mù cảm biến</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                {maintenanceDiagnostics.blindspotRooms.length} phòng cần bổ sung
               </p>
             </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <span className="text-2xs font-medium text-slate-500">
-                Suy hao Tín hiệu Wi-Fi qua Vách BTCT
-              </span>
-              <p className="mt-1 text-base font-bold text-emerald-700">
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Tín hiệu Wi-Fi</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
                 {maintenanceDiagnostics.weakWifiRooms.length === 0
-                  ? 'Tín hiệu Tốt (> -70 dBm)'
+                  ? 'Ổn định (> -70 dBm)'
                   : `${maintenanceDiagnostics.weakWifiRooms.length} vùng sóng yếu`}
               </p>
-              <p className="mt-0.5 text-2xs text-slate-500">
-                Kiểm tra suy hao qua lõi thang máy & vách kho sách
-              </p>
             </div>
           </div>
-        </div>
+        </CollapsibleSection>
       ) : (
-        /* ROLE 2 (LIBRARIAN / ZONE_MANAGER / ADMIN): Operations & Alert FSM Dispatch */
-        <div className="card p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-100 text-slate-600">
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+        <CollapsibleSection
+          title="Điều phối vận hành tầng"
+          summary={
+            librarianAdvisories.length > 0
+              ? `${librarianAdvisories.length} khuyến nghị môi trường cần kiểm tra`
+              : 'Mọi không gian trên tầng đang trong ngưỡng tiêu chuẩn'
+          }
+          badge={
+            activeAlerts.length > 0 ? (
+              <span className="badge-danger">
+                {activeAlerts.length} cảnh báo
               </span>
-              <h2 className="text-xs font-semibold text-slate-900">
-                Điều phối Vận hành Thủ thư & Kiểm soát Vi khí hậu theo Loại phòng (RoomType)
-              </h2>
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-2xs font-medium text-slate-600">
-                Tầng {selectedFloor}
-              </span>
-              {activeAlerts.length > 0 && (
-                <span className="rounded bg-rose-100 px-2 py-0.5 text-2xs font-bold text-rose-700">
-                  {activeAlerts.length} Cảnh báo FSM đang mở
-                </span>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setOnlyAssignedZones((v) => !v)}
-                className={`rounded-md border px-2.5 py-1 text-2xs font-semibold transition-colors ${
-                  onlyAssignedZones
-                    ? 'border-amber-500 bg-amber-50 text-amber-900'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                🎯 Chỉ hiện Phân khu phụ trách ({assignedZones.join(', ')})
-              </button>
-              <span className="text-2xs text-slate-500">
-                {librarianAdvisories.length > 0
-                  ? `${librarianAdvisories.length} khuyến nghị vận hành`
-                  : 'Môi trường ổn định'}
-              </span>
-            </div>
-          </div>
-
+            ) : (
+              <span className="badge-neutral">Ổn định</span>
+            )
+          }
+          actions={
+            <button
+              type="button"
+              onClick={() => setOnlyAssignedZones((v) => !v)}
+              className={`rounded-md border px-2 py-1 text-2xs font-medium transition-colors ${
+                onlyAssignedZones
+                  ? 'border-slate-900 bg-slate-900 text-white'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Phân khu phụ trách ({assignedZones.join(', ')})
+            </button>
+          }
+          defaultOpen={false}
+        >
           {librarianAdvisories.length === 0 ? (
-            <div className="mt-3 flex items-center gap-2 text-xs text-slate-600">
-              <CheckCircle2
-                className="h-4 w-4 text-emerald-600 shrink-0"
-                aria-hidden="true"
-              />
-              <span>
-                Tất cả Kho sách (&lt; 60%RH), Phòng đọc và Sảnh lưu thông trên tầng đang duy trì chỉ số trong ngưỡng tiêu chuẩn.
-              </span>
-            </div>
+            <p className="text-xs text-slate-500">
+              Tất cả kho sách, phòng đọc và sảnh lưu thông trên tầng đang duy trì chỉ số trong ngưỡng tiêu chuẩn.
+            </p>
           ) : (
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
               {librarianAdvisories.slice(0, 3).map((item) => {
-                const Icon =
-                  item.category === 'mold_humidity'
-                    ? Droplets
-                    : item.category === 'noise'
-                      ? Volume2
-                      : item.category === 'heat'
-                        ? Thermometer
-                        : Wind;
                 const isSelected = selectedRoomId === item.roomId;
-
                 return (
                   <button
                     key={item.id}
@@ -1206,52 +1017,30 @@ export default function FloorplanPage() {
                       setZoomedRoomId(item.roomId);
                       setSelectedLayer(item.targetLayer);
                     }}
-                    className={`group flex flex-col justify-between rounded-lg border p-3 text-left transition-all ${
+                    className={`flex flex-col justify-between rounded-lg border p-3 text-left transition-colors ${
                       isSelected
-                        ? 'border-slate-900 bg-slate-50/80 ring-1 ring-slate-900/10'
-                        : 'border-slate-200/90 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+                        ? 'border-slate-900 bg-slate-50'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
                     }`}
                   >
                     <div>
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span
-                            className={`h-2 w-2 rounded-full shrink-0 ${
-                              item.category === 'mold_humidity'
-                                ? 'bg-purple-600'
-                                : item.category === 'noise'
-                                  ? 'bg-amber-500'
-                                  : item.category === 'heat'
-                                    ? 'bg-rose-500'
-                                    : 'bg-sky-500'
-                            }`}
-                            aria-hidden="true"
-                          />
-                          <Icon
-                            className="h-3.5 w-3.5 text-slate-600 shrink-0"
-                            aria-hidden="true"
-                          />
-                          <span className="truncate text-xs font-semibold text-slate-900">
-                            {item.badgeText}
-                          </span>
-                        </div>
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-2xs font-semibold text-slate-800 tabular-nums shrink-0">
+                        <span className="truncate text-xs font-semibold text-slate-900">
+                          {item.roomCode} · {item.badgeText}
+                        </span>
+                        <span className="font-mono text-2xs font-semibold text-slate-700">
                           {item.valueText}
                         </span>
                       </div>
-
-                      <p className="mt-1.5 text-2xs leading-relaxed text-slate-600 line-clamp-2">
+                      <p className="mt-1 line-clamp-2 text-2xs text-slate-500">
                         {item.recommendation}
                       </p>
                     </div>
-
-                    <div className="mt-2.5 flex items-center justify-between border-t border-slate-100 pt-2 text-2xs text-slate-500">
-                      <span className="font-mono font-semibold text-slate-700">
-                        {item.roomCode} · {item.roomType}
-                      </span>
-                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700 group-hover:text-slate-950">
-                        <span>Định vị & Xử lý</span>
-                        <ArrowUpRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-1.5 text-2xs text-slate-500">
+                      <span>{item.roomName}</span>
+                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700">
+                        <span>Định vị</span>
+                        <ArrowUpRight className="h-3 w-3" />
                       </span>
                     </div>
                   </button>
@@ -1259,7 +1048,7 @@ export default function FloorplanPage() {
               })}
             </div>
           )}
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* Reconnecting Alert */}
@@ -1294,8 +1083,8 @@ export default function FloorplanPage() {
           <div
             className={
               selectedRoom
-                ? 'space-y-3.5 xl:col-span-8'
-                : 'space-y-3.5 xl:col-span-12'
+                ? 'space-y-2.5 xl:col-span-8'
+                : 'space-y-2.5 xl:col-span-12'
             }
           >
             <div className="card overflow-hidden">
@@ -1321,293 +1110,270 @@ export default function FloorplanPage() {
                   setSelectedRoomId(room.id);
                   setSelectedBayId(bay.bayId);
                 }}
-                showWayfinding={showWayfinding || isStudentView}
                 showBlindspots={showBlindspots}
                 showTechOverlay={isMaintenanceView}
-                highlightedZoneIds={onlyAssignedZones ? assignedZones : undefined}
+                defaultLabelDensity={
+                  isMaintenanceView ? 'detailed' : 'balanced'
+                }
+                highlightedZoneIds={
+                  onlyAssignedZones ? assignedZones : undefined
+                }
               />
             </div>
 
-            {/* Meteorological Radar Color Scale Legend */}
-            <div className="card space-y-2 p-3.5 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-slate-800">
-                    Thang màu nội suy ({LAYER_OPTIONS.find((l) => l.key === selectedLayer)?.label}):
-                  </span>
-                  <span className="badge badge-primary text-2xs font-normal">
-                    Bán kính khuếch tán thích ứng diện tích phòng (Adaptive Sigma RBF)
-                  </span>
-                </div>
-                <span className="text-2xs text-slate-400">
-                  Nhấp đúp (Double-click) vào phòng bất kỳ để Phóng to Cấp 2 & Xem đường đi
-                </span>
-              </div>
-
-              <div className="relative pt-1">
+            {/* Compact Color Scale Legend */}
+            <div className="card flex flex-wrap items-center gap-3 px-3.5 py-2 text-xs">
+              <span className="shrink-0 font-medium text-slate-700">
+                {LAYER_OPTIONS.find((l) => l.key === selectedLayer)?.shortLabel}{' '}
+                ({LAYER_OPTIONS.find((l) => l.key === selectedLayer)?.unitLabel})
+              </span>
+              <div className="min-w-[200px] flex-1">
                 <div
-                  className="h-3.5 w-full rounded-full border border-slate-200 shadow-inner dark:border-slate-700"
+                  className="h-2.5 w-full rounded-full border border-slate-200"
                   style={{
                     background: getPaletteCssGradient(selectedLayer),
                   }}
                   aria-hidden="true"
                 />
-
-                <div className="mt-1.5 flex justify-between text-2xs font-medium text-slate-600">
+                <div className="mt-1 flex justify-between font-mono text-[10px] text-slate-500">
                   {WEATHER_PALETTES[selectedLayer]?.map((stop, idx) => (
-                    <span key={idx} className="flex flex-col items-center">
-                      <span className="mb-0.5 h-1 w-px bg-slate-300" />
-                      <span>{stop.label}</span>
-                    </span>
+                    <span key={idx}>{stop.label}</span>
                   ))}
                 </div>
               </div>
             </div>
 
-            {/* Unconfigured Rooms Callout */}
+            {/* Unconfigured Rooms Callout (Collapsed by default) */}
             {unconfiguredRooms.length > 0 && !isStudentView && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3.5">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-xs font-semibold text-amber-900">
-                    Phòng DB chưa lưu đa giác tùy chỉnh — Đang tự động áp dụng Đa giác Kiến trúc TQB ({unconfiguredRooms.length})
-                  </h2>
-                </div>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <CollapsibleSection
+                title="Phòng chưa lưu đa giác tùy chỉnh"
+                summary="Đang áp dụng đa giác CAD mặc định"
+                badge={
+                  <span className="badge-warning">
+                    {unconfiguredRooms.length}
+                  </span>
+                }
+                compact
+                defaultOpen={false}
+              >
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {unconfiguredRooms.map((room) => (
                     <div
                       key={room.id}
-                      className="flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-white p-2 text-xs"
+                      className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50/50 p-2 text-xs"
                     >
-                      <div>
-                        <p className="font-semibold text-slate-900">
-                          {room.code} — {room.name}
-                        </p>
-                      </div>
+                      <span className="truncate font-medium text-slate-800">
+                        {room.code} — {room.name}
+                      </span>
                       {capabilities.canManageRooms && (
                         <Link
                           href={`/admin/rooms/${room.id}/polygon`}
-                          className="btn-primary btn-sm h-6 px-2 text-2xs"
+                          className="btn-secondary btn-sm h-6 px-2 text-2xs"
                         >
-                          Chuẩn hóa CAD
+                          Sửa CAD
                         </Link>
                       )}
                     </div>
                   ))}
                 </div>
-              </div>
+              </CollapsibleSection>
             )}
           </div>
 
-          {/* Right Slide-Over Panel (Tailored to Active Role) */}
+          {/* Streamlined Right Inspector Panel */}
           {selectedRoom && (
             <aside
               aria-label={`Chi tiết phòng ${selectedRoom.name}`}
-              className="card space-y-4 p-5 xl:col-span-4"
+              className="card space-y-3.5 p-4 xl:col-span-4"
             >
               <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-2xs font-bold text-brand-600">
-                      {selectedRoom.code} · Tầng {selectedRoom.floor}
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 text-2xs text-slate-500">
+                    <span className="font-mono font-semibold text-slate-700">
+                      {selectedRoom.code}
                     </span>
+                    <span>·</span>
+                    <span>Tầng {selectedRoom.floor}</span>
                     {selectedRoomPreset && (
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-2xs text-slate-600">
-                        {selectedRoomPreset.areaM2} m² ·{' '}
-                        {selectedRoomPreset.roomType}
-                      </span>
+                      <>
+                        <span>·</span>
+                        <span>{selectedRoomPreset.areaM2} m²</span>
+                      </>
                     )}
+                    <span>·</span>
+                    <span>
+                      {selectedRoom.capacity ??
+                        selectedRoomPreset?.capacity ??
+                        60}{' '}
+                      chỗ
+                    </span>
                   </div>
-                  <h2 className="mt-0.5 text-base font-semibold text-slate-900">
+                  <h2 className="mt-0.5 truncate text-sm font-semibold text-slate-900">
                     {selectedRoom.name}
                   </h2>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedRoomId(null);
-                    setZoomedRoomId(null);
-                    setFocusedDeviceId(null);
-                  }}
-                  aria-label="Đóng bảng chi tiết"
-                  className="btn-icon"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* 2-Level Zoom & Wayfinding Quick Bar */}
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-sky-100 bg-sky-50/70 p-2.5 text-xs">
-                <div className="min-w-0">
-                  <p className="font-semibold text-sky-950">
-                    {selectedRoomWayfinding
-                      ? `🚶 Cách ${selectedRoomWayfinding.fromLandmark.labelVi} ~${selectedRoomWayfinding.distanceMeters}m`
-                      : 'Định vị không gian phòng'}
-                  </p>
-                  <p className="text-2xs text-sky-700">
-                    Sức chứa: {selectedRoom.capacity ?? selectedRoomPreset?.capacity ?? 60} chỗ ngồi
-                  </p>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setZoomedRoomId(
+                        zoomedRoomId === selectedRoom.id
+                          ? null
+                          : selectedRoom.id
+                      )
+                    }
+                    className="btn-secondary btn-sm h-7 px-2 text-2xs"
+                  >
+                    {zoomedRoomId === selectedRoom.id ? 'Thu nhỏ' : 'Phóng to'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRoomId(null);
+                      setZoomedRoomId(null);
+                      setFocusedDeviceId(null);
+                    }}
+                    aria-label="Đóng bảng chi tiết"
+                    className="btn-icon h-7 w-7"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setZoomedRoomId(
-                      zoomedRoomId === selectedRoom.id ? null : selectedRoom.id
-                    )
-                  }
-                  className="shrink-0 rounded-md bg-sky-600 px-2.5 py-1.5 text-2xs font-semibold text-white shadow-sm hover:bg-sky-700"
-                >
-                  {zoomedRoomId === selectedRoom.id
-                    ? 'Thu nhỏ (Cấp 1)'
-                    : '🔍 Phóng to Phòng'}
-                </button>
               </div>
 
-              <div className="flex items-center justify-between">
+              {/* Comfort Score Header */}
+              <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2">
                 <GradeBadge
                   grade={selectedRoomTelemetry?.comfortScore?.grade}
                   score={selectedRoomTelemetry?.comfortScore?.overall}
                 />
-                <span className="font-semibold text-xl tabular text-slate-900">
-                  {formatMetrics.comfortScore(
-                    selectedRoomTelemetry?.comfortScore?.overall
-                  )}{' '}
-                  <span className="text-xs font-normal text-slate-400">
-                    /100
+                <div className="flex items-baseline gap-0.5">
+                  <span className="text-lg font-semibold tabular-nums text-slate-900">
+                    {formatMetrics.comfortScore(
+                      selectedRoomTelemetry?.comfortScore?.overall
+                    )}
                   </span>
-                </span>
+                  <span className="text-2xs text-slate-400">/100</span>
+                </div>
               </div>
 
-              {/* All 6 Environmental & Infrastructure Metrics Grid */}
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
-                  <span className="text-2xs text-slate-500">
-                    Độ ồn (LAeq / Peak)
-                  </span>
-                  <p className="mt-0.5 font-semibold tabular text-slate-800">
+              {/* Compact 6 Metrics Grid */}
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="rounded-lg border border-slate-100 bg-slate-50/40 p-2">
+                  <span className="block text-2xs text-slate-500">Độ ồn</span>
+                  <span className="mt-0.5 block font-semibold tabular text-slate-800">
                     {formatMetrics.noise(
                       selectedRoomTelemetry?.acoustics?.noiseAvg
                     )}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
-                  <span className="text-2xs text-slate-500">
-                    Nhiệt độ phòng
                   </span>
-                  <p className="mt-0.5 font-semibold tabular text-slate-800">
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50/40 p-2">
+                  <span className="block text-2xs text-slate-500">Nhiệt độ</span>
+                  <span className="mt-0.5 block font-semibold tabular text-slate-800">
                     {formatMetrics.temperature(
                       selectedRoomTelemetry?.environment?.temperature
                     )}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
-                  <span className="text-2xs text-slate-500">
-                    Độ ẩm tương đối
                   </span>
-                  <p className="mt-0.5 font-semibold tabular text-slate-800">
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50/40 p-2">
+                  <span className="block text-2xs text-slate-500">Độ ẩm</span>
+                  <span className="mt-0.5 block font-semibold tabular text-slate-800">
                     {formatMetrics.humidity(
                       selectedRoomTelemetry?.environment?.humidity
                     )}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
-                  <span className="text-2xs text-slate-500">
-                    Độ rọi sáng (Lux)
                   </span>
-                  <p className="mt-0.5 font-semibold tabular text-slate-800">
-                    {formatMetrics.lux(selectedRoomTelemetry?.environment?.lux)}
-                  </p>
                 </div>
-
-                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
-                  <span className="text-2xs text-slate-500">Bụi mịn PM2.5</span>
-                  <p className="mt-0.5 font-semibold tabular text-slate-800">
+                <div className="rounded-lg border border-slate-100 bg-slate-50/40 p-2">
+                  <span className="block text-2xs text-slate-500">
+                    Ánh sáng
+                  </span>
+                  <span className="mt-0.5 block font-semibold tabular text-slate-800">
+                    {formatMetrics.lux(selectedRoomTelemetry?.environment?.lux)}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50/40 p-2">
+                  <span className="block text-2xs text-slate-500">PM2.5</span>
+                  <span className="mt-0.5 block font-semibold tabular text-slate-800">
                     {formatMetrics.pm(
                       selectedRoomTelemetry?.airQuality?.pm2_5
                     )}
-                  </p>
-                </div>
-
-                <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-2.5">
-                  <span className="text-2xs text-slate-500">
-                    Cường độ Wi-Fi
                   </span>
-                  <p className="mt-0.5 font-semibold tabular text-slate-800">
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50/40 p-2">
+                  <span className="block text-2xs text-slate-500">Wi-Fi</span>
+                  <span className="mt-0.5 block font-semibold tabular text-slate-800">
                     {formatMetrics.rssi(selectedRoomTelemetry?.wifiRssi)}
-                  </p>
+                  </span>
                 </div>
               </div>
 
-              {/* LIVE ALERT FSM PANEL FOR LIBRARIAN / ZONE_MANAGER / MAINTENANCE / ADMIN */}
+              {/* Active Room Alerts (only when present) */}
               {!isStudentView && selectedRoomAlerts.length > 0 && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-xs font-bold text-rose-900">
-                      <ShieldAlert className="h-4 w-4 text-rose-600" />
-                      <span>
-                        Cảnh báo Trực tiếp tại Phòng ({selectedRoomAlerts.length})
-                      </span>
-                    </span>
+                <div className="space-y-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-900">
+                    <ShieldAlert className="h-3.5 w-3.5 text-rose-600" />
+                    <span>Cảnh báo ({selectedRoomAlerts.length})</span>
                   </div>
-                  <div className="space-y-2">
-                    {selectedRoomAlerts.map((alert) => (
-                      <div
-                        key={alert.id}
-                        className="rounded-lg border border-rose-200 bg-white p-2.5 text-xs shadow-sm"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-2xs font-bold text-rose-700">
-                            {alert.type} · {alert.status}
-                          </span>
-                          <span className="font-mono text-2xs text-slate-400">
-                            {alert.hardwareId}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-2xs text-slate-700">
-                          {alert.message}
-                        </p>
-                        <div className="mt-2 flex items-center gap-2">
-                          {alert.status === 'FIRING' &&
-                            capabilities.canAcknowledgeAlert && (
-                              <button
-                                type="button"
-                                disabled={ackAlertMutation.isPending}
-                                onClick={() => ackAlertMutation.mutate(alert.id)}
-                                className="rounded bg-amber-500 px-2.5 py-1 text-2xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                              >
-                                Tiếp nhận (ACK)
-                              </button>
-                            )}
-                          {(alert.status === 'FIRING' ||
-                            alert.status === 'ACKNOWLEDGED') &&
-                            capabilities.canResolveAlert && (
-                              <button
-                                type="button"
-                                disabled={resolveAlertMutation.isPending}
-                                onClick={() =>
-                                  resolveAlertMutation.mutate(alert.id)
-                                }
-                                className="rounded bg-emerald-600 px-2.5 py-1 text-2xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                              >
-                                Giải quyết (RESOLVE)
-                              </button>
-                            )}
-                        </div>
+                  {selectedRoomAlerts.map((alert) => (
+                    <div
+                      key={alert.id}
+                      className="rounded border border-rose-200 bg-white p-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2 font-mono text-2xs">
+                        <span className="font-semibold text-rose-700">
+                          {alert.type}
+                        </span>
+                        <span className="text-slate-400">
+                          {alert.hardwareId}
+                        </span>
                       </div>
-                    ))}
-                  </div>
+                      <p className="mt-0.5 text-2xs text-slate-600">
+                        {alert.message}
+                      </p>
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        {alert.status === 'FIRING' &&
+                          capabilities.canAcknowledgeAlert && (
+                            <button
+                              type="button"
+                              disabled={ackAlertMutation.isPending}
+                              onClick={() => ackAlertMutation.mutate(alert.id)}
+                              className="rounded bg-slate-900 px-2 py-0.5 text-2xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                            >
+                              Tiếp nhận
+                            </button>
+                          )}
+                        {(alert.status === 'FIRING' ||
+                          alert.status === 'ACKNOWLEDGED') &&
+                          capabilities.canResolveAlert && (
+                            <button
+                              type="button"
+                              disabled={resolveAlertMutation.isPending}
+                              onClick={() =>
+                                resolveAlertMutation.mutate(alert.id)
+                              }
+                              className="rounded border border-slate-200 bg-white px-2 py-0.5 text-2xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              Đóng sự cố
+                            </button>
+                          )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
-              {/* Reading Bays (Micro-zones) Breakdown inside Room — Hardware-safe for ALL roles */}
+              {/* Collapsible 1: Reading Bays Breakdown (Default collapsed) */}
               {selectedRoomMicroZones.length > 0 && (
-                <div className="border-t border-slate-100 pt-3">
-                  <h3 className="mb-2 text-xs font-semibold text-slate-900">
-                    Phân khu Bàn đọc trong phòng ({selectedRoomMicroZones.length}{' '}
-                    dãy bàn)
-                  </h3>
+                <CollapsibleSection
+                  title="Phân khu bàn đọc"
+                  badge={
+                    <span className="badge-neutral">
+                      {selectedRoomMicroZones.length} dãy
+                    </span>
+                  }
+                  compact
+                  defaultOpen={false}
+                >
                   <div className="space-y-1.5">
                     {selectedRoomMicroZones.map((bay) => {
                       const isBayActive = bay.bayId === selectedBayId;
@@ -1619,54 +1385,57 @@ export default function FloorplanPage() {
                             setSelectedBayId(bay.bayId);
                             setZoomedRoomId(selectedRoom.id);
                           }}
-                          className={`w-full rounded-lg border p-2.5 text-left text-xs transition-all ${
+                          className={`w-full rounded-md border p-2 text-left text-xs transition-colors ${
                             isBayActive
-                              ? 'border-sky-500 bg-sky-50/70'
-                              : 'border-slate-100 bg-slate-50/50 hover:bg-slate-100/70'
+                              ? 'border-slate-900 bg-slate-50'
+                              : 'border-slate-100 bg-slate-50/40 hover:bg-slate-100/60'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold text-slate-900">
+                            <span className="truncate font-medium text-slate-900">
                               {bay.nameVi}
                             </span>
-                            <span className="rounded bg-white px-1.5 py-0.5 font-mono text-2xs font-bold text-sky-700 border border-slate-200">
+                            <span className="font-mono text-2xs font-semibold text-slate-700">
                               {formatLayerMetricValue(
                                 bay.metrics[selectedLayer],
                                 selectedLayer
                               )}
                             </span>
                           </div>
-                          <p className="mt-0.5 text-2xs text-slate-500">
-                            {bay.descriptionVi}
-                          </p>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-2xs text-slate-600">
-                            <span>💺 {bay.seatCapacity} chỗ</span>
+                          <div className="mt-1 flex items-center gap-2 font-mono text-2xs text-slate-500">
+                            <span>{bay.seatCapacity} chỗ</span>
                             <span>·</span>
-                            <span>🌡️ {bay.metrics.temperature}°C</span>
+                            <span>{bay.metrics.temperature}°C</span>
                             <span>·</span>
-                            <span>🔊 {bay.metrics.noiseAvg} dBA</span>
+                            <span>{bay.metrics.noiseAvg} dBA</span>
                             <span>·</span>
-                            <span>☀️ {bay.metrics.lux} lx</span>
+                            <span>{bay.metrics.lux} lx</span>
                           </div>
                         </button>
                       );
                     })}
                   </div>
-                </div>
+                </CollapsibleSection>
               )}
 
-              {/* Hardware Devices in this room (STRICT FE-VIZ-09: Only shown when !isStudentView and capabilities.canViewDevices) */}
+              {/* Collapsible 2: Hardware Devices (Default collapsed, strict FE-VIZ-09) */}
               {!isStudentView && capabilities.canViewDevices && (
-                <div className="border-t border-slate-100 pt-3">
-                  <h3 className="mb-2 text-xs font-semibold text-slate-900">
-                    Trạm cảm biến ESP32 gắn kèm ({selectedRoomDevices.length})
-                  </h3>
+                <CollapsibleSection
+                  title="Thiết bị cảm biến"
+                  badge={
+                    <span className="badge-neutral">
+                      {selectedRoomDevices.length} trạm
+                    </span>
+                  }
+                  compact
+                  defaultOpen={false}
+                >
                   {selectedRoomDevices.length === 0 ? (
-                    <p className="text-2xs italic text-slate-400">
-                      Phòng đang hiển thị theo mô hình nội suy Phân khu Bàn đọc TQB.
+                    <p className="text-2xs text-slate-400">
+                      Chưa gắn trạm đo vật lý.
                     </p>
                   ) : (
-                    <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
+                    <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
                       {selectedRoomDevices.map((d) => {
                         const devTel = deviceTelemetryMap[d.id];
                         const devVal = extractLayerMetricValue(
@@ -1679,22 +1448,17 @@ export default function FloorplanPage() {
                             onClick={() => setFocusedDeviceId(d.id)}
                             className={`flex cursor-pointer items-center justify-between rounded-md border p-2 text-xs transition-colors ${
                               focusedDeviceId === d.id
-                                ? 'border-brand-500 bg-brand-50/50'
+                                ? 'border-slate-900 bg-slate-50'
                                 : 'border-slate-100 bg-slate-50/40 hover:bg-slate-100/60'
                             }`}
                           >
                             <div className="min-w-0 pr-2">
-                              <p className="truncate font-semibold text-slate-800">
+                              <p className="truncate font-medium text-slate-800">
                                 {d.name}
                               </p>
                               <p className="font-mono text-2xs text-slate-400">
                                 {d.hardwareId}
                               </p>
-                              {d.location && (
-                                <p className="mt-0.5 truncate text-2xs text-slate-500">
-                                  📍 {d.location}
-                                </p>
-                              )}
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-1">
                               <ConnectionBadge online={d.online} />
@@ -1712,26 +1476,26 @@ export default function FloorplanPage() {
                       })}
                     </div>
                   )}
-                </div>
+                </CollapsibleSection>
               )}
 
               {/* Action Buttons */}
               {!selectedRoom.id.startsWith('PRESET_') && (
-                <div className="flex flex-col gap-2 border-t border-slate-100 pt-3">
+                <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
                   <Link
                     href={`/rooms/${selectedRoom.id}`}
-                    className="btn-primary btn-sm w-full text-center"
+                    className="btn-primary btn-sm flex-1 text-center"
                   >
-                    <span>Chi tiết & Biểu đồ lịch sử</span>
+                    <span>Chi tiết phòng</span>
                     <ChevronRight className="h-3.5 w-3.5" />
                   </Link>
 
                   {capabilities.canManageRooms && !isStudentView && (
                     <Link
                       href={`/admin/rooms/${selectedRoom.id}/polygon`}
-                      className="btn-secondary btn-sm w-full text-center"
+                      className="btn-secondary btn-sm text-center"
                     >
-                      <span>Chỉnh sửa mặt bằng phòng (M09 CAD)</span>
+                      <span>Mặt bằng CAD</span>
                     </Link>
                   )}
                 </div>
@@ -1741,33 +1505,33 @@ export default function FloorplanPage() {
         </div>
       )}
 
-      {/* Accessible Text Table for Screen Readers (FE-A11Y-05) */}
-      <section
-        aria-label="Bảng dữ liệu vi khí hậu các phòng đọc"
-        className="card mt-4"
-      >
-        <div className="card-header">
-          <h2 className="section-title">
-            Bảng tổng hợp Không gian & Vi khí hậu Tầng {selectedFloor}
-          </h2>
-          <span className="text-2xs text-slate-400">
-            {visibleFloorRooms.length} không gian phòng
+      {/* Collapsible Data Table for Screen Readers & Detailed Audit (FE-A11Y-05) */}
+      <CollapsibleSection
+        title={`Bảng dữ liệu Tầng ${selectedFloor}`}
+        badge={
+          <span className="badge-neutral">
+            {visibleFloorRooms.length} phòng
           </span>
-        </div>
-        <div className="table-wrap">
+        }
+        defaultOpen={false}
+      >
+        <div className="table-wrap -mx-4 -my-3.5">
           <table className="data-table">
             <thead>
               <tr>
-                <th>Phòng / Phân khu</th>
+                <th>Phòng</th>
                 <th>Diện tích</th>
                 <th>
-                  Lớp {LAYER_OPTIONS.find((l) => l.key === selectedLayer)?.label}
+                  {
+                    LAYER_OPTIONS.find((l) => l.key === selectedLayer)
+                      ?.shortLabel
+                  }
                 </th>
-                <th>Độ ồn TB</th>
+                <th>Độ ồn</th>
                 <th>Nhiệt độ</th>
                 <th>Độ ẩm</th>
                 <th>Ánh sáng</th>
-                <th>Trạng thái</th>
+                <th>Hạng</th>
                 <th className="text-right">Thao tác</th>
               </tr>
             </thead>
@@ -1780,11 +1544,11 @@ export default function FloorplanPage() {
                 return (
                   <tr key={room.id}>
                     <td>
-                      <div className="font-semibold text-slate-900">
+                      <div className="font-medium text-slate-900">
                         {room.name}
                       </div>
                       <div className="font-mono text-2xs text-slate-400">
-                        {room.code} · {preset?.roomType ?? room.type ?? 'STUDY_ROOM'}
+                        {room.code}
                       </div>
                     </td>
                     <td className="font-mono text-xs tabular">
@@ -1831,7 +1595,7 @@ export default function FloorplanPage() {
             </tbody>
           </table>
         </div>
-      </section>
+      </CollapsibleSection>
     </div>
   );
 }

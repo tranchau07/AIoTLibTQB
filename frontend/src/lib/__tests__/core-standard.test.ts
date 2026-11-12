@@ -43,6 +43,10 @@ import {
   extractLayerMetricValue,
   formatLayerMetricValue,
 } from '@/features/floorplan/components/FloorplanCanvas';
+import {
+  computeLabelPlacements,
+  getLodConfig,
+} from '@/lib/floorplan/labelLayout';
 import { normalizedToPixel, pixelToNormalized } from '@/lib/floorplan/coords';
 import {
   mergeRealtimeTelemetry,
@@ -438,7 +442,7 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
 
     for (const preset of TQB_ROOM_PRESETS) {
       const validation = validateBoundaryPolygon(preset.boundaryPolygon);
-      expect(validation.valid, `Preset ${preset.code} failed polygon validation: ${validation.error}`).toBe(true);
+      expect(validation.valid, `Preset ${preset.code} failed polygon validation: ${validation.reason}`).toBe(true);
 
       const visualCenter = computeVisualPolygonCenter(preset.boundaryPolygon);
       expect(
@@ -471,8 +475,8 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       timestamp: '2026-11-04T00:00:00Z',
       metadata: {
         deviceId: 'dev-1',
+        hardwareId: 'ESP32_TQB_301_A',
         roomId: 'room-301',
-        zoneId: 'zone-3',
       },
       environment: {
         temperature: 24.5,
@@ -481,16 +485,22 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       },
       acoustics: {
         noiseAvg: 44.8,
-        noiseMax: 52.0,
+        noisePeak: 52.0,
       },
       airQuality: {
+        pm1_0: 9.0,
         pm2_5: 14.3,
+        pm4_0: 19.0,
         pm10: 25.0,
       },
       wifiRssi: -58,
       comfortScore: {
         overall: 86,
-        grade: 'GOOD',
+        grade: 'Gold',
+        acousticScore: 85,
+        airScore: 88,
+        thermalScore: 84,
+        lightScore: 90,
       },
     };
 
@@ -498,7 +508,7 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       expect(WEATHER_PALETTES[metric].length).toBeGreaterThanOrEqual(5);
       const val = extractLayerMetricValue(sampleTelemetry, metric);
       expect(val).not.toBeNull();
-      const [r, g, b] = getContinuousMetricColor(val!, metric);
+      const [r, g, b] = getContinuousMetricColor(metric, val!);
       expect(r).toBeGreaterThanOrEqual(0);
       expect(r).toBeLessThanOrEqual(255);
       expect(g).toBeGreaterThanOrEqual(0);
@@ -513,13 +523,11 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       code: 'TQB_508',
       name: 'Phòng Học Nhóm 508',
       floor: 5,
-      boundaryPolygon: null,
     })!;
     const largeMultimediaRoom = resolveRoomPreset({
       code: 'TQB_301',
       name: 'Phòng Multimedia Tầng 3',
       floor: 3,
-      boundaryPolygon: null,
     })!;
 
     expect(smallGroupRoom).not.toBeNull();
@@ -538,7 +546,6 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       code: 'TQB_301',
       name: 'Phòng Multimedia Tầng 3',
       floor: 3,
-      boundaryPolygon: null,
     })!;
     const mockRoom = {
       id: 'room-301',
@@ -555,8 +562,8 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       timestamp: '2026-11-04T00:00:00Z',
       metadata: {
         deviceId: 'room-aggregate',
+        hardwareId: 'ESP32_TQB_301_AGG',
         roomId: 'room-301',
-        zoneId: 'zone-3',
       },
       environment: {
         temperature: 25.0,
@@ -565,16 +572,22 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
       },
       acoustics: {
         noiseAvg: 46.0,
-        noiseMax: 55.0,
+        noisePeak: 55.0,
       },
       airQuality: {
+        pm1_0: 10.0,
         pm2_5: 15.0,
+        pm4_0: 21.0,
         pm10: 28.0,
       },
       wifiRssi: -60,
       comfortScore: {
         overall: 82,
-        grade: 'GOOD',
+        grade: 'Gold',
+        acousticScore: 80,
+        airScore: 86,
+        thermalScore: 81,
+        lightScore: 88,
       },
     };
 
@@ -586,7 +599,12 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
 
     const blindspotFull = computeRoomBlindspotRatio(
       multimediaPreset.boundaryPolygon,
-      microZones.map((z) => ({ x: z.posX, y: z.posY }))
+      microZones.map((z) => ({
+        x: z.posX,
+        y: z.posY,
+        value: z.metrics.comfortScore,
+        online: true,
+      }))
     );
     const blindspotNoSensor = computeRoomBlindspotRatio(multimediaPreset.boundaryPolygon, []);
     expect(blindspotNoSensor.blindspotRatio).toBe(1);
@@ -599,3 +617,179 @@ describe('8. TQB CAD 1:100 Floorplan Presets, 7-Layer Weather Palettes, Adaptive
     expect(wayfinding!.distanceMeters).toBeGreaterThan(0);
   });
 });
+
+describe('9. Label declutter LOD & collision avoidance', () => {
+  const viewport = { width: 960, height: 722 };
+  const largeRoomPoly = [
+    { x: 100, y: 100 },
+    { x: 400, y: 100 },
+    { x: 400, y: 340 },
+    { x: 100, y: 340 },
+  ];
+
+  it('shifts room label away when a sensor obstacle sits directly at the room center', () => {
+    const placements = computeLabelPlacements(
+      [
+        {
+          id: 'room-301',
+          anchor: { x: 250, y: 220 },
+          width: 72,
+          height: 20,
+          polygon: largeRoomPoly,
+          priority: 570,
+        },
+      ],
+      [{ x: 250, y: 220, r: 12 }],
+      viewport
+    );
+
+    expect(placements).toHaveLength(1);
+    expect(placements[0].visible).toBe(true);
+    expect(
+      placements[0].x !== 250 || placements[0].y !== 220
+    ).toBe(true);
+
+    // Verify bounding box of placed label does not intersect obstacle circle (r=12 + 4px margin)
+    const boxLeft = placements[0].x - 36;
+    const boxRight = placements[0].x + 36;
+    const boxTop = placements[0].y - 10;
+    const boxBottom = placements[0].y + 10;
+    const nearX = Math.max(boxLeft, Math.min(250, boxRight));
+    const nearY = Math.max(boxTop, Math.min(220, boxBottom));
+    const dist = Math.hypot(250 - nearX, 220 - nearY);
+    expect(dist).toBeGreaterThanOrEqual(16);
+  });
+
+  it('prevents two adjacent labels from overlapping each other', () => {
+    const placements = computeLabelPlacements(
+      [
+        {
+          id: 'room-a',
+          anchor: { x: 240, y: 220 },
+          width: 84,
+          height: 22,
+          polygon: largeRoomPoly,
+          priority: 300,
+        },
+        {
+          id: 'room-b',
+          anchor: { x: 255, y: 222 },
+          width: 84,
+          height: 22,
+          polygon: largeRoomPoly,
+          priority: 200,
+        },
+      ],
+      [],
+      viewport
+    );
+
+    expect(placements[0].visible).toBe(true);
+    expect(placements[1].visible).toBe(true);
+
+    const aLeft = placements[0].x - 42;
+    const aRight = placements[0].x + 42;
+    const aTop = placements[0].y - 11;
+    const aBottom = placements[0].y + 11;
+
+    const bLeft = placements[1].x - 42;
+    const bRight = placements[1].x + 42;
+    const bTop = placements[1].y - 11;
+    const bBottom = placements[1].y + 11;
+
+    const separated =
+      aRight <= bLeft || aLeft >= bRight || aBottom <= bTop || aTop >= bBottom;
+    expect(separated).toBe(true);
+  });
+
+  it('marks label visible: false when room polygon is too tiny to fit the label', () => {
+    const tinyPoly = [
+      { x: 200, y: 200 },
+      { x: 225, y: 200 },
+      { x: 225, y: 215 },
+      { x: 200, y: 215 },
+    ];
+    const placements = computeLabelPlacements(
+      [
+        {
+          id: 'room-tiny',
+          anchor: { x: 212, y: 207 },
+          width: 90,
+          height: 28,
+          polygon: tinyPoly,
+          priority: 25,
+        },
+      ],
+      [],
+      viewport
+    );
+
+    expect(placements[0].visible).toBe(false);
+  });
+
+  it('places highest-priority selected room at exact center when center is unobstructed', () => {
+    const placements = computeLabelPlacements(
+      [
+        {
+          id: 'room-normal',
+          anchor: { x: 250, y: 220 },
+          width: 80,
+          height: 22,
+          polygon: largeRoomPoly,
+          priority: 300,
+        },
+        {
+          id: 'room-selected',
+          anchor: { x: 250, y: 220 },
+          width: 80,
+          height: 22,
+          polygon: largeRoomPoly,
+          priority: 500_000,
+        },
+      ],
+      [],
+      viewport
+    );
+
+    // Selected room (index 1) gets exact anchor (250, 220), normal room (index 0) is shifted
+    expect(placements[1]).toEqual({
+      id: 'room-selected',
+      x: 250,
+      y: 220,
+      visible: true,
+    });
+    expect(placements[0].visible).toBe(true);
+    expect(placements[0].x !== 250 || placements[0].y !== 220).toBe(true);
+  });
+
+  it('resolves getLodConfig matrix across clean, balanced, detailed and Level-2 zoom', () => {
+    const clean = getLodConfig('clean', false);
+    expect(clean.roomLabel).toBe('code');
+    expect(clean.hideSmallRoomsUnderM2).toBe(65);
+    expect(clean.sensorStyle).toBe('dot');
+    expect(clean.showSensorBadge).toBe(false);
+    expect(clean.bayStyle).toBe('hidden');
+    expect(clean.showLandmarkText).toBe(false);
+    expect(clean.showAtriumText).toBe(false);
+
+    const balanced = getLodConfig('balanced', false);
+    expect(balanced.roomLabel).toBe('pill');
+    expect(balanced.sensorStyle).toBe('dot');
+    expect(balanced.showSensorBadge).toBe(false);
+    expect(balanced.bayStyle).toBe('dot');
+
+    const detailed = getLodConfig('detailed', false);
+    expect(detailed.roomLabel).toBe('rich');
+    expect(detailed.sensorStyle).toBe('pin');
+    expect(detailed.showSensorBadge).toBe(true);
+    expect(detailed.bayStyle).toBe('pill');
+    expect(detailed.showLandmarkText).toBe(true);
+
+    const zoomedFromClean = getLodConfig('clean', true);
+    expect(zoomedFromClean.roomLabel).toBe('rich');
+    expect(zoomedFromClean.sensorStyle).toBe('pin');
+    expect(zoomedFromClean.showSensorBadge).toBe(true);
+    expect(zoomedFromClean.bayStyle).toBe('pill');
+  });
+});
+

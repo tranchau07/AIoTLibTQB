@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   TQB_BUILDING_ASPECT_RATIO,
-  computeWayfindingPath,
   getFloorCadSvgPath,
   getFloorLandmarks,
   resolveRoomPolygon,
@@ -23,6 +22,14 @@ import {
   computeVisualPolygonCenter,
   isPointInPolygon,
 } from '@/lib/floorplan/polygon';
+import {
+  computeLabelPlacements,
+  getLodConfig,
+  type LabelDensity,
+  type LabelRequest,
+  type Obstacle,
+  type RoomLabelStyle,
+} from '@/lib/floorplan/labelLayout';
 import {
   computeRoomBlindspotRatio,
   getContinuousMetricColorCss,
@@ -117,14 +124,14 @@ export interface FloorplanCanvasProps {
   /** Phân khu bàn đọc đang được chọn / gợi ý (dành cho Smart Study Spot Finder) */
   selectedBayId?: string | null;
   onSelectBay?: (bay: AnonymousMicroZone, room: RoomResponse) => void;
-  /** Hiển thị lộ trình dẫn đường từ Thang máy / Cầu thang gần nhất */
-  showWayfinding?: boolean;
   /** Hiển thị vùng mù cảm biến (fieldPresence < 0.25) cho Role MAINTENANCE */
   showBlindspots?: boolean;
   /** Hiển thị lớp chẩn đoán kỹ thuật (chênh nhiệt cục bộ ΔT, RSSI, % vùng mù) */
   showTechOverlay?: boolean;
   /** Danh sách mã Zone phụ trách của ZONE_MANAGER để làm nổi bật */
   highlightedZoneIds?: readonly string[];
+  /** Mật độ hiển thị nhãn khởi tạo; người dùng vẫn đổi được qua nút gạt trên bản đồ */
+  defaultLabelDensity?: LabelDensity;
 }
 
 export function FloorplanCanvas({
@@ -140,10 +147,10 @@ export function FloorplanCanvas({
   onZoomRoomChange,
   selectedBayId,
   onSelectBay,
-  showWayfinding = false,
   showBlindspots = false,
   showTechOverlay = false,
   highlightedZoneIds,
+  defaultLabelDensity,
 }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -156,6 +163,10 @@ export function FloorplanCanvas({
   });
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
   const [hoveredBayId, setHoveredBayId] = useState<string | null>(null);
+  const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
+  const [labelDensity, setLabelDensity] = useState<LabelDensity>(
+    defaultLabelDensity ?? (showTechOverlay ? 'detailed' : 'balanced')
+  );
   const [displayValues, setDisplayValues] = useState<Record<string, number>>(
     {}
   );
@@ -166,6 +177,12 @@ export function FloorplanCanvas({
   const [cadImageLoadedFloor, setCadImageLoadedFloor] = useState<number | null>(
     null
   );
+
+  useEffect(() => {
+    if (defaultLabelDensity) {
+      setLabelDensity(defaultLabelDensity);
+    }
+  }, [defaultLabelDensity]);
 
   const zoomedRoomId =
     controlledZoomedRoomId !== undefined
@@ -259,15 +276,6 @@ export function FloorplanCanvas({
       if (pt.y > maxY) maxY = pt.y;
     }
 
-    // Mở rộng vùng nhìn để bao gồm cả hành lang & thang máy/cầu thang dẫn vào phòng
-    const route = computeWayfindingPath(target.room, null, target.idx);
-    if (route) {
-      minX = Math.min(minX, route.fromLandmark.position.x - 0.04);
-      maxX = Math.max(maxX, route.fromLandmark.position.x + 0.04);
-      minY = Math.min(minY, route.fromLandmark.position.y - 0.04);
-      maxY = Math.max(maxY, route.fromLandmark.position.y + 0.04);
-    }
-
     const spanX = Math.max(0.28, (maxX - minX) * 1.45);
     const spanY = Math.max(0.28, (maxY - minY) * 1.45);
     const scale = Math.max(1.65, Math.min(2.65, 1 / Math.max(spanX, spanY)));
@@ -296,6 +304,53 @@ export function FloorplanCanvas({
       y: base.y * zoomViewport.scale + zoomViewport.ty,
     };
   };
+
+  const lodConfig = useMemo(
+    () => getLodConfig(labelDensity, zoomViewport.isZoomed),
+    [labelDensity, zoomViewport.isZoomed]
+  );
+
+  // Devices that have normalized coordinates on this floor (Role ADMIN / LIBRARIAN / MAINTENANCE)
+  const positionedDevices = useMemo(
+    () =>
+      devices.filter(
+        (d) =>
+          d.roomId &&
+          roomById.has(d.roomId) &&
+          typeof d.posX === 'number' &&
+          typeof d.posY === 'number'
+      ),
+    [devices, roomById]
+  );
+
+  // Wayfinding architectural landmarks on this floor (Stairs, Elevators, WC, Gate)
+  const floorLandmarks = useMemo(
+    () =>
+      getFloorLandmarks(activeFloor).filter((lm) => lm.kind !== 'ATRIUM'),
+    [activeFloor]
+  );
+
+  // Anonymous Reading Bays to display as interactive pills/dots when hardware devices are hidden (FE-VIZ-09) or when zoomed into a room
+  const visibleAnonymousBays = useMemo(() => {
+    const items: Array<{ bay: AnonymousMicroZone; room: RoomResponse }> = [];
+    for (const { room, preset, microZones } of enrichedRooms) {
+      const roomHasDevices = positionedDevices.some(
+        (d) => d.roomId === room.id
+      );
+      const isFocused = room.id === zoomedRoomId || room.id === selectedRoomId;
+      const isLargeRoom = (preset?.areaM2 ?? 100) >= 120;
+
+      // Show reading bays if:
+      // 1) User has no device visibility (USER/VIEWER role) and room is large or selected
+      // 2) Room is zoomed in (Level 2 Focus) and has no raw device pin at the exact same spot
+      if (!roomHasDevices && (isLargeRoom || isFocused)) {
+        for (const bay of microZones) {
+          items.push({ bay, room });
+        }
+      }
+    }
+    return items;
+  }, [enrichedRooms, positionedDevices, zoomedRoomId, selectedRoomId]);
 
   // Animated smooth values map for gliding transitions (FE-VIZ-04: Anti-flicker temporal smoothstep)
   interface AnimDeviceState {
@@ -378,7 +433,7 @@ export function FloorplanCanvas({
     };
   }, []);
 
-  // Dual-Layer Canvas Rendering with CAD Underlay, 2-Level Zoom, Adaptive Sigma & Multi-Scale Labels
+  // Dual-Layer Canvas Rendering with CAD Underlay, 2-Level Zoom, Adaptive Sigma & Screen-Space Decluttered Labels
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -433,6 +488,14 @@ export function FloorplanCanvas({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
+      const normToScreen = (normPt: Point2D): Point2D => {
+        const base = normalizedToPixel(normPt, width, height);
+        return {
+          x: base.x * zoomViewport.scale + zoomViewport.tx,
+          y: base.y * zoomViewport.scale + zoomViewport.ty,
+        };
+      };
+
       ctx.save();
       ctx.scale(dpr, dpr);
 
@@ -482,22 +545,46 @@ export function FloorplanCanvas({
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.font = `600 ${Math.max(9, Math.round(11 / Math.sqrt(zoomViewport.scale)))}px Inter, system-ui, sans-serif`;
-        ctx.fillStyle = 'rgba(148, 163, 184, 0.65)';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(
-          'GIẾNG TRỜI THÔNG TẦNG (417.87 m²)',
-          0.5 * width,
-          0.532 * height
-        );
+        if (lodConfig.showAtriumText) {
+          ctx.font = `600 ${Math.max(9, Math.round(10.5 / Math.sqrt(zoomViewport.scale)))}px Inter, system-ui, sans-serif`;
+          ctx.fillStyle =
+            labelDensity === 'balanced' && !zoomViewport.isZoomed
+              ? 'rgba(148, 163, 184, 0.38)'
+              : 'rgba(148, 163, 184, 0.55)';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(
+            'GIẾNG TRỜI',
+            0.5 * width,
+            0.532 * height
+          );
+        }
         ctx.restore();
       }
+
+      interface PreparedRoomLabel {
+        roomId: string;
+        anchorScreen: Point2D;
+        screenPolygon: Point2D[];
+        areaM2: number;
+        isSelected: boolean;
+        isZoomTarget: boolean;
+        hasOnlineTelemetry: boolean;
+        style: RoomLabelStyle;
+        shouldPlaceInPass: boolean;
+        shortCode: string;
+        compactText: string;
+        titleLine: string;
+        subLine: string;
+        techWarningText: string | null;
+        priority: number;
+      }
+
+      const preparedLabels: PreparedRoomLabel[] = [];
 
       // 3. Render each room polygon with strict ctx.clip() & area-adaptive Gaussian diffusion
       for (const {
         room,
-        idx,
         preset,
         polygon,
         microZones,
@@ -582,7 +669,7 @@ export function FloorplanCanvas({
           }
         );
 
-        // 4. Draw Architectural Wall Stroke, BTCT Columns, Door & Multi-Scale Label
+        // 4. Draw Architectural Wall Stroke, BTCT Columns & Door inside zoom space
         const isSelected = room.id === selectedRoomId;
         const isZoomTarget = room.id === zoomedRoomId;
         const isZoneHighlighted =
@@ -621,7 +708,10 @@ export function FloorplanCanvas({
         ctx.stroke();
 
         // Render Structural Columns (BTCT) & Door Opening (CUA) when zoomed in or for large halls
-        if (preset?.structuralColumns && (zoomViewport.isZoomed || preset.areaM2 >= 250)) {
+        if (
+          preset?.structuralColumns &&
+          (zoomViewport.isZoomed || preset.areaM2 >= 250)
+        ) {
           for (const colPt of preset.structuralColumns) {
             const colPx = normalizedToPixel(colPt, width, height);
             ctx.beginPath();
@@ -667,132 +757,95 @@ export function FloorplanCanvas({
           }
         }
 
-        // Multi-scale Room Label (Compact Pill for small group rooms < 65m²; Rich Card for large halls >= 65m²)
+        ctx.restore();
+
+        // Collect label metadata for screen-space decluttered pass (drawn AFTER CAD & zoom restore)
         const centroidNorm = computePolygonCentroid(polygon);
-        const centroidPx = normalizedToPixel(centroidNorm, width, height);
+        const anchorScreen = normToScreen(centroidNorm);
+        const screenPolygon = polygon.map(normToScreen);
         const areaM2 =
           preset?.areaM2 ??
           Math.round(Math.abs(computePolygonSignedArea(polygon)) * 4347.2);
         const isSmallGroupRoom = areaM2 < 65;
 
         const codeLabel = preset?.code ?? room.code;
+        const shortCode = codeLabel.replace(/^TQB_/, 'P.');
         const metricLabel = hasOnlineTelemetry
           ? formatLayerMetricValue(primaryValue, layer)
           : 'Offline';
+        const compactText = `${shortCode} · ${metricLabel}`;
 
-        if (isSmallGroupRoom && !isZoomTarget) {
-          // Compact Pill for Floor 5 Small Group Study Rooms (25.97 - 41.47 m²) so 8 rooms never collide
-          const shortCode = codeLabel.replace(/^TQB_/, 'P.');
-          const compactText = `${shortCode} · ${metricLabel}`;
-          ctx.font = 'bold 10px JetBrains Mono, monospace';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
+        const values = idwSamples.map((s) => s.value);
+        const minVal = values.length > 1 ? Math.min(...values) : null;
+        const maxVal = values.length > 1 ? Math.max(...values) : null;
+        const spreadText =
+          minVal !== null &&
+          maxVal !== null &&
+          Math.abs(maxVal - minVal) >= 0.3
+            ? `${minVal.toFixed(1)}–${maxVal.toFixed(1)}`
+            : `${areaM2.toFixed(0)} m²`;
 
-          const pillW = Math.max(54, ctx.measureText(compactText).width + 12);
-          const pillH = 20;
-
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.86)';
-          ctx.strokeStyle = isSelected
-            ? '#38BDF8'
-            : 'rgba(255, 255, 255, 0.28)';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.roundRect(
-            centroidPx.x - pillW / 2,
-            centroidPx.y - pillH / 2,
-            pillW,
-            pillH,
-            5
-          );
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.fillStyle = '#F8FAFC';
-          ctx.fillText(compactText, centroidPx.x, centroidPx.y);
-        } else {
-          // Rich Label for Large Reading / Multimedia / Storage Rooms (showing Room Code, Area, Avg & Min-Max spread)
-          const values = idwSamples.map((s) => s.value);
-          const minVal = values.length > 1 ? Math.min(...values) : null;
-          const maxVal = values.length > 1 ? Math.max(...values) : null;
-          const spreadText =
+        let techWarningText: string | null = null;
+        if (showTechOverlay && (lodConfig.showTechWarning || isSelected)) {
+          const blindspot = computeRoomBlindspotRatio(polygon, idwSamples);
+          if (blindspot.isUnderCovered) {
+            techWarningText = `Vùng mù ${Math.round(blindspot.blindspotRatio * 100)}%`;
+          } else if (
+            layer === 'temperature' &&
             minVal !== null &&
             maxVal !== null &&
-            Math.abs(maxVal - minVal) >= 0.3
-              ? `${minVal.toFixed(1)}–${maxVal.toFixed(1)}`
-              : `${areaM2.toFixed(0)} m²`;
-
-          // Detect local HVAC thermal imbalance for Maintenance Tech Overlay
-          let techWarningText: string | null = null;
-          if (showTechOverlay) {
-            const blindspot = computeRoomBlindspotRatio(polygon, idwSamples);
-            if (blindspot.isUnderCovered) {
-              techWarningText = `⚠ Vùng mù ${Math.round(blindspot.blindspotRatio * 100)}%`;
-            } else if (
-              layer === 'temperature' &&
-              minVal !== null &&
-              maxVal !== null &&
-              maxVal - minVal >= 2.2
-            ) {
-              techWarningText = `⚠ Lệch nhiệt ΔT ${(maxVal - minVal).toFixed(1)}°C`;
-            }
-          }
-
-          ctx.font = 'bold 12px Inter, system-ui, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-
-          const titleLine = `${codeLabel} (${areaM2.toFixed(0)}m²)`;
-          const subLine = `${metricLabel} · [${spreadText}]`;
-
-          const pillWidth =
-            Math.max(
-              ctx.measureText(titleLine).width,
-              ctx.measureText(subLine).width,
-              techWarningText ? ctx.measureText(techWarningText).width : 0
-            ) + 18;
-          const pillHeight = techWarningText ? 48 : 36;
-
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.80)';
-          ctx.strokeStyle = isSelected
-            ? '#38BDF8'
-            : techWarningText
-              ? '#F59E0B'
-              : 'rgba(255, 255, 255, 0.25)';
-          ctx.lineWidth = 1.2 / Math.sqrt(zoomViewport.scale);
-          ctx.beginPath();
-          ctx.roundRect(
-            centroidPx.x - pillWidth / 2,
-            centroidPx.y - pillHeight / 2,
-            pillWidth,
-            pillHeight,
-            6
-          );
-          ctx.fill();
-          ctx.stroke();
-
-          ctx.fillStyle = '#F8FAFC';
-          ctx.fillText(
-            titleLine,
-            centroidPx.x,
-            centroidPx.y - (techWarningText ? 13 : 7)
-          );
-
-          ctx.font = '600 10.5px JetBrains Mono, monospace';
-          ctx.fillStyle = hasOnlineTelemetry ? '#38BDF8' : '#94A3B8';
-          ctx.fillText(
-            subLine,
-            centroidPx.x,
-            centroidPx.y + (techWarningText ? 1 : 8)
-          );
-
-          if (techWarningText) {
-            ctx.font = 'bold 9.5px Inter, system-ui, sans-serif';
-            ctx.fillStyle = '#FBBF24';
-            ctx.fillText(techWarningText, centroidPx.x, centroidPx.y + 15);
+            maxVal - minVal >= 2.2
+          ) {
+            techWarningText = `ΔT ${(maxVal - minVal).toFixed(1)}°C`;
           }
         }
 
-        ctx.restore();
+        const titleLine = codeLabel;
+        const subLine =
+          zoomViewport.isZoomed && spreadText
+            ? `${metricLabel} · ${spreadText}`
+            : metricLabel;
+
+        // Determine effective room label style per LOD matrix
+        let effectiveStyle: RoomLabelStyle = lodConfig.roomLabel;
+        if (zoomViewport.isZoomed) {
+          effectiveStyle = isZoomTarget ? 'rich' : 'code';
+        } else if (
+          effectiveStyle === 'rich' &&
+          isSmallGroupRoom &&
+          !isSelected
+        ) {
+          effectiveStyle = 'pill';
+        }
+
+        const shouldPlaceInPass =
+          isZoomTarget ||
+          isSelected ||
+          areaM2 >= lodConfig.hideSmallRoomsUnderM2;
+
+        const priority = isZoomTarget
+          ? 1_000_000
+          : isSelected
+            ? 500_000
+            : areaM2;
+
+        preparedLabels.push({
+          roomId: room.id,
+          anchorScreen,
+          screenPolygon,
+          areaM2,
+          isSelected,
+          isZoomTarget,
+          hasOnlineTelemetry,
+          style: effectiveStyle,
+          shouldPlaceInPass,
+          shortCode,
+          compactText,
+          titleLine,
+          subLine,
+          techWarningText,
+          priority,
+        });
       }
 
       // 5. Overlay Authentic TQB Architectural CAD Underlay (TUONG, CUA, BTCT, THANG, NOITHAT)
@@ -807,76 +860,267 @@ export function FloorplanCanvas({
         }
       }
 
-      // 6. Render Wayfinding Path (Lộ trình dẫn đường từ Thang máy / Cầu thang gần nhất vào Phòng / Bàn đọc)
-      const activeRoomEntry = enrichedRooms.find(
-        (er) => er.room.id === (zoomedRoomId ?? selectedRoomId)
-      );
-      if ((showWayfinding || zoomViewport.isZoomed) && activeRoomEntry) {
-        const selectedBay = activeRoomEntry.microZones.find(
-          (b) => b.bayId === selectedBayId
-        );
-        const targetPt = selectedBay
-          ? { x: selectedBay.posX, y: selectedBay.posY }
-          : null;
-        const route = computeWayfindingPath(
-          activeRoomEntry.room,
-          targetPt,
-          activeRoomEntry.idx
-        );
+      ctx.restore(); // End zoom camera transform (back to fixed screen-space coordinates)
 
-        if (route && route.waypoints.length >= 2) {
-          ctx.save();
-          ctx.beginPath();
-          route.waypoints.forEach((wp, idx) => {
-            const px = normalizedToPixel(wp, width, height);
-            if (idx === 0) ctx.moveTo(px.x, px.y);
-            else ctx.lineTo(px.x, px.y);
+      // 6. Screen-Space Decluttered Room Labels Pass (Always above CAD underlay, fixed font size)
+      const obstacles: Obstacle[] = [];
+
+      for (const dev of positionedDevices) {
+        const px = normToScreen({ x: dev.posX!, y: dev.posY! });
+        if (px.x < -20 || px.x > width + 20 || px.y < -20 || px.y > height + 20)
+          continue;
+        const isInZoomedRoom =
+          zoomViewport.isZoomed && dev.roomId === zoomedRoomId;
+        const isPin = zoomViewport.isZoomed
+          ? isInZoomedRoom
+          : lodConfig.sensorStyle === 'pin';
+        if (isPin) {
+          obstacles.push({ x: px.x, y: px.y + 8, r: 22 });
+        } else {
+          obstacles.push({
+            x: px.x,
+            y: px.y,
+            r: Math.round(lodConfig.sensorDotSizePx * 0.5) + 4,
           });
-          ctx.setLineDash([8, 5]);
-          ctx.lineWidth = 3 / Math.sqrt(zoomViewport.scale);
-          ctx.strokeStyle = '#38BDF8';
-          ctx.shadowColor = '#38BDF8';
-          ctx.shadowBlur = 8;
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Draw start & target wayfinding markers
-          const startPx = normalizedToPixel(route.waypoints[0], width, height);
-          const endPx = normalizedToPixel(
-            route.waypoints[route.waypoints.length - 1],
-            width,
-            height
-          );
-
-          ctx.beginPath();
-          ctx.arc(startPx.x, startPx.y, 6, 0, Math.PI * 2);
-          ctx.fillStyle = '#10B981';
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(endPx.x, endPx.y, 6, 0, Math.PI * 2);
-          ctx.fillStyle = '#38BDF8';
-          ctx.fill();
-
-          // Distance label along route
-          const midPt = route.waypoints[1];
-          const midPx = normalizedToPixel(midPt, width, height);
-          const distLabel = `🚶 ~${route.distanceMeters}m từ ${route.fromLandmark.shortLabel}`;
-          ctx.font = 'bold 10.5px Inter, system-ui, sans-serif';
-          const dw = ctx.measureText(distLabel).width + 14;
-          ctx.fillStyle = 'rgba(14, 116, 144, 0.92)';
-          ctx.beginPath();
-          ctx.roundRect(midPx.x - dw / 2, midPx.y - 11, dw, 22, 10);
-          ctx.fill();
-          ctx.fillStyle = '#F8FAFC';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(distLabel, midPx.x, midPx.y);
-          ctx.restore();
         }
       }
 
-      ctx.restore(); // End zoom camera transform
+      if (lodConfig.bayStyle !== 'hidden') {
+        for (const { bay } of visibleAnonymousBays) {
+          const px = normToScreen({ x: bay.posX, y: bay.posY });
+          if (px.x < 0 || px.x > width || px.y < 0 || px.y > height) continue;
+          const isPill =
+            lodConfig.bayStyle === 'pill' || bay.bayId === selectedBayId;
+          obstacles.push({
+            x: px.x,
+            y: px.y,
+            r: isPill ? 24 : 9,
+          });
+        }
+      }
+
+      for (const lm of floorLandmarks) {
+        const px = normToScreen(lm.position);
+        if (px.x < 0 || px.x > width || px.y < 0 || px.y > height) continue;
+        obstacles.push({
+          x: px.x,
+          y: px.y,
+          r: lodConfig.showLandmarkText ? 22 : 12,
+        });
+      }
+
+      const measureRoomLabelBox = (
+        item: PreparedRoomLabel,
+        style: RoomLabelStyle
+      ): { width: number; height: number } => {
+        if (style === 'code') {
+          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          return {
+            width: Math.ceil(ctx.measureText(item.shortCode).width + 8),
+            height: 16,
+          };
+        }
+        if (style === 'pill') {
+          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          return {
+            width: Math.max(
+              54,
+              Math.ceil(ctx.measureText(item.compactText).width + 14)
+            ),
+            height: 20,
+          };
+        }
+        ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+        const titleW = ctx.measureText(item.titleLine).width;
+        ctx.font = '600 10.5px JetBrains Mono, monospace';
+        const subW = ctx.measureText(item.subLine).width;
+        let warnW = 0;
+        if (item.techWarningText) {
+          ctx.font = 'bold 9.5px Inter, system-ui, sans-serif';
+          warnW = ctx.measureText(item.techWarningText).width;
+        }
+        return {
+          width: Math.ceil(Math.max(titleW, subW, warnW) + 18),
+          height: item.techWarningText ? 48 : 36,
+        };
+      };
+
+      const drawRoomLabelAt = (
+        item: PreparedRoomLabel,
+        style: RoomLabelStyle,
+        cx: number,
+        cy: number,
+        boxW: number,
+        boxH: number,
+        isHoverCard = false
+      ) => {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        if (style === 'code') {
+          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          ctx.strokeStyle = 'rgba(2, 6, 23, 0.92)';
+          ctx.lineWidth = 3.2;
+          ctx.lineJoin = 'round';
+          ctx.strokeText(item.shortCode, cx, cy);
+          ctx.fillStyle = item.isSelected ? '#38BDF8' : '#E2E8F0';
+          ctx.fillText(item.shortCode, cx, cy);
+          ctx.restore();
+          return;
+        }
+
+        if (style === 'pill') {
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+          ctx.strokeStyle = item.isSelected
+            ? '#38BDF8'
+            : 'rgba(255, 255, 255, 0.28)';
+          ctx.lineWidth = item.isSelected ? 1.5 : 1;
+          ctx.beginPath();
+          ctx.roundRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH, 6);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          ctx.fillStyle = '#F8FAFC';
+          ctx.fillText(item.compactText, cx, cy);
+          ctx.restore();
+          return;
+        }
+
+        // 'rich' card
+        if (isHoverCard) {
+          ctx.shadowColor = 'rgba(2, 6, 23, 0.75)';
+          ctx.shadowBlur = 12;
+        }
+        ctx.fillStyle = isHoverCard
+          ? 'rgba(15, 23, 42, 0.96)'
+          : 'rgba(15, 23, 42, 0.88)';
+        ctx.strokeStyle =
+          isHoverCard || item.isSelected || item.isZoomTarget
+            ? '#38BDF8'
+            : item.techWarningText
+              ? '#F59E0B'
+              : 'rgba(255, 255, 255, 0.28)';
+        ctx.lineWidth =
+          isHoverCard || item.isSelected || item.isZoomTarget ? 1.6 : 1.2;
+        ctx.beginPath();
+        ctx.roundRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH, 6);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.stroke();
+
+        ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+        ctx.fillStyle = '#F8FAFC';
+        ctx.fillText(
+          item.titleLine,
+          cx,
+          cy - (item.techWarningText ? 13 : 7)
+        );
+
+        ctx.font = '600 10.5px JetBrains Mono, monospace';
+        ctx.fillStyle = item.hasOnlineTelemetry ? '#38BDF8' : '#94A3B8';
+        ctx.fillText(
+          item.subLine,
+          cx,
+          cy + (item.techWarningText ? 1 : 8)
+        );
+
+        if (item.techWarningText) {
+          ctx.font = 'bold 9.5px Inter, system-ui, sans-serif';
+          ctx.fillStyle = '#FBBF24';
+          ctx.fillText(item.techWarningText, cx, cy + 15);
+        }
+        ctx.restore();
+      };
+
+      const activeCandidates = preparedLabels.filter(
+        (item) => item.shouldPlaceInPass
+      );
+      const labelRequests: LabelRequest[] = activeCandidates.map((item) => {
+        const dims = measureRoomLabelBox(item, item.style);
+        return {
+          id: item.roomId,
+          anchor: item.anchorScreen,
+          width: dims.width,
+          height: dims.height,
+          polygon: item.screenPolygon,
+          priority: item.priority,
+        };
+      });
+
+      const placements = computeLabelPlacements(labelRequests, obstacles, {
+        width,
+        height,
+      });
+
+      for (let i = 0; i < activeCandidates.length; i++) {
+        const item = activeCandidates[i];
+        const placement = placements[i];
+        const req = labelRequests[i];
+        if (!placement || !placement.visible) continue;
+        // Skip normal draw if this room is currently hovered and will get a rich hover card
+        if (
+          hoveredRoomId === item.roomId &&
+          !hoveredDeviceId &&
+          !hoveredBayId &&
+          item.style !== 'rich'
+        ) {
+          continue;
+        }
+        drawRoomLabelAt(
+          item,
+          item.style,
+          placement.x,
+          placement.y,
+          req.width,
+          req.height,
+          false
+        );
+      }
+
+      // Draw Hovered Room Rich Card when label was hidden or simplified ('code' / 'pill')
+      if (hoveredRoomId && !hoveredDeviceId && !hoveredBayId) {
+        const hoveredItem = preparedLabels.find(
+          (item) => item.roomId === hoveredRoomId
+        );
+        if (hoveredItem) {
+          const placedIdx = activeCandidates.findIndex(
+            (c) => c.roomId === hoveredRoomId
+          );
+          const wasRichAndVisible =
+            placedIdx >= 0 &&
+            activeCandidates[placedIdx].style === 'rich' &&
+            placements[placedIdx]?.visible;
+          if (!wasRichAndVisible) {
+            const richDims = measureRoomLabelBox(hoveredItem, 'rich');
+            const clampedX = Math.max(
+              richDims.width * 0.5 + 8,
+              Math.min(
+                width - richDims.width * 0.5 - 8,
+                hoveredItem.anchorScreen.x
+              )
+            );
+            const clampedY = Math.max(
+              richDims.height * 0.5 + 8,
+              Math.min(
+                height - richDims.height * 0.5 - 8,
+                hoveredItem.anchorScreen.y
+              )
+            );
+            drawRoomLabelAt(
+              hoveredItem,
+              'rich',
+              clampedX,
+              clampedY,
+              richDims.width,
+              richDims.height,
+              true
+            );
+          }
+        }
+      }
+
       ctx.restore(); // End HiDPI scale
 
       if (isTransitioning) {
@@ -894,13 +1138,20 @@ export function FloorplanCanvas({
     canvasSize,
     enrichedRooms,
     devices,
+    positionedDevices,
+    visibleAnonymousBays,
+    floorLandmarks,
     roomTelemetryMap,
     deviceTelemetryMap,
     layer,
     selectedRoomId,
     zoomedRoomId,
     selectedBayId,
-    showWayfinding,
+    hoveredRoomId,
+    hoveredDeviceId,
+    hoveredBayId,
+    labelDensity,
+    lodConfig,
     showBlindspots,
     showTechOverlay,
     showCadUnderlay,
@@ -909,6 +1160,38 @@ export function FloorplanCanvas({
     zoomViewport,
     highlightedZoneIds,
   ]);
+
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const rawPx: Point2D = {
+      x: (e.clientX - rect.left - zoomViewport.tx) / zoomViewport.scale,
+      y: (e.clientY - rect.top - zoomViewport.ty) / zoomViewport.scale,
+    };
+    const normPt = pixelToNormalized(
+      rawPx,
+      canvasSize.width,
+      canvasSize.height
+    );
+
+    let foundRoomId: string | null = null;
+    for (const { room, polygon } of enrichedRooms) {
+      if (isPointInPolygon(normPt, polygon)) {
+        foundRoomId = room.id;
+        break;
+      }
+    }
+    if (foundRoomId !== hoveredRoomId) {
+      setHoveredRoomId(foundRoomId);
+    }
+  };
+
+  const handleCanvasMouseLeave = () => {
+    if (hoveredRoomId !== null) {
+      setHoveredRoomId(null);
+    }
+  };
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -955,60 +1238,18 @@ export function FloorplanCanvas({
     }
   };
 
-  // Devices that have normalized coordinates on this floor (Role ADMIN / LIBRARIAN / MAINTENANCE)
-  const positionedDevices = useMemo(
-    () =>
-      devices.filter(
-        (d) =>
-          d.roomId &&
-          roomById.has(d.roomId) &&
-          typeof d.posX === 'number' &&
-          typeof d.posY === 'number'
-      ),
-    [devices, roomById]
-  );
-
-  // Wayfinding architectural landmarks on this floor (Stairs, Elevators, WC, Gate)
-  const floorLandmarks = useMemo(
-    () =>
-      getFloorLandmarks(activeFloor).filter((lm) => lm.kind !== 'ATRIUM'),
-    [activeFloor]
-  );
-
-  // Anonymous Reading Bays to display as interactive pills when hardware devices are hidden (FE-VIZ-09) or when zoomed into a room
-  const visibleAnonymousBays = useMemo(() => {
-    const items: Array<{ bay: AnonymousMicroZone; room: RoomResponse }> = [];
-    for (const { room, preset, microZones } of enrichedRooms) {
-      const roomHasDevices = positionedDevices.some(
-        (d) => d.roomId === room.id
-      );
-      const isFocused = room.id === zoomedRoomId || room.id === selectedRoomId;
-      const isLargeRoom = (preset?.areaM2 ?? 100) >= 120;
-
-      // Show reading bays if:
-      // 1) User has no device visibility (USER/VIEWER role) and room is large or selected
-      // 2) Room is zoomed in (Level 2 Focus) and has no raw device pin at the exact same spot
-      if (!roomHasDevices && (isLargeRoom || isFocused)) {
-        for (const bay of microZones) {
-          items.push({ bay, room });
-        }
-      }
-    }
-    return items;
-  }, [enrichedRooms, positionedDevices, zoomedRoomId, selectedRoomId]);
-
-  const landmarkIcon = (kind: TqbLandmark['kind']) => {
+  const landmarkCode = (kind: TqbLandmark['kind']) => {
     switch (kind) {
       case 'ELEVATOR':
-        return '🛗';
+        return 'TM';
       case 'STAIRS':
-        return '🪜';
+        return 'TH';
       case 'WC':
-        return '🚻';
+        return 'WC';
       case 'ENTRANCE':
-        return '🚪';
+        return 'CỬA';
       default:
-        return '📍';
+        return 'MỐC';
     }
   };
 
@@ -1021,64 +1262,101 @@ export function FloorplanCanvas({
       ref={containerRef}
       className="relative w-full overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-inner"
     >
-      {/* Top Floating Controls: CAD Layer Toggle & 2-Level Zoom Controls */}
-      <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2">
+      {/* Top Floating Controls: CAD Layer Toggle, Display Density Segmented Control & 2-Level Zoom Controls */}
+      <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1.5">
         <button
           type="button"
           onClick={() => setShowCadUnderlay((v) => !v)}
-          className={`rounded-lg border px-2.5 py-1 text-xs font-medium shadow-md backdrop-blur transition-colors ${
+          aria-pressed={showCadUnderlay}
+          className={`rounded-lg border px-2.5 py-1 text-2xs font-semibold shadow-sm backdrop-blur transition-colors ${
             showCadUnderlay
               ? 'border-sky-500/60 bg-slate-900/90 text-sky-300'
               : 'border-slate-700 bg-slate-900/75 text-slate-400 hover:text-slate-200'
           }`}
-          title="Bật/tắt lớp bản vẽ kỹ thuật AutoCAD Tạ Quang Bửu (Tường, Cửa, Cột BTCT, Cầu thang)"
+          title="Bật/tắt lớp bản vẽ kỹ thuật AutoCAD"
         >
-          📐 Nền CAD TQB 1:100 ({showCadUnderlay ? 'Bật' : 'Tắt'})
+          Nền CAD
         </button>
+
+        {/* Display Density Segmented Control (Tinh gọn | Cân bằng | Chi tiết) */}
+        <div
+          role="group"
+          aria-label="Mật độ hiển thị nhãn bản đồ"
+          className="flex items-center rounded-lg border border-slate-700/90 bg-slate-900/90 p-0.5 text-xs shadow-sm backdrop-blur"
+        >
+          {(
+            [
+              { key: 'clean', label: 'Tinh gọn' },
+              { key: 'balanced', label: 'Cân bằng' },
+              { key: 'detailed', label: 'Chi tiết' },
+            ] as const
+          ).map((opt) => {
+            const active = labelDensity === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setLabelDensity(opt.key)}
+                className={`rounded-md px-2 py-0.5 text-2xs font-semibold transition-colors ${
+                  active
+                    ? 'bg-sky-500 text-slate-950 shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
 
         {zoomViewport.isZoomed ? (
           <button
             type="button"
             onClick={() => setZoomedRoomId(null)}
-            className="flex items-center gap-1.5 rounded-lg border border-amber-400/70 bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-200 shadow-md backdrop-blur hover:bg-amber-500/30"
+            className="rounded-lg border border-amber-400/60 bg-slate-900/90 px-2.5 py-1 text-2xs font-semibold text-amber-300 shadow-sm backdrop-blur hover:bg-slate-800"
           >
-            <span>🗺️ Thu nhỏ về Toàn mặt bằng Tầng {activeFloor}</span>
+            Thu nhỏ
           </button>
         ) : (
           selectedRoomObj && (
             <button
               type="button"
               onClick={() => setZoomedRoomId(selectedRoomObj.id)}
-              className="flex items-center gap-1.5 rounded-lg border border-sky-400/60 bg-sky-500/20 px-3 py-1 text-xs font-semibold text-sky-200 shadow-md backdrop-blur hover:bg-sky-500/30"
+              className="rounded-lg border border-sky-400/60 bg-slate-900/90 px-2.5 py-1 text-2xs font-semibold text-sky-300 shadow-sm backdrop-blur hover:bg-slate-800"
             >
-              <span>🔍 Phóng to Chi tiết {selectedRoomObj.code} (Cấp 2)</span>
+              Phóng to {selectedRoomObj.code}
             </button>
           )
         )}
       </div>
 
       {/* Compass & Scale Badge (Top Right) */}
-      <div className="pointer-events-none absolute right-3 top-3 z-20 hidden items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/85 px-2.5 py-1 text-2xs font-mono text-slate-300 backdrop-blur sm:flex">
-        <span className="text-sky-400 font-bold">⬆ BẮC</span>
+      <div className="pointer-events-none absolute right-3 top-3 z-20 hidden items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/85 px-2.5 py-1 text-2xs font-mono text-slate-400 backdrop-blur sm:flex">
+        <span className="font-semibold text-slate-200">BẮC</span>
         <span>·</span>
-        <span>Khung thực 76.0m × 57.2m</span>
-        <span>·</span>
-        <span>
-          {zoomViewport.isZoomed
-            ? `Zoom ${zoomViewport.scale.toFixed(1)}x (Cấp 2)`
-            : 'Toàn tầng (Cấp 1)'}
-        </span>
+        <span>76×57m</span>
+        {zoomViewport.isZoomed && (
+          <>
+            <span>·</span>
+            <span className="text-sky-300">
+              {zoomViewport.scale.toFixed(1)}x
+            </span>
+          </>
+        )}
       </div>
 
       <canvas
         ref={canvasRef}
+        onMouseMove={handleCanvasMouseMove}
+        onMouseLeave={handleCanvasMouseLeave}
         onClick={handleCanvasClick}
         onDoubleClick={handleCanvasDoubleClick}
         className="block cursor-pointer select-none"
         aria-label="Bản đồ không gian mặt bằng và Heatmap 2D Thư viện Tạ Quang Bửu"
       />
 
-      {/* Layer 2A: Architectural Wayfinding Landmarks (Stairs, Elevators, WC, Entrance) */}
+      {/* Layer 2A: Architectural Landmarks (Stairs, Elevators, WC, Entrance) */}
       <div className="pointer-events-none absolute inset-0">
         {floorLandmarks.map((lm) => {
           const px = toScreenPx(lm.position);
@@ -1097,9 +1375,12 @@ export function FloorplanCanvas({
               className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
               title={lm.labelVi}
             >
-              <div className="flex items-center gap-1 rounded-full border border-slate-700/90 bg-slate-900/90 px-1.5 py-0.5 text-2xs font-medium text-slate-300 shadow-sm backdrop-blur">
-                <span aria-hidden="true">{landmarkIcon(lm.kind)}</span>
-                <span className="hidden md:inline">{lm.shortLabel}</span>
+              <div className="flex items-center justify-center rounded border border-slate-700/80 bg-slate-900/85 px-1.5 py-0.5 font-mono text-[10px] font-medium text-slate-400 shadow-xs backdrop-blur">
+                <span>
+                  {lodConfig.showLandmarkText
+                    ? lm.shortLabel
+                    : landmarkCode(lm.kind)}
+                </span>
               </div>
             </div>
           );
@@ -1109,6 +1390,12 @@ export function FloorplanCanvas({
       {/* Layer 2B: Anonymous Reading Bay Micro-zones for USER / VIEWER (FE-VIZ-09 hardware-safe!) */}
       <div className="pointer-events-none absolute inset-0">
         {visibleAnonymousBays.map(({ bay, room }) => {
+          const isSelectedBay = bay.bayId === selectedBayId;
+          const isHoveredBay = bay.bayId === hoveredBayId;
+          if (lodConfig.bayStyle === 'hidden' && !isSelectedBay) {
+            return null;
+          }
+
           const px = toScreenPx({ x: bay.posX, y: bay.posY });
           if (
             px.x < 0 ||
@@ -1120,8 +1407,8 @@ export function FloorplanCanvas({
           }
           const bayVal = bay.metrics[layer];
           const colorCss = getContinuousMetricColorCss(layer, bayVal);
-          const isSelectedBay = bay.bayId === selectedBayId;
-          const isHoveredBay = bay.bayId === hoveredBayId;
+          const showFullPill =
+            lodConfig.bayStyle === 'pill' || isSelectedBay || isHoveredBay;
 
           return (
             <div
@@ -1129,34 +1416,57 @@ export function FloorplanCanvas({
               style={{ left: `${px.x}px`, top: `${px.y}px` }}
               className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
             >
-              <button
-                type="button"
-                onMouseEnter={() => setHoveredBayId(bay.bayId)}
-                onMouseLeave={() => setHoveredBayId(null)}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  onSelectRoom(room);
-                  onSelectBay?.(bay, room);
-                }}
-                aria-label={`Phân khu bàn đọc ${bay.nameVi} (${room.name})`}
-                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-semibold shadow-md transition-transform hover:scale-110 ${
-                  isSelectedBay
-                    ? 'scale-110 border-sky-300 bg-sky-950/95 text-sky-100 ring-2 ring-sky-400'
-                    : 'border-white/40 bg-slate-900/90 text-slate-100'
-                }`}
-                style={{
-                  boxShadow: `0 0 10px ${colorCss}`,
-                }}
-              >
-                <span
-                  className="inline-block h-2 w-2 rounded-full"
-                  style={{ backgroundColor: colorCss }}
+              {showFullPill ? (
+                <button
+                  type="button"
+                  onMouseEnter={() => setHoveredBayId(bay.bayId)}
+                  onMouseLeave={() => setHoveredBayId(null)}
+                  onFocus={() => setHoveredBayId(bay.bayId)}
+                  onBlur={() => setHoveredBayId(null)}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onSelectRoom(room);
+                    onSelectBay?.(bay, room);
+                  }}
+                  aria-label={`Phân khu bàn đọc ${bay.nameVi} (${room.name})`}
+                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-semibold shadow-md transition-transform hover:scale-110 ${
+                    isSelectedBay
+                      ? 'scale-110 border-sky-300 bg-sky-950/95 text-sky-100 ring-2 ring-sky-400'
+                      : 'border-white/40 bg-slate-900/90 text-slate-100'
+                  }`}
+                  style={{
+                    boxShadow: `0 0 10px ${colorCss}`,
+                  }}
+                >
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ backgroundColor: colorCss }}
+                  />
+                  <span>{bay.shortLabel}</span>
+                  <span className="font-mono text-sky-300">
+                    {formatLayerMetricValue(bayVal, layer)}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onMouseEnter={() => setHoveredBayId(bay.bayId)}
+                  onMouseLeave={() => setHoveredBayId(null)}
+                  onFocus={() => setHoveredBayId(bay.bayId)}
+                  onBlur={() => setHoveredBayId(null)}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onSelectRoom(room);
+                    onSelectBay?.(bay, room);
+                  }}
+                  aria-label={`Phân khu bàn đọc ${bay.nameVi} (${room.name})`}
+                  className="flex h-3 w-3 items-center justify-center rounded-full border border-white/85 shadow transition-transform hover:scale-125"
+                  style={{
+                    backgroundColor: colorCss,
+                    boxShadow: `0 0 8px ${colorCss}`,
+                  }}
                 />
-                <span>{bay.shortLabel}</span>
-                <span className="font-mono text-sky-300">
-                  {formatLayerMetricValue(bayVal, layer)}
-                </span>
-              </button>
+              )}
 
               {isHoveredBay && (
                 <div
@@ -1229,6 +1539,19 @@ export function FloorplanCanvas({
                 typeof activeVal === 'number' &&
                 activeVal <= -75.0));
 
+          const isInZoomedRoom =
+            zoomViewport.isZoomed && device.roomId === zoomedRoomId;
+          const usePinStyle = zoomViewport.isZoomed
+            ? isInZoomedRoom
+            : lodConfig.sensorStyle === 'pin';
+          const showBadge = zoomViewport.isZoomed
+            ? isInZoomedRoom
+            : lodConfig.showSensorBadge;
+          const dotSizeClass =
+            labelDensity === 'clean' && !zoomViewport.isZoomed
+              ? 'h-2.5 w-2.5'
+              : 'h-3 w-3';
+
           return (
             <div
               key={device.id}
@@ -1244,41 +1567,74 @@ export function FloorplanCanvas({
                   style={{ backgroundColor: colorHex }}
                 />
               )}
-              <button
-                type="button"
-                onMouseEnter={() => setHoveredDeviceId(device.id)}
-                onMouseLeave={() => setHoveredDeviceId(null)}
-                onFocus={() => setHoveredDeviceId(device.id)}
-                onBlur={() => setHoveredDeviceId(null)}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  if (room) onSelectRoom(room);
-                  onSelectDevice?.(device, room);
-                }}
-                aria-label={`Trạm cảm biến ${device.name} (${device.hardwareId}) - ${
-                  device.online ? 'Trực tuyến' : 'Mất kết nối'
-                }`}
-                className={`relative group flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all hover:scale-125 focus:scale-125 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
-                  device.online
-                    ? 'border-2 border-white shadow-lg'
-                    : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
-                }`}
-                style={
-                  device.online
-                    ? {
-                        backgroundColor: colorHex,
-                        color: '#0F172A',
-                        boxShadow: `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
-                        transition:
-                          'background-color 0.4s ease-out, box-shadow 0.4s ease-out',
-                      }
-                    : undefined
-                }
-              >
-                <span aria-hidden="true">{device.online ? '●' : '✕'}</span>
-              </button>
+              {usePinStyle ? (
+                <button
+                  type="button"
+                  onMouseEnter={() => setHoveredDeviceId(device.id)}
+                  onMouseLeave={() => setHoveredDeviceId(null)}
+                  onFocus={() => setHoveredDeviceId(device.id)}
+                  onBlur={() => setHoveredDeviceId(null)}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    if (room) onSelectRoom(room);
+                    onSelectDevice?.(device, room);
+                  }}
+                  aria-label={`Trạm cảm biến ${device.name} (${device.hardwareId}) - ${
+                    device.online ? 'Trực tuyến' : 'Mất kết nối'
+                  }`}
+                  className={`relative group flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all hover:scale-125 focus:scale-125 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
+                    device.online
+                      ? 'border-2 border-white shadow-lg'
+                      : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
+                  }`}
+                  style={
+                    device.online
+                      ? {
+                          backgroundColor: colorHex,
+                          color: '#0F172A',
+                          boxShadow: `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
+                          transition:
+                            'background-color 0.4s ease-out, box-shadow 0.4s ease-out',
+                        }
+                      : undefined
+                  }
+                >
+                  <span aria-hidden="true">{device.online ? '●' : '✕'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onMouseEnter={() => setHoveredDeviceId(device.id)}
+                  onMouseLeave={() => setHoveredDeviceId(null)}
+                  onFocus={() => setHoveredDeviceId(device.id)}
+                  onBlur={() => setHoveredDeviceId(null)}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    if (room) onSelectRoom(room);
+                    onSelectDevice?.(device, room);
+                  }}
+                  aria-label={`Trạm cảm biến ${device.name} (${device.hardwareId}) - ${
+                    device.online ? 'Trực tuyến' : 'Mất kết nối'
+                  }`}
+                  className={`relative group flex ${dotSizeClass} items-center justify-center rounded-full transition-all hover:scale-150 focus:scale-150 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
+                    device.online
+                      ? 'border border-white/95 shadow'
+                      : 'border border-dashed border-slate-400 bg-slate-800/90 opacity-85'
+                  }`}
+                  style={
+                    device.online
+                      ? {
+                          backgroundColor: colorHex,
+                          boxShadow: `0 0 10px ${colorHex}, 0 1px 3px rgba(0,0,0,0.65)`,
+                          transition:
+                            'background-color 0.4s ease-out, box-shadow 0.4s ease-out',
+                        }
+                      : undefined
+                  }
+                />
+              )}
 
-              {activeVal !== null && (
+              {showBadge && activeVal !== null && (
                 <div
                   className="pointer-events-none mt-1 -translate-x-0 rounded border px-1.5 py-0.5 text-center font-mono text-2xs font-bold shadow-md"
                   style={{
