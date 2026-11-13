@@ -84,7 +84,7 @@ public class RoomController {
                 .build();
     }
 
-    @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
+    @PreAuthorize("hasAuthority('ADMIN')")
     @DeleteMapping("/{id}")
     public ApiResponse<Void> delete(@PathVariable String id) {
         roomService.delete(id);

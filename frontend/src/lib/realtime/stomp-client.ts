@@ -43,6 +43,8 @@ export type RoomTelemetryListener = (data: TelemetryResponse) => void;
 class AiotStompManager {
   private client: Client | null = null;
   private connected = false;
+  private allowPublicKiosk = false;
+  private connectedWithToken = false;
   private tokenGetter: () => string | null = () => null;
   private canSubscribeAlertsGetter: () => boolean = () => false;
 
@@ -60,20 +62,29 @@ class AiotStompManager {
     this.canSubscribeAlertsGetter = canSubscribeAlerts;
   }
 
-  public activate(): void {
+  public activate(allowPublicKiosk = false): void {
     if (typeof window === 'undefined') return;
     const token = this.tokenGetter();
-    if (!token) return;
+    if (!token && !allowPublicKiosk) return;
+
+    this.allowPublicKiosk = allowPublicKiosk;
+    const hasToken = Boolean(token);
 
     if (this.client?.active) {
-      this.client.connectHeaders = {
-        Authorization: `Bearer ${token}`,
-      };
-      if (this.connected) {
-        this.resubscribeAll();
+      if (this.connectedWithToken !== hasToken) {
+        this.deactivate();
+      } else {
+        this.client.connectHeaders = hasToken
+          ? { Authorization: `Bearer ${token}` }
+          : { 'X-Public-Kiosk': 'true' };
+        if (this.connected) {
+          this.resubscribeAll();
+        }
+        return;
       }
-      return;
     }
+
+    this.connectedWithToken = hasToken;
 
     this.client = new Client({
       brokerURL: ENV.WS_URL,
@@ -84,10 +95,17 @@ class AiotStompManager {
         const latestToken = this.tokenGetter();
         if (!this.client) return;
         if (latestToken) {
+          this.connectedWithToken = true;
           this.client.connectHeaders = {
             Authorization: `Bearer ${latestToken}`,
           };
+        } else if (this.allowPublicKiosk) {
+          this.connectedWithToken = false;
+          this.client.connectHeaders = {
+            'X-Public-Kiosk': 'true',
+          };
         } else {
+          this.connectedWithToken = false;
           this.client.connectHeaders = {};
         }
       },
@@ -116,6 +134,8 @@ class AiotStompManager {
     this.alertSub = null;
     this.activeRoomSubs.forEach((sub) => sub.unsubscribe());
     this.activeRoomSubs.clear();
+    this.allowPublicKiosk = false;
+    this.connectedWithToken = false;
     if (this.client) {
       void this.client.deactivate();
       this.client = null;
@@ -196,6 +216,7 @@ class AiotStompManager {
       !this.connected ||
       !this.client ||
       this.alertSub ||
+      !this.tokenGetter() ||
       !this.canSubscribeAlertsGetter()
     ) {
       return;
@@ -214,18 +235,19 @@ class AiotStompManager {
     if (!this.connected || !this.client || this.activeRoomSubs.has(roomId)) {
       return;
     }
-    const sub = this.client.subscribe(
-      `/topic/rooms/${roomId}/telemetry`,
-      (msg: IMessage) => {
-        try {
-          const parsed = JSON.parse(msg.body) as TelemetryResponse;
-          const listeners = this.roomListeners.get(roomId);
-          listeners?.forEach((cb) => cb(parsed));
-        } catch {
-          // Ignore malformed frame
-        }
+    const topic = this.connectedWithToken
+      ? `/topic/rooms/${roomId}/telemetry`
+      : `/topic/public/rooms/${roomId}/telemetry`;
+
+    const sub = this.client.subscribe(topic, (msg: IMessage) => {
+      try {
+        const parsed = JSON.parse(msg.body) as TelemetryResponse;
+        const listeners = this.roomListeners.get(roomId);
+        listeners?.forEach((cb) => cb(parsed));
+      } catch {
+        // Ignore malformed frame
       }
-    );
+    });
     this.activeRoomSubs.set(roomId, sub);
   }
 }

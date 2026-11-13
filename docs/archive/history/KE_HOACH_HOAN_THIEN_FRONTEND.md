@@ -10,7 +10,7 @@
 ## 1. MỤC TIÊU & KIẾN TRÚC TỔNG THỂ
 
 ### 1.1. Mục tiêu Sản phẩm
-Xây dựng ứng dụng Web Dashboard & Public Kiosk hoàn chỉnh cho hệ thống **AIoTLibTQB**, kết nối trực tiếp tới Backend Spring Boot (`/api/v1/**` và WebSocket STOMP `/ws-aiot`), đáp ứng đầy đủ các quy tắc kỹ thuật bắt buộc (`FE-*`) trong [FRONTEND_STANDARD.md](docs/implementation/FRONTEND_STANDARD.md) và đặc tả API trong [FRONTEND_HANDOVER_SPEC.md](docs/implementation/FRONTEND_HANDOVER_SPEC.md).
+Xây dựng ứng dụng Web Dashboard & Public Kiosk hoàn chỉnh cho hệ thống **AIoTLibTQB**, kết nối trực tiếp tới Backend Spring Boot (`/api/v1/**` và WebSocket STOMP `/ws-aiot`), đáp ứng đầy đủ các quy tắc kỹ thuật bắt buộc (`FE-*`) trong [FRONTEND_STANDARD.md](../implementation/FRONTEND_STANDARD.md) và đặc tả API trong [FRONTEND_HANDOVER_SPEC.md](../implementation/FRONTEND_HANDOVER_SPEC.md).
 
 ### 1.2. Công nghệ Chốt (Tech Stack)
 - **Thư mục mã nguồn**: `frontend/` (đặt tại gốc repository `c:\Users\C\Documents\Project\AIoTLibTQB\frontend`).

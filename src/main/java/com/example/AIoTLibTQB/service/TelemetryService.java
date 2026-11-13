@@ -61,6 +61,13 @@ public class TelemetryService {
                 .orElse(null);
     }
 
+    @PreAuthorize("permitAll()")
+    public TelemetryResponse getPublicLatestByRoomId(String roomId) {
+        return telemetryRepository.findTopByMetadataRoomIdOrderByTimestampDesc(roomId)
+                .map(this::toResponse)
+                .orElse(null);
+    }
+
     public List<TelemetryResponse> getHistoryByDeviceId(String deviceId, Instant start, Instant end) {
         checkDeviceAccess(deviceId);
         if (start != null && end != null && start.isAfter(end)) {

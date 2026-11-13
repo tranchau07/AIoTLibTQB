@@ -1,58 +1,54 @@
-# AIoTLibTQB Public Web Access (Phương án 2: Cloudflare Tunnel)
+# AIoTLibTQB Public Web Access (Cloudflare Quick Tunnel)
 
-Công cụ này cho phép phát toàn bộ hệ thống web **AIoTLibTQB** từ máy tính cá nhân ra mạng Internet toàn cầu với kết nối bảo mật **HTTPS / WSS** miễn phí mà **không cần**:
-- Mua tên miền (Domain)
-- Mua Cloud VPS
-- Mở cổng Modem (Port Forwarding / NAT)
-- Đăng ký IP tĩnh
+Công cụ này hợp nhất Backend (`:8080`) và Frontend (`:3000`) qua một cổng duy nhất **`:4000`** (`gateway.js`) rồi mở đường hầm **HTTPS / WSS** tạm thời bằng `cloudflared` để chia sẻ hệ thống ra Internet mà không cần domain hay mở port modem.
 
 ---
 
-## 🛠️ Cách Thức Hoạt Động (Kiến Trúc Unified Gateway)
+## 1. Kiến Trúc Unified Gateway (`gateway.js :4000`)
 
-```
-[Người dùng trên Internet (Điện thoại / Laptop)]
-               |  (Truy cập https://xyz.trycloudflare.com)
-               v
-      [Cloudflare Global Edge Network]
-               |  (Đường hầm mã hóa TLS)
-               v
-  [tools/cloudflared/cloudflared.exe]
-               |  (Chuyển tiếp về Port 4000)
-               v
-   [Local Gateway - gateway.js :4000]
-     ├── /api/v1/*   ──> Spring Boot Backend (:8080)
-     ├── /ws-aiot/*  ──> WebSocket STOMP Server (:8080)
-     └── /*          ──> Next.js Frontend (:3000)
+```text
+[Trình duyệt từ xa] --(HTTPS/WSS)--> [Cloudflare Edge]
+                                           |
+                                     [cloudflared]
+                                           |
+                           [Local Gateway - gateway.js :4000]
+                             ├── /api/*        --> Backend (:8080)
+                             ├── /ws-*         --> WebSocket STOMP (:8080)
+                             ├── /actuator/*   --> Actuator Health (:8080)
+                             └── /*            --> Next.js Frontend (:3000)
 ```
 
 ---
 
-## 🚀 Hướng Dẫn Sử Dụng (1-Click)
+## 2. Điều Kiện Tiên Quyết
 
-### Bước 1: Khởi động các dịch vụ của dự án
-Đảm bảo bạn đã khởi động hệ thống như bình thường:
+1. Đảm bảo Backend (`:8080`) và Frontend (`:3000`) đang chạy (`docker compose up -d` hoặc chạy dev local).
+2. Cài đặt **`cloudflared`**:
+   - **Windows**: Tải `cloudflared-windows-amd64.exe` từ trang phát hành chính thức của Cloudflare, đổi tên thành `cloudflared.exe` và đặt trực tiếp trong `tools/cloudflared/` (hoặc cài qua `winget install Cloudflare.cloudflared`).
+   - **Linux / macOS**: Cài gói `cloudflared` vào `PATH` hệ thống.
+
+---
+
+## 3. Cách Khởi Chạy
+
+### 3.1. Trên Windows (1-Click)
+- Chạy `tools/cloudflared/start-public-web.bat`, hoặc trong PowerShell:
+  ```powershell
+  .\tools\cloudflared\start-public-web.ps1
+  ```
+
+### 3.2. Trên Linux / macOS
+Mở 2 terminal riêng biệt:
 ```bash
-docker compose up -d
-```
-*(Hoặc chạy Backend trên cổng 8080 và Frontend trên cổng 3000)*.
+# Terminal 1: Khởi chạy Unified Gateway trên cổng 4000
+node tools/cloudflared/gateway.js
 
-### Bước 2: Bật đường hầm Cloudflare Tunnel
-Có 2 cách:
-1. **Cách 1 (Chuột)**: Nhấp đúp chuột vào tệp `tools/cloudflared/start-public-web.bat`.
-2. **Cách 2 (Terminal)**: Mở PowerShell và chạy:
-   ```powershell
-   .\tools\cloudflared\start-public-web.ps1
-   ```
-
-### Bước 3: Nhận link truy cập
-Terminal sẽ hiển thị đường link công khai dạng:
-```
-+--------------------------------------------------------------------------------------------+
-|  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |
-|  https://example-random-words.trycloudflare.com                                            |
-+--------------------------------------------------------------------------------------------+
+# Terminal 2: Tạo Cloudflare Quick Tunnel
+cloudflared tunnel --url http://127.0.0.1:4000
 ```
 
-Sao chép đường link `https://*.trycloudflare.com` và gửi cho bất kỳ ai (hoặc mở trên điện thoại) để truy cập hệ thống ngay lập tức!
-Bấm `Ctrl + C` trong cửa sổ lệnh để tắt đường hầm khi không dùng nữa.
+Terminal sẽ in ra đường link công khai dạng `https://<random-words>.trycloudflare.com`. Nhấn `Ctrl + C` để tắt đường hầm khi kết thúc demo.
+
+---
+
+**Tài liệu liên quan**: [Cẩm nang Vận hành & Runbook](../../docs/12-runbook.md)

@@ -59,7 +59,7 @@ public class PublicController {
     private PublicRoomStatusResponse toPublicStatus(Room room) {
         TelemetryResponse tel = null;
         try {
-            tel = telemetryService.getLatestByRoomId(room.getId());
+            tel = telemetryService.getPublicLatestByRoomId(room.getId());
         } catch (Exception ignored) {
         }
 

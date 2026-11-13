@@ -1,13 +1,14 @@
-﻿docs/00-README.md - Mục lục tổng quan, lộ trình đọc theo cấp độ (30 phút, 2 giờ, chuyên sâu) và cẩm nang hướng dẫn khai thác bộ tài liệu kỹ thuật AIoTLibTQB.
-docs/01-overview.md - Bối cảnh bài toán bảo tồn tài liệu quý theo ISO 11799, tối ưu tiện nghi theo ASHRAE 55 và WHO, phạm vi hệ thống và các bên liên quan.
-docs/02-architecture.md - Kiến trúc tổng thể hệ thống, sơ đồ luồng dữ liệu thời gian thực từ ESP32-S3 qua Mosquitto, Spring Boot, MongoDB đến Next.js UI và cơ sở lựa chọn công nghệ.
-docs/03-ingestion-pipeline.md - Đường ống tiếp nhận dữ liệu cảm biến thời gian thực trên Java 21 Virtual Threads, bộ lọc dải vật lý, forward-fill 30s, kẹp timestamp, FSM cảnh báo và Device Watchdog.
-docs/04-lcs-algorithm.md - Thuật toán điểm tiện nghi thư viện LCS theo nguyên lý thùng gỗ Liebig non-linear gating, cấu hình trọng số theo 3 loại phòng, công thức toán học và test case biên.
-docs/05-data-model.md - Thiết kế mô hình dữ liệu MongoDB 8.0, TimeSeries telemetry_records retention 90 ngày, tọa độ không gian 2D và đa giác phòng boundaryPolygon.
-docs/06-security-rbac.md - Kiến trúc an ninh bảo mật JWT HMAC-SHA512, cơ chế xoay vòng Refresh Token, Blacklist TTL trong MongoDB, ma trận 7 vai trò x 14 quyền và phân vùng assignedZones.
-docs/07-api-reference.md - Danh mục đặc tả toàn bộ RESTful API bọc chuẩn ApiResponse<T>, phân nhóm nghiệp vụ, request/response mẫu và từ điển 33 mã lỗi.
-docs/08-frontend.md - Kiến trúc Frontend Next.js 15 App Router, phân định State Zustand vs TanStack React Query, kết nối STOMP Native WebSocket, và bản đồ nhiệt 2D Canvas HiDPI.
-docs/09-firmware-iot.md - Đặc tả IoT Firmware trạm đo ESP32-S3, danh mục 9 thông số cảm biến, chuẩn hóa MQTT JSON payload, chu kỳ phát tin, xác thực BCrypt và bộ giả lập mạch đo.
-docs/10-conventions.md - Quy ước lập trình bắt buộc kèm ví dụ đối chiếu Đúng/Sai về Virtual Threads, TimeSeries Aggregation, Semaphore, tránh synchronized và quản lý Secret.
-docs/11-onboarding-runbook.md - Cẩm nang hướng dẫn cài đặt môi trường, khởi chạy cục bộ từng thành phần hệ thống bằng Docker Compose, Maven, Node.js và xử lý sự cố thường gặp.
-docs/12-glossary.md - Từ điển thuật ngữ kỹ thuật, bảng từ viết tắt và quy chuẩn các đơn vị đo lường trong hệ thống giám sát vi khí hậu & âm học AIoTLibTQB.
+docs/README.md - Cổng điều hướng trung tâm bộ tài liệu kỹ thuật AIoTLibTQB (13 tài liệu chuẩn từ 01 đến 13 và lộ trình đọc theo vai trò).
+docs/01-domain-and-standards.md - Bối cảnh Thư viện Tạ Quang Bửu, tiêu chuẩn ISO 11799 / ASHRAE 55 / WHO / TCVN, 3 RoomType, phạm vi In/Out-of-scope và các bên liên quan.
+docs/02-architecture.md - Sơ đồ kiến trúc C4 5 tầng, Tech Stack khớp pom.xml và package.json, mạng Docker 6 services và ADRs.
+docs/03-lcs-algorithm.md - SSOT thuật toán Library Comfort Score (LCS): 4 thành phần, tái phân bổ trọng số động, phạt phi tuyến Liebig và bảng 5 hạng.
+docs/04-ingestion-and-alerts.md - SSOT pipeline MQTT Virtual Threads 8 bước, Sanitizer 3 lớp (trừ noisePeak), Watchdog 0-query, Alert FSM động, Dual Noise Peak, SOP Catalog và 7 caches/maps.
+docs/05-data-model.md - Kiến trúc MongoDB 8.0: telemetry_records TimeSeries (TTL 90 ngày), 7 Document collections, Indexes, tọa độ 2D, $dateTrunc và Seed Matrix.
+docs/06-security-and-rbac.md - SSOT an ninh 3 mặt phẳng: Dual JWT HS512, RTR, Blacklist TTL, Bucket4j Rate Limit (10/m Auth, 60/m Public), 7 Roles x 14 Permissions, ABAC assignedZones, Mosquitto ACL %u và STOMP ACL.
+docs/07-api-reference.md - Đặc tả 9 REST Controllers (/api/v1/**), Bean Validation thực tế, 3 STOMP WebSocket topics, ApiResponse/PageResponse và 46 ErrorCode.
+docs/08-frontend-architecture.md - Kiến trúc Frontend Next.js 15 App Router (16 routes), Zustand useAuthStore, Single-Flight Refresh, TanStack Query, CapabilityMatrix, STOMP Singleton và Light Mode UI.
+docs/09-spatial-heatmap-2d.md - SSOT bản đồ nhiệt 2D chuẩn AutoCAD 1:100 5 tầng (76.0m x 57.2m, 33 phòng preset), 7 lớp chỉ số, Gaussian RBF + IDW, Blindspots, Zoom 2 cấp, FE-VIZ-09 và LOD nhãn 3 mức.
+docs/10-iot-hardware-and-simulator.md - SSOT phần cứng ESP32-S3 (INMP441, SPS30, SHT30/31, BH1750), MQTT Payloads/LWT, Arduino/PubSubClient mẫu và bộ giả lập Node.js 14 phòng / 23 thiết bị / 10 kịch bản.
+docs/11-conventions.md - Quy chuẩn phát triển Backend (Virtual Threads, TimeSeries, Semaphore, Secrets, ApiResponse/Pagination) và Frontend (HTTP, Single-Flight, STOMP, HiDPI Canvas, A11Y) kèm PR Checklist.
+docs/12-runbook.md - Cẩm nang cài đặt Docker Compose, biến môi trường .env, chạy dev cục bộ, Cloudflare Quick Tunnel (:4000), 4 kịch bản nghiệm thu thực địa và Troubleshooting.
+docs/13-glossary.md - Từ điển thuật ngữ chuyên ngành, từ viết tắt kỹ thuật, đơn vị đo lường vật lý và chuẩn định dạng dữ liệu AIoTLibTQB.

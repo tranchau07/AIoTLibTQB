@@ -2,7 +2,7 @@ import type { ParsedScope } from './scope-parser';
 
 /**
  * Single source of truth for RBAC capability checks (FE-RBAC-03).
- * Mirrors Backend @PreAuthorize expressions in §5.2 of FRONTEND_STANDARD.md.
+ * Mirrors Backend @PreAuthorize expressions documented in docs/06-security-and-rbac.md.
  */
 export interface CapabilityMatrix {
   isAuthenticated: boolean;

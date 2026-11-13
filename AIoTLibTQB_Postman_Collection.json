@@ -18,7 +18,7 @@
     },
     {
       "key": "adminPassword",
-      "value": "admin",
+      "value": "CHANGE_ME_LOCAL_DEV_ADMIN",
       "type": "string"
     },
     {
@@ -75,6 +75,11 @@
       "key": "roomCode",
       "value": "ROOM_101",
       "type": "string"
+    },
+    {
+      "key": "alertId",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -123,8 +128,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "login"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
             }
           }
         },
@@ -166,8 +178,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/refresh",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "refresh"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
             }
           }
         },
@@ -204,8 +223,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/refresh",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "refresh"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
             }
           }
         },
@@ -242,8 +268,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/introspect",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "introspect"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "introspect"
+              ]
             }
           }
         },
@@ -276,8 +309,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/auth/logout",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "logout"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "logout"
+              ]
             }
           }
         }
@@ -320,8 +360,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/users",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users"
+              ]
             }
           }
         },
@@ -359,8 +405,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/users/myInfo",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users", "myInfo"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "myInfo"
+              ]
             }
           }
         },
@@ -394,13 +447,31 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/users?page=0&size=10&sortBy=createdAt&sortDir=desc",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users"
+              ],
               "query": [
-                { "key": "page", "value": "0" },
-                { "key": "size", "value": "10" },
-                { "key": "sortBy", "value": "createdAt" },
-                { "key": "sortDir", "value": "desc" }
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "createdAt"
+                },
+                {
+                  "key": "sortDir",
+                  "value": "desc"
+                }
               ]
             }
           }
@@ -435,8 +506,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users", "{{createdUserId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{createdUserId}}"
+              ]
             }
           }
         },
@@ -479,8 +557,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users", "{{createdUserId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{createdUserId}}"
+              ]
             }
           }
         },
@@ -523,8 +608,16 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}/status",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users", "{{createdUserId}}", "status"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{createdUserId}}",
+                "status"
+              ]
             }
           }
         },
@@ -558,8 +651,70 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/users/{{createdUserId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "users", "{{createdUserId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{createdUserId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2.8 Change My Password (POST /api/v1/users/change-password)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Password changed message returned\", function () {",
+                  "    pm.expect(res.code).to.eql(1000);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"oldPassword\": \"CHANGE_ME_CURRENT_PASSWORD\",\n  \"newPassword\": \"NewStrongPass#2026\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/change-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "change-password"
+              ]
             }
           }
         }
@@ -592,8 +747,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/roles",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "roles"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "roles"
+              ]
             }
           }
         },
@@ -620,8 +781,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/permissions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "permissions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "permissions"
+              ]
             }
           }
         },
@@ -664,8 +831,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/permissions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "permissions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "permissions"
+              ]
             }
           }
         },
@@ -699,8 +872,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/permissions",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "permissions"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "permissions"
+              ]
             }
           }
         },
@@ -743,8 +922,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/roles",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "roles"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "roles"
+              ]
             }
           }
         },
@@ -778,8 +963,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/roles",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "roles"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "roles"
+              ]
             }
           }
         },
@@ -822,8 +1013,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/roles/{{testRoleName}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "roles", "{{testRoleName}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "roles",
+                "{{testRoleName}}"
+              ]
             }
           }
         },
@@ -861,8 +1059,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/permissions/{{testPermissionName}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "permissions", "{{testPermissionName}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "permissions",
+                "{{testPermissionName}}"
+              ]
             }
           }
         },
@@ -896,8 +1101,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/roles/{{testRoleName}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "roles", "{{testRoleName}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "roles",
+                "{{testRoleName}}"
+              ]
             }
           }
         },
@@ -931,8 +1143,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/permissions/{{testPermissionName}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "permissions", "{{testPermissionName}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "permissions",
+                "{{testPermissionName}}"
+              ]
             }
           }
         }
@@ -996,8 +1215,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/register",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "register"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "register"
+              ]
             }
           }
         },
@@ -1040,8 +1266,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/authenticate",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "authenticate"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "authenticate"
+              ]
             }
           }
         },
@@ -1075,8 +1308,16 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}/heartbeat",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "{{deviceId}}", "heartbeat"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{deviceId}}",
+                "heartbeat"
+              ]
             }
           }
         },
@@ -1110,8 +1351,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices"
+              ]
             }
           }
         },
@@ -1145,8 +1392,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{deviceId}}"
+              ]
             }
           }
         },
@@ -1180,8 +1434,16 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/zone/ZONE_A",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "zone", "ZONE_A"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "zone",
+                "ZONE_A"
+              ]
             }
           }
         },
@@ -1224,8 +1486,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{deviceId}}"
+              ]
             }
           }
         },
@@ -1264,8 +1533,16 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}/regenerate-key",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "{{deviceId}}", "regenerate-key"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{deviceId}}",
+                "regenerate-key"
+              ]
             }
           }
         },
@@ -1299,10 +1576,21 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}/status?active=false",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "{{deviceId}}", "status"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{deviceId}}",
+                "status"
+              ],
               "query": [
-                { "key": "active", "value": "false" }
+                {
+                  "key": "active",
+                  "value": "false"
+                }
               ]
             }
           }
@@ -1337,8 +1625,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{deviceId}}"
+              ]
             }
           }
         },
@@ -1376,8 +1671,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/devices/discovered",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "devices", "discovered"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "discovered"
+              ]
             }
           }
         }
@@ -1433,12 +1735,18 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"ROOM_101\",\n  \"name\": \"Phòng đọc Yên tĩnh Tầng 1\",\n  \"floor\": 1,\n  \"capacity\": 60,\n  \"description\": \"Khu vực đọc sách yên tĩnh, trang bị trạm đo âm học và bụi mịn\",\n  \"targetComfortScore\": 85.0,\n  \"boundaryPolygon\": [\n    { \"x\": 0.0, \"y\": 0.0 },\n    { \"x\": 0.85, \"y\": 0.0 },\n    { \"x\": 0.85, \"y\": 0.65 },\n    { \"x\": 0.0, \"y\": 0.65 }\n  ]\n}"
+              "raw": "{\n  \"code\": \"ROOM_101\",\n  \"name\": \"Phòng đọc Yên tĩnh Tầng 1\",\n  \"floor\": 1,\n  \"capacity\": 60,\n  \"description\": \"Khu vực đọc sách yên tĩnh, trang bị trạm đo âm học và bụi mịn\",\n  \"targetComfortScore\": 85,\n  \"boundaryPolygon\": [\n    {\n      \"x\": 0,\n      \"y\": 0\n    },\n    {\n      \"x\": 0.85,\n      \"y\": 0\n    },\n    {\n      \"x\": 0.85,\n      \"y\": 0.65\n    },\n    {\n      \"x\": 0,\n      \"y\": 0.65\n    }\n  ],\n  \"type\": \"STUDY_ROOM\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms"
+              ]
             }
           }
         },
@@ -1477,8 +1785,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms"
+              ]
             }
           }
         },
@@ -1520,8 +1834,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms?floor=1",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms"
+              ],
               "query": [
                 {
                   "key": "floor",
@@ -1565,8 +1885,15 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms/{{roomId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms", "{{roomId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms",
+                "{{roomId}}"
+              ]
             }
           }
         },
@@ -1604,8 +1931,16 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms/code/{{roomCode}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms", "code", "{{roomCode}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms",
+                "code",
+                "{{roomCode}}"
+              ]
             }
           }
         },
@@ -1653,8 +1988,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms/{{roomId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms", "{{roomId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms",
+                "{{roomId}}"
+              ]
             }
           }
         },
@@ -1688,8 +2030,72 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/rooms/{{roomId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "rooms", "{{roomId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms",
+                "{{roomId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "5.8 Update Room Thresholds (Cấu hình ngưỡng cảnh báo theo phòng)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Thresholds updated with noisePeakImmediate\", function () {",
+                  "    pm.expect(res.result.thresholds).to.be.an('object');",
+                  "    pm.expect(res.result.thresholds.noisePeakImmediate).to.eql(85.0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"noiseAvgMax\": 60,\n  \"noisePeakMax\": 72,\n  \"noisePeakImmediate\": 85,\n  \"tempMin\": 20,\n  \"tempMax\": 26,\n  \"humidityMin\": 40,\n  \"humidityMax\": 65,\n  \"pm25Max\": 35\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rooms/{{roomId}}/thresholds",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "rooms",
+                "{{roomId}}",
+                "thresholds"
+              ]
             }
           }
         }
@@ -1729,8 +2135,17 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/telemetry/device/{{deviceId}}/latest",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "telemetry", "device", "{{deviceId}}", "latest"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "telemetry",
+                "device",
+                "{{deviceId}}",
+                "latest"
+              ]
             }
           }
         },
@@ -1764,8 +2179,17 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/telemetry/room/{{roomId}}/latest",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "telemetry", "room", "{{roomId}}", "latest"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "telemetry",
+                "room",
+                "{{roomId}}",
+                "latest"
+              ]
             }
           }
         },
@@ -1803,8 +2227,16 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/telemetry/device/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "telemetry", "device", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "telemetry",
+                "device",
+                "{{deviceId}}"
+              ]
             }
           }
         },
@@ -1842,8 +2274,119 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/telemetry/room/{{roomId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "telemetry", "room", "{{roomId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "telemetry",
+                "room",
+                "{{roomId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "6.5 Get Room Buckets ($dateTrunc Downsampling)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Bucket response includes dataPoints array\", function () {",
+                  "    pm.expect(res.result).to.be.an('object');",
+                  "    pm.expect(res.result.dataPoints).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/telemetry/room/{{roomId}}/buckets?interval=1h",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "telemetry",
+                "room",
+                "{{roomId}}",
+                "buckets"
+              ],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "1h"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "6.6 Get Overview Summary (KPI toàn thư viện từ Cache)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Summary contains totalRooms and averageComfortScore\", function () {",
+                  "    pm.expect(res.result).to.have.property('totalRooms');",
+                  "    pm.expect(res.result).to.have.property('averageComfortScore');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/telemetry/overview/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "telemetry",
+                "overview",
+                "summary"
+              ]
             }
           }
         }
@@ -1881,8 +2424,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/actuator/health",
-              "host": ["{{baseUrl}}"],
-              "path": ["actuator", "health"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
             }
           }
         },
@@ -1916,8 +2464,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/actuator/health",
-              "host": ["{{baseUrl}}"],
-              "path": ["actuator", "health"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
             }
           }
         },
@@ -1944,8 +2497,323 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/actuator/info",
-              "host": ["{{baseUrl}}"],
-              "path": ["actuator", "info"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "info"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "08. Alert Management (/api/v1/alerts)",
+      "item": [
+        {
+          "name": "8.1 Get Alerts (Paginated & Sort by Severity)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Paginated alert content is an array\", function () {",
+                  "    pm.expect(res.result).to.be.an('object');",
+                  "    pm.expect(res.result.content).to.be.an('array');",
+                  "});",
+                  "if (res.result && Array.isArray(res.result.content) && res.result.content.length > 0) {",
+                  "    pm.collectionVariables.set('alertId', res.result.content[0].id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts?page=0&size=10&sortBy=severity&direction=DESC",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                },
+                {
+                  "key": "sortBy",
+                  "value": "severity"
+                },
+                {
+                  "key": "direction",
+                  "value": "DESC"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.2 Get Unread FIRING Alerts Count",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Unread count is a non-negative number\", function () {",
+                  "    pm.expect(res.result).to.be.a('number');",
+                  "    pm.expect(res.result).to.be.at.least(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/unread-count",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "unread-count"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.3 Acknowledge Alert",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Alert status transitioned to ACKNOWLEDGED\", function () {",
+                  "    pm.expect(res.result.status).to.eql('ACKNOWLEDGED');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/{{alertId}}/acknowledge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "{{alertId}}",
+                "acknowledge"
+              ]
+            }
+          }
+        },
+        {
+          "name": "8.4 Resolve Alert",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Alert status transitioned to RESOLVED\", function () {",
+                  "    pm.expect(res.result.status).to.eql('RESOLVED');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/alerts/{{alertId}}/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "alerts",
+                "{{alertId}}",
+                "resolve"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "09. Public Kiosk Gateway (/api/v1/public)",
+      "item": [
+        {
+          "name": "9.1 Get Public Rooms by Floor (Anonymous Kiosk)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Public rooms list does not expose deviceId or hardwareId\", function () {",
+                  "    pm.expect(res.result).to.be.an('array');",
+                  "    if (res.result.length > 0) {",
+                  "        pm.expect(res.result[0]).to.not.have.property('deviceId');",
+                  "        pm.expect(res.result[0]).to.not.have.property('hardwareId');",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/public/rooms?floor=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "public",
+                "rooms"
+              ],
+              "query": [
+                {
+                  "key": "floor",
+                  "value": "3"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "9.2 Get Public Room Latest Telemetry (Anonymous Kiosk)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var res = pm.response.json();",
+                  "pm.test(\"Public room latest does not leak internal hardware metadata\", function () {",
+                  "    pm.expect(res.result.id).to.eql(pm.collectionVariables.get('roomId'));",
+                  "    pm.expect(res.result).to.not.have.property('deviceId');",
+                  "    pm.expect(res.result).to.not.have.property('hardwareId');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/public/rooms/{{roomId}}/latest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "public",
+                "rooms",
+                "{{roomId}}",
+                "latest"
+              ]
             }
           }
         }

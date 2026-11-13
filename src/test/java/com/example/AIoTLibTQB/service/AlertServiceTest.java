@@ -540,4 +540,46 @@ class AlertServiceTest {
         assertThat(alert.getResolvedBy()).isEqualTo("librarian_lan");
         verify(alertRepository, times(1)).save(alert);
     }
+
+    @Test
+    @DisplayName("rehydrateActiveAlerts() - Khôi phục đúng khóa metricType cho PM2_5/NOISE_AVG và tự đóng khi phục hồi")
+    void rehydrateActiveAlerts_restoresMetricTypeAndAutoResolvesAfterRestart() {
+        Alert pm25Alert = Alert.builder()
+                .id("alert-pm25-restart")
+                .deviceId("dev-1")
+                .hardwareId("HW-1")
+                .roomId("room-1")
+                .type(AlertType.AIR_UNHEALTHY)
+                .severity(AlertSeverity.HIGH)
+                .severityRank(3)
+                .status(AlertStatus.FIRING)
+                .currentValue(62.0)
+                .threshold(50.0)
+                .message("PM2.5 particulate level (62.0 µg/m³) exceeded threshold (50.0 µg/m³)")
+                .recommendedAction("Kiểm tra lọc không khí")
+                .startedAt(mutableClock.instant().minusSeconds(120))
+                .build();
+
+        when(alertRepository.findAll()).thenReturn(List.of(pm25Alert));
+        when(alertRepository.findByStatusIn(List.of(AlertStatus.FIRING, AlertStatus.ACKNOWLEDGED)))
+                .thenReturn(List.of(pm25Alert));
+        when(alertRepository.findById("alert-pm25-restart")).thenReturn(Optional.of(pm25Alert));
+        when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        alertRuleEngine.rehydrateActiveAlerts();
+
+        assertThat(alertRuleEngine.getFsmMap()).containsKey("dev-1:PM2_5");
+        assertThat(alertRuleEngine.getFsmMap().get("dev-1:PM2_5").getMetricType()).isEqualTo("PM2_5");
+
+        TelemetryPayload.TelemetryData cleanAir = TelemetryPayload.TelemetryData.builder()
+                .airQuality(TelemetryPayload.AirQualityData.builder().pm2_5(12.0).build())
+                .build();
+        alertRuleEngine.evaluateTelemetry("dev-1", "HW-1", "room-1", cleanAir);
+        mutableClock.advance(Duration.ofSeconds(61));
+        alertRuleEngine.evaluateTelemetry("dev-1", "HW-1", "room-1", cleanAir);
+
+        assertThat(alertRuleEngine.getFsmMap()).doesNotContainKey("dev-1:PM2_5");
+        assertThat(pm25Alert.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+        assertThat(pm25Alert.getResolvedBy()).isEqualTo("SYSTEM");
+    }
 }

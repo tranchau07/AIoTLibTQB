@@ -63,10 +63,12 @@ class PublicControllerTest {
                 .build();
 
         when(roomRepository.findByFloor(3)).thenReturn(List.of(room));
-        when(telemetryService.getLatestByRoomId("room-301")).thenReturn(tel);
+        when(telemetryService.getPublicLatestByRoomId("room-301")).thenReturn(tel);
 
         ApiResponse<List<PublicRoomStatusResponse>> response = publicController.getPublicRooms(3);
         assertThat(response.getResult()).hasSize(1);
+        assertThat(response.getResult().get(0).getComfortScore()).isNotNull();
+        assertThat(response.getResult().get(0).getComfortScore().getOverall()).isEqualTo(88.0);
 
         ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
         String json = mapper.writeValueAsString(response);
@@ -76,5 +78,33 @@ class PublicControllerTest {
         assertThat(json).doesNotContain("hardwareId");
         assertThat(json).doesNotContain("SECRET_DEV_ID_999");
         assertThat(json).doesNotContain("SECRET_HW_ESP32_999");
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/public/rooms/{id}/latest trả về telemetry ẩn danh qua getPublicLatestByRoomId")
+    void getPublicRoomLatest_returnsAnonymizedTelemetry() {
+        Room room = Room.builder()
+                .id("room-301")
+                .code("TQB_301")
+                .name("Phòng Multimedia 301")
+                .floor(3)
+                .capacity(120)
+                .type(RoomType.STUDY_ROOM)
+                .build();
+
+        TelemetryResponse tel = TelemetryResponse.builder()
+                .id("tel-1")
+                .timestamp(Instant.parse("2026-11-12T10:00:00Z"))
+                .environment(EnvironmentMetrics.builder().temperature(23.5).humidity(52.0).lux(430.0).build())
+                .comfortScore(ComfortScoreRecord.builder().overall(92.0).grade("Platinum").build())
+                .build();
+
+        when(roomRepository.findById("room-301")).thenReturn(java.util.Optional.of(room));
+        when(telemetryService.getPublicLatestByRoomId("room-301")).thenReturn(tel);
+
+        ApiResponse<PublicRoomStatusResponse> response = publicController.getPublicRoomLatest("room-301");
+        assertThat(response.getResult().getCode()).isEqualTo("TQB_301");
+        assertThat(response.getResult().getComfortScore().getGrade()).isEqualTo("Platinum");
+        assertThat(response.getResult().getEnvironment().getTemperature()).isEqualTo(23.5);
     }
 }

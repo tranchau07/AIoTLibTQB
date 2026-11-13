@@ -126,7 +126,7 @@ public class AlertRuleEngine {
                             ? alert.getDeviceId()
                             : (alert.getRoomId() != null && !alert.getRoomId().isBlank() ? alert.getRoomId() : alert.getHardwareId());
                     if (targetId == null) continue;
-                    String metricType = alert.getType() != null ? alert.getType().name() : "UNKNOWN";
+                    String metricType = resolveMetricType(alert);
                     String key = targetId + ":" + metricType;
 
                     FsmState state = new FsmState();
@@ -151,8 +151,40 @@ public class AlertRuleEngine {
         }
     }
 
+    static String resolveMetricType(Alert alert) {
+        if (alert == null) return "UNKNOWN";
+        if (alert.getMetricType() != null && !alert.getMetricType().isBlank()) {
+            return alert.getMetricType();
+        }
+        AlertType type = alert.getType();
+        if (type == null) return "UNKNOWN";
+        if (type == AlertType.DEVICE_OFFLINE) {
+            return "DEVICE_OFFLINE";
+        }
+        String msg = alert.getMessage() != null ? alert.getMessage() : "";
+        if (type == AlertType.NOISE_EXCEEDED) {
+            if (msg.contains("Peak noise")) {
+                return "NOISE_PEAK";
+            }
+            return "NOISE_AVG";
+        }
+        if (type == AlertType.AIR_UNHEALTHY) {
+            if (msg.contains("PM2.5")) {
+                return "PM2_5";
+            }
+            if (msg.contains("exceeded max threshold")) {
+                return "HUMIDITY_HIGH";
+            }
+            if (msg.contains("dropped below min threshold")) {
+                return "HUMIDITY_LOW";
+            }
+            return "TEMPERATURE";
+        }
+        return type.name();
+    }
+
     /**
-     * Idempotent startup migration (M3): Bổ sung severity=MEDIUM, severityRank và recommendedAction cho bản ghi cũ.
+     * Idempotent startup migration (M3): Bổ sung severity=MEDIUM, severityRank, metricType và recommendedAction cho bản ghi cũ.
      */
     public int migrateLegacyAlertsSeverity() {
         try {
@@ -172,9 +204,13 @@ public class AlertRuleEngine {
                     alert.setSeverityRank(expectedRank);
                     changed = true;
                 }
+                if (alert.getMetricType() == null || alert.getMetricType().isBlank()) {
+                    alert.setMetricType(resolveMetricType(alert));
+                    changed = true;
+                }
                 if (alert.getRecommendedAction() == null || alert.getRecommendedAction().isBlank()) {
                     alert.setRecommendedAction(AlertSopCatalog.resolveSop(
-                            alert.getType() != null ? alert.getType().name() : "",
+                            alert.getMetricType() != null ? alert.getMetricType() : "",
                             alert.getType(),
                             RoomType.STUDY_ROOM));
                     changed = true;
@@ -185,7 +221,7 @@ public class AlertRuleEngine {
                 }
             }
             if (updatedCount > 0) {
-                log.info("Migrated {} legacy alert(s) with default severity/severityRank/SOP", updatedCount);
+                log.info("Migrated {} legacy alert(s) with default severity/severityRank/metricType/SOP", updatedCount);
             }
             return updatedCount;
         } catch (Exception e) {
@@ -376,6 +412,7 @@ public class AlertRuleEngine {
                                 .hardwareId(hardwareId)
                                 .roomId(roomId)
                                 .type(alertType)
+                                .metricType(metricType)
                                 .severity(severity)
                                 .severityRank(AlertSeverity.rankOf(severity))
                                 .status(AlertStatus.FIRING)
@@ -422,6 +459,7 @@ public class AlertRuleEngine {
                                 .hardwareId(hardwareId)
                                 .roomId(roomId)
                                 .type(alertType)
+                                .metricType(metricType)
                                 .severity(severity)
                                 .severityRank(AlertSeverity.rankOf(severity))
                                 .status(AlertStatus.FIRING)
@@ -523,6 +561,7 @@ public class AlertRuleEngine {
                     .hardwareId(hardwareId)
                     .roomId(roomId)
                     .type(AlertType.DEVICE_OFFLINE)
+                    .metricType("DEVICE_OFFLINE")
                     .severity(AlertSeverity.HIGH)
                     .severityRank(AlertSeverity.rankOf(AlertSeverity.HIGH))
                     .status(AlertStatus.FIRING)

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import {
   getGradeStyle,
+  resolveGradeFromScore,
   type HeatmapLayerMetric,
 } from '@/config/thresholds';
 import {
@@ -23,6 +24,7 @@ import {
 import { FloorplanCanvas } from '@/features/floorplan/components/FloorplanCanvas';
 import { UI_TEXT_VI } from '@/messages/vi';
 import { formatMetrics } from '@/lib/format/metrics';
+import { stompManager } from '@/lib/realtime/stomp-client';
 import {
   useRoomTelemetryStream,
   useStompConnectionState,
@@ -93,6 +95,16 @@ export default function KioskLobbyPage() {
 
   const hasSession = Boolean(accessToken || refreshToken);
 
+  // Activate anonymous Kiosk STOMP mode (/topic/public/rooms/{id}/telemetry) when unauthenticated
+  useEffect(() => {
+    if (hydrated && !hasSession) {
+      stompManager.activate(true);
+      return () => {
+        stompManager.deactivate();
+      };
+    }
+  }, [hydrated, hasSession]);
+
   const summaryQuery = useOverviewSummaryQuery(hasSession, 10000);
   const roomsQuery = useRoomsQuery({ page: 0, size: 50 }, hasSession);
   const publicRoomsQuery = usePublicRoomsQuery(undefined, !hasSession);
@@ -137,8 +149,19 @@ export default function KioskLobbyPage() {
         map[room.id] = roomLatestQueries[idx]?.data ?? null;
       });
     } else {
+      const streamCacheByRoom = new Map<string, TelemetryResponse>();
+      rooms.forEach((room, idx) => {
+        const cached = roomLatestQueries[idx]?.data;
+        if (cached) {
+          streamCacheByRoom.set(room.id, cached);
+        }
+      });
+
       (publicRoomsQuery.data ?? []).forEach((pr) => {
-        if (
+        const live = streamCacheByRoom.get(pr.id);
+        if (live) {
+          map[pr.id] = live;
+        } else if (
           pr.timestamp ||
           pr.comfortScore != null ||
           pr.environment?.temperature != null
@@ -207,51 +230,54 @@ export default function KioskLobbyPage() {
     if (hasSession) {
       return summaryQuery.data;
     }
-    const pubList = publicRoomsQuery.data ?? [];
-    if (pubList.length === 0) return undefined;
-    const scored = pubList.filter(
-      (r) => typeof r.comfortScore?.overall === 'number'
+    if (rooms.length === 0) return undefined;
+    const scoredRooms = rooms.filter(
+      (r) => typeof roomTelemetryMap[r.id]?.comfortScore?.overall === 'number'
     );
     const avgScore =
-      scored.length > 0
+      scoredRooms.length > 0
         ? Math.round(
-            scored.reduce(
-              (acc, r) => acc + (r.comfortScore?.overall ?? 0),
+            scoredRooms.reduce(
+              (acc, r) =>
+                acc + (roomTelemetryMap[r.id]?.comfortScore?.overall ?? 0),
               0
-            ) / scored.length
+            ) / scoredRooms.length
           )
         : null;
-    const optimalCount = scored.filter(
-      (r) => (r.comfortScore?.overall ?? 0) >= 75
+    const optimalCount = scoredRooms.filter(
+      (r) => (roomTelemetryMap[r.id]?.comfortScore?.overall ?? 0) >= 75
     ).length;
-    const best =
-      [...scored].sort(
+    const bestRoom =
+      [...scoredRooms].sort(
         (a, b) =>
-          (b.comfortScore?.overall ?? -1) - (a.comfortScore?.overall ?? -1)
+          (roomTelemetryMap[b.id]?.comfortScore?.overall ?? -1) -
+          (roomTelemetryMap[a.id]?.comfortScore?.overall ?? -1)
       )[0] ?? null;
+    const bestTel = bestRoom ? roomTelemetryMap[bestRoom.id] : null;
     return {
-      totalRooms: pubList.length,
+      totalRooms: rooms.length,
       activeDevices: 0,
       offlineDevices: 0,
       activeAlertsCount: 0,
       averageComfortScore: avgScore,
-      overallGrade: (best?.comfortScore?.grade as ComfortGrade) ?? 'Gold',
+      overallGrade: resolveGradeFromScore(avgScore),
       optimalRoomsCount: optimalCount,
-      bestRoom: best
-        ? {
-            roomId: best.id,
-            roomName: `${best.code} — ${best.name}`,
-            comfortScore: best.comfortScore?.overall ?? null,
-            grade: (best.comfortScore?.grade as ComfortGrade) ?? 'Gold',
-            noiseAvg: best.acoustics?.noiseAvg ?? null,
-            pm25: best.airQuality?.pm2_5 ?? null,
-            temperature: best.environment?.temperature ?? null,
-            humidity: best.environment?.humidity ?? null,
-          }
-        : null,
+      bestRoom:
+        bestRoom && bestTel
+          ? {
+              roomId: bestRoom.id,
+              roomName: `${bestRoom.code} — ${bestRoom.name}`,
+              comfortScore: bestTel.comfortScore?.overall ?? null,
+              grade: (bestTel.comfortScore?.grade as ComfortGrade | null) ?? null,
+              noiseAvg: bestTel.acoustics?.noiseAvg ?? null,
+              pm25: bestTel.airQuality?.pm2_5 ?? null,
+              temperature: bestTel.environment?.temperature ?? null,
+              humidity: bestTel.environment?.humidity ?? null,
+            }
+          : null,
       attentionRoom: null,
     };
-  }, [hasSession, summaryQuery.data, publicRoomsQuery.data]);
+  }, [hasSession, summaryQuery.data, rooms, roomTelemetryMap]);
   const bestRoomInfo = summary?.bestRoom ?? null;
   const bestRoomEntity = bestRoomInfo
     ? roomMap.get(bestRoomInfo.roomId)
@@ -358,11 +384,10 @@ export default function KioskLobbyPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-6 text-slate-100 lg:px-10">
-      {/* Subscribe live STOMP telemetry for all rooms when authenticated */}
-      {hasSession &&
-        rooms.map((room) => (
-          <KioskRoomStreamSubscriber key={room.id} roomId={room.id} />
-        ))}
+      {/* Subscribe live STOMP telemetry for all rooms (authenticated or public Kiosk) */}
+      {rooms.map((room) => (
+        <KioskRoomStreamSubscriber key={room.id} roomId={room.id} />
+      ))}
 
       {/* Top Bar: Library Identity + Live Clock */}
       <header className="flex flex-col justify-between gap-4 border-b border-slate-800/80 pb-5 lg:flex-row lg:items-center">
@@ -370,9 +395,7 @@ export default function KioskLobbyPage() {
           <div className="flex items-center gap-2.5">
             <span
               className={`h-2.5 w-2.5 rounded-full ${
-                stompConnected || !hasSession
-                  ? 'bg-emerald-400'
-                  : 'bg-amber-400'
+                stompConnected ? 'bg-emerald-400' : 'bg-amber-400'
               }`}
             />
             <span className="text-2xs font-semibold tracking-wider text-slate-400 uppercase">

@@ -1,6 +1,6 @@
 // ============================================================================
 // AIoTLibTQB — Canonical Frontend API & Domain DTO Types
-// Synchronized 100% with Backend MVP v1.0 & FRONTEND_STANDARD.md (Appendix A)
+// Synchronized with Backend v2.1 API contracts (docs/07-api-reference.md)
 // ============================================================================
 
 export interface ApiResponse<T> {

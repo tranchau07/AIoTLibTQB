@@ -28,10 +28,10 @@
 
 ### 1.1. Hiện Trạng Backend Đã Có (Core Foundation)
 Backend AIoTLibTQB hiện đã sở hữu một kiến trúc nền tảng rất vững chắc:
-- **Pipeline Tiếp nhận MQTT Tốc độ cao:** Sử dụng Spring Integration kết hợp Java 21 Virtual Threads ([`MqttConfig.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/configuration/MqttConfig.java)) tiếp nhận thông điệp QoS 1 từ Mosquitto 2.0.
-- **Làm sạch & Bù khuyết Dữ liệu:** Thuật toán Forward-Fill 30 giây trong [`TelemetrySanitizerService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/TelemetrySanitizerService.java) kết hợp bộ đệm Caffeine bounded cache, loại trừ xung âm tức thời `noisePeak`, và chuẩn hóa mốc thời gian đo lường.
-- **Lưu trữ TimeSeries Chuyên Dụng:** Ghi bản ghi vào MongoDB 8.0 Native TimeSeries collection ([`TelemetryRecord.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/document/TelemetryRecord.java)) với độ phân giải theo giây và compound indexes.
-- **Động cơ Chấm điểm Tiện nghi LCS:** Thuật toán phi tuyến tính theo Nguyên lý Thùng gỗ Liebig ([`ComfortScoreService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/ComfortScoreService.java)) hỗ trợ 3 cấu hình phòng học và đạt 100% tỷ lệ đỗ unit tests.
+- **Pipeline Tiếp nhận MQTT Tốc độ cao:** Sử dụng Spring Integration kết hợp Java 21 Virtual Threads ([`MqttConfig.java`](../../../src/main/java/com/example/AIoTLibTQB/configuration/MqttConfig.java)) tiếp nhận thông điệp QoS 1 từ Mosquitto 2.0.
+- **Làm sạch & Bù khuyết Dữ liệu:** Thuật toán Forward-Fill 30 giây trong [`TelemetrySanitizerService.java`](../../../src/main/java/com/example/AIoTLibTQB/service/TelemetrySanitizerService.java) kết hợp bộ đệm Caffeine bounded cache, loại trừ xung âm tức thời `noisePeak`, và chuẩn hóa mốc thời gian đo lường.
+- **Lưu trữ TimeSeries Chuyên Dụng:** Ghi bản ghi vào MongoDB 8.0 Native TimeSeries collection ([`TelemetryRecord.java`](../../../src/main/java/com/example/AIoTLibTQB/document/TelemetryRecord.java)) với độ phân giải theo giây và compound indexes.
+- **Động cơ Chấm điểm Tiện nghi LCS:** Thuật toán phi tuyến tính theo Nguyên lý Thùng gỗ Liebig ([`ComfortScoreService.java`](../../../src/main/java/com/example/AIoTLibTQB/service/ComfortScoreService.java)) hỗ trợ 3 cấu hình phòng học và đạt 100% tỷ lệ đỗ unit tests.
 - **Bảo mật Đa tầng & RBAC:** Nimbus JOSE JWT HMAC-SHA512, Refresh Token Rotation (24h), Token Blacklist MongoDB TTL, và RateLimitFilter (Bucket4j + Caffeine).
 
 ### 1.2. Khoảng Trống Kỹ Thuật Cần Giải Quyết (Gaps to Bridge)
@@ -48,12 +48,12 @@ Backend AIoTLibTQB hiện đã sở hữu một kiến trúc nền tảng rất 
 
 | Mã Task | Tên Phân Hệ / Hạng Mục | Mục Tiêu Kỹ Thuật | Thành Phần Tác Động / Tạo Mới | Thời Gian Dự Kiến | Mức Độ Ưu Tiên |
 |:---:|:---|:---|:---|:---:|:---:|
-| **T1** | **Chuẩn Hóa Hợp Đồng API & Validation** | Đồng nhất URI `/api/v1`, bổ sung phân trang `PageResponse<T>` cho Device/Room, gắn `@Valid` kiểm tra dữ liệu đầu vào. | [`AuthenticationController.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/controller/AuthenticationController.java), [`DeviceController.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/controller/DeviceController.java), [`RoomController.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/controller/RoomController.java), DTOs | 1 Ngày | **Bắt buộc (P0)** |
-| **T2** | **Xây Dựng Phân Hệ Cảnh Báo (Alert Subsystem)** | Xây dựng Rule Engine so ngưỡng trong luồng Ingestion, máy trạng thái 4 bước (PENDING $\rightarrow$ FIRING $\rightarrow$ ACK $\rightarrow$ RESOLVED), viết `AlertService` và `AlertController`. | [`AlertService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service), [`AlertController.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/controller), [`MqttMessageDispatcherService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java) | 2–3 Ngày | **Bắt buộc (P0)** |
-| **T3** | **Tiến Trình Quét Thiết Bị Ngoại Tuyến (Watchdog)** | Scheduled job chạy ngầm chu kỳ 30s; phát hiện trạm đo mất kết nối/treo vi điều khiển quá 2 phút, cập nhật trạng thái `OFFLINE` và phát cảnh báo. | [`DeviceWatchdogService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service), [`DeviceRepository.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/repository/DeviceRepository.java) | 1 Ngày | **Bắt buộc (P0)** |
-| **T4** | **API Nén Chuỗi Thời Gian (Downsampling Buckets)** | Xây dựng API tổng hợp biểu đồ theo khoảng 15m, 1h, 1d qua MongoDB Aggregation; cung cấp API KPI tóm tắt toàn hệ thống cho Dashboard. | [`TelemetryService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/TelemetryService.java), [`TelemetryController.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/controller/TelemetryController.java) | 2 Ngày | **Bắt buộc (P0)** |
-| **T5** | **Kích Hoạt WebSocket STOMP Realtime** | Cấu hình WebSocket message broker `/ws-aiot`, xác thực frame `CONNECT`, phân phối kênh `/topic/rooms/{id}/telemetry` và `/topic/alerts` kèm cơ chế Conflation 1Hz. | [`WebSocketConfig.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/configuration), [`MqttMessageDispatcherService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java) | 2 Ngày | **Bắt buộc (P0)** |
-| **T6** | **Tối Ưu Bộ Nhớ Đệm & Giới Hạn Luồng Ingestion** | Cache metadata thiết bị bằng Caffeine; bổ sung Semaphore giới hạn số luồng ghi đồng thời vào MongoDB, chống cạn kiệt Connection Pool. | [`MqttConfig.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/configuration/MqttConfig.java), [`MqttMessageDispatcherService.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java) | 1 Ngày | **Quan trọng (P1)** |
+| **T1** | **Chuẩn Hóa Hợp Đồng API & Validation** | Đồng nhất URI `/api/v1`, bổ sung phân trang `PageResponse<T>` cho Device/Room, gắn `@Valid` kiểm tra dữ liệu đầu vào. | [`AuthenticationController.java`](../../../src/main/java/com/example/AIoTLibTQB/controller/AuthenticationController.java), [`DeviceController.java`](../../../src/main/java/com/example/AIoTLibTQB/controller/DeviceController.java), [`RoomController.java`](../../../src/main/java/com/example/AIoTLibTQB/controller/RoomController.java), DTOs | 1 Ngày | **Bắt buộc (P0)** |
+| **T2** | **Xây Dựng Phân Hệ Cảnh Báo (Alert Subsystem)** | Xây dựng Rule Engine so ngưỡng trong luồng Ingestion, máy trạng thái 4 bước (PENDING $\rightarrow$ FIRING $\rightarrow$ ACK $\rightarrow$ RESOLVED), viết `AlertService` và `AlertController`. | [`AlertService.java`](../../../src/main/java/com/example/AIoTLibTQB/service), [`AlertController.java`](../../../src/main/java/com/example/AIoTLibTQB/controller), [`MqttMessageDispatcherService.java`](../../../src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java) | 2–3 Ngày | **Bắt buộc (P0)** |
+| **T3** | **Tiến Trình Quét Thiết Bị Ngoại Tuyến (Watchdog)** | Scheduled job chạy ngầm chu kỳ 30s; phát hiện trạm đo mất kết nối/treo vi điều khiển quá 2 phút, cập nhật trạng thái `OFFLINE` và phát cảnh báo. | [`DeviceWatchdogService.java`](../../../src/main/java/com/example/AIoTLibTQB/service), [`DeviceRepository.java`](../../../src/main/java/com/example/AIoTLibTQB/repository/DeviceRepository.java) | 1 Ngày | **Bắt buộc (P0)** |
+| **T4** | **API Nén Chuỗi Thời Gian (Downsampling Buckets)** | Xây dựng API tổng hợp biểu đồ theo khoảng 15m, 1h, 1d qua MongoDB Aggregation; cung cấp API KPI tóm tắt toàn hệ thống cho Dashboard. | [`TelemetryService.java`](../../../src/main/java/com/example/AIoTLibTQB/service/TelemetryService.java), [`TelemetryController.java`](../../../src/main/java/com/example/AIoTLibTQB/controller/TelemetryController.java) | 2 Ngày | **Bắt buộc (P0)** |
+| **T5** | **Kích Hoạt WebSocket STOMP Realtime** | Cấu hình WebSocket message broker `/ws-aiot`, xác thực frame `CONNECT`, phân phối kênh `/topic/rooms/{id}/telemetry` và `/topic/alerts` kèm cơ chế Conflation 1Hz. | [`WebSocketConfig.java`](../../../src/main/java/com/example/AIoTLibTQB/configuration), [`MqttMessageDispatcherService.java`](../../../src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java) | 2 Ngày | **Bắt buộc (P0)** |
+| **T6** | **Tối Ưu Bộ Nhớ Đệm & Giới Hạn Luồng Ingestion** | Cache metadata thiết bị bằng Caffeine; bổ sung Semaphore giới hạn số luồng ghi đồng thời vào MongoDB, chống cạn kiệt Connection Pool. | [`MqttConfig.java`](../../../src/main/java/com/example/AIoTLibTQB/configuration/MqttConfig.java), [`MqttMessageDispatcherService.java`](../../../src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java) | 1 Ngày | **Quan trọng (P1)** |
 
 ---
 
@@ -101,7 +101,7 @@ Phát hiện tự động các hiện tượng vi phạm môi trường và sự
    - `PATCH /api/v1/alerts/{id}/acknowledge`: Nút nhận xử lý sự cố.
    - `PATCH /api/v1/alerts/{id}/resolve`: Nút đóng sự cố thủ công.
 3. **Tích hợp vào Ingestion:**
-   - Gọi `alertService.checkAndTriggerAlerts()` ngay sau khi lưu `TelemetryRecord` tại [`MqttMessageDispatcherService.java:207`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java#L207).
+   - Gọi `alertService.checkAndTriggerAlerts()` ngay sau khi lưu `TelemetryRecord` tại [`MqttMessageDispatcherService.java:207`](../../../src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java#L207).
 
 ---
 
@@ -137,7 +137,7 @@ Cho phép Web Dashboard cập nhật bản đồ nhiệt (Floorplan Heatmap) và
    ```
 2. **`StompAuthChannelInterceptor`**:
    - Chặn frame `StompCommand.CONNECT`.
-   - Trích xuất header `Authorization: Bearer <token>`, giải mã qua [`CustomJwtDecoder`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/configuration/CustomJwtDecoder.java).
+   - Trích xuất header `Authorization: Bearer <token>`, giải mã qua [`CustomJwtDecoder`](../../../src/main/java/com/example/AIoTLibTQB/configuration/CustomJwtDecoder.java).
    - Thiết lập `SecurityContext` cho phiên kết nối.
 3. **Cơ chế Conflation Throttling 1Hz:**
    - Thay vì đẩy dồn dập mỗi khi có bản tin cảm biến, backend sử dụng bộ nhớ đệm gom mẫu theo từng `roomId`.
@@ -178,7 +178,7 @@ Giải quyết dứt điểm các kịch bản thiết bị đứt sóng Wi-Fi, 
        }
    }
    ```
-2. **Bổ sung truy vấn vào [`DeviceRepository.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/repository/DeviceRepository.java)**:
+2. **Bổ sung truy vấn vào [`DeviceRepository.java`](../../../src/main/java/com/example/AIoTLibTQB/repository/DeviceRepository.java)**:
    ```java
    List<Device> findByIsActiveTrueAndLastSeenAtBefore(Instant threshold);
    ```
@@ -235,16 +235,16 @@ Di chuyển toàn bộ các controller quản trị định danh sang chuẩn ch
 - `/api/users/**` $\rightarrow$ `/api/v1/users/**`
 - `/api/roles/**` $\rightarrow$ `/api/v1/roles/**`
 - `/api/permissions/**` $\rightarrow$ `/api/v1/permissions/**`
-- Cập nhật lại mảng `PUBLIC_POST_ENDPOINTS` trong [`SecurityConfig.java:28-35`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/configuration/SecurityConfig.java#L28-L35).
+- Cập nhật lại mảng `PUBLIC_POST_ENDPOINTS` trong [`SecurityConfig.java:28-35`](../../../src/main/java/com/example/AIoTLibTQB/configuration/SecurityConfig.java#L28-L35).
 
 #### 5.2. Chuẩn Hóa Phân Trang (`PageResponse<T>`)
 Bổ sung tham số `Pageable` vào:
 - `GET /api/v1/devices?page=0&size=10&zoneId=...&roomId=...`
 - `GET /api/v1/rooms?page=0&size=10&floor=...`
-- Đóng gói kết quả trả về trong DTO chuẩn [`PageResponse<T>`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/dto/response/PageResponse.java) (bao gồm `currentPage`, `pageSize`, `totalPages`, `totalElements`, `data`).
+- Đóng gói kết quả trả về trong DTO chuẩn [`PageResponse<T>`](../../../src/main/java/com/example/AIoTLibTQB/dto/response/PageResponse.java) (bao gồm `currentPage`, `pageSize`, `totalPages`, `totalElements`, `data`).
 
 #### 5.3. Ràng Buộc Toàn Vẹn & Validation Đầu Vào
-1. Bổ sung `@Valid`, `@NotBlank(message = "USERNAME_REQUIRED")`, `@NotBlank(message = "PASSWORD_REQUIRED")` vào [`AuthenticationRequest.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/dto/request/AuthenticationRequest.java) và [`AuthenticationController.java`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/controller/AuthenticationController.java).
+1. Bổ sung `@Valid`, `@NotBlank(message = "USERNAME_REQUIRED")`, `@NotBlank(message = "PASSWORD_REQUIRED")` vào [`AuthenticationRequest.java`](../../../src/main/java/com/example/AIoTLibTQB/dto/request/AuthenticationRequest.java) và [`AuthenticationController.java`](../../../src/main/java/com/example/AIoTLibTQB/controller/AuthenticationController.java).
 2. **Kiểm tra khi xóa Phòng (`deleteRoom`):** Kiểm tra `deviceRepository.existsByRoomId(roomId)`. Nếu còn thiết bị gắn kèm phòng, từ chối xóa và ném lỗi `ROOM_HAS_ASSOCIATED_DEVICES` (tránh tạo thiết bị mồ côi).
 3. **Kiểm tra khi xóa Vai trò (`deleteRole`):** Tự động thu hồi vai trò khỏi danh sách `roles` của toàn bộ tài liệu `User` trước khi xóa khỏi CSDL.
 
@@ -253,7 +253,7 @@ Bổ sung tham số `Pageable` vào:
 ### Nhiệm vụ 6: Bảo vệ Tải Hạ tầng & Caching Trong Luồng Ingestion
 
 1. **Bộ nhớ đệm Tra cứu Thiết bị (Device Metadata Cache):**
-   - Trong [`MqttMessageDispatcherService.java:153`](file:///c:/Users/C/Documents/Project/AIoTLibTQB/src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java#L153), thay vì gọi `deviceRepository.findByHardwareId` liên tục trên từng gói tin, sử dụng Caffeine Cache:
+   - Trong [`MqttMessageDispatcherService.java:153`](../../../src/main/java/com/example/AIoTLibTQB/service/MqttMessageDispatcherService.java#L153), thay vì gọi `deviceRepository.findByHardwareId` liên tục trên từng gói tin, sử dụng Caffeine Cache:
      ```java
      LoadingCache<String, Optional<Device>> deviceMetadataCache = Caffeine.newBuilder()
              .maximumSize(10_000)

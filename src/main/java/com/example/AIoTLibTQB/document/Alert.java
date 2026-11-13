@@ -40,6 +40,8 @@ public class Alert {
 
     AlertType type;
 
+    String metricType;
+
     AlertSeverity severity;
 
     @Indexed
