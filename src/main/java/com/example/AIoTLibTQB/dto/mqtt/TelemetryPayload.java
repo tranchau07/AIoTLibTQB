@@ -45,6 +45,10 @@ public class TelemetryPayload {
     @AllArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
     public static class AcousticsData {
+        @JsonProperty("noise")
+        @JsonAlias({"sound", "db", "dBA"})
+        Double noise;
+
         @JsonProperty("noise_avg")
         @JsonAlias("noiseAvg")
         Double noiseAvg;

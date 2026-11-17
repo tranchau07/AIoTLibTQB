@@ -91,18 +91,19 @@ export function generateDeviceTelemetry(device, roomType = 'STUDY_ROOM', virtual
   let hum = clamp(humNormal + (modifiers.humidityOffset || 0), 0.0, 100.0);
   if (modifiers.humidityOverride !== undefined) hum = modifiers.humidityOverride;
 
-  // 3. Acoustics (dBA)
+  // 3. Acoustics (dBA) - instantaneous sound level reading; server computes noiseAvg & noisePeak
   const noiseJitter = randomGaussian(0, profile.acoustics.noiseStd);
   const noiseBase = profile.acoustics.baselineAvg + Math.max(0, profile.acoustics.diurnalAmplitude * diurnalFactor) + crowdFactor * 5.0;
   const noiseProfileMin = profile.acoustics.minAvg ?? 30.0;
   const noiseProfileMax = profile.acoustics.maxAvg ?? 110.0;
   const noiseNormal = clamp(noiseBase + noiseJitter + locNoiseOffset, noiseProfileMin, noiseProfileMax);
-  let noiseAvg = clamp(noiseNormal + (modifiers.noiseAvgOffset || 0), 30.0, 110.0);
-  if (modifiers.noiseAvgOverride !== undefined) noiseAvg = modifiers.noiseAvgOverride;
-
-  const peakJitter = Math.abs(randomGaussian(profile.acoustics.peakOffset, 3.0));
-  let noisePeak = clamp(noiseAvg + peakJitter + (modifiers.noisePeakOffset || 0), noiseAvg, 130.0);
-  if (modifiers.noisePeakOverride !== undefined) noisePeak = modifiers.noisePeakOverride;
+  const noiseOffset = modifiers.noiseOffset ?? modifiers.noiseAvgOffset ?? 0;
+  let noise = clamp(noiseNormal + noiseOffset, 30.0, 130.0);
+  if (modifiers.noiseOverride !== undefined) {
+    noise = clamp(modifiers.noiseOverride, 30.0, 130.0);
+  } else if (modifiers.noiseAvgOverride !== undefined) {
+    noise = clamp(modifiers.noiseAvgOverride, 30.0, 130.0);
+  }
 
   // 4. Air Quality PM2.5 (µg/m³) & related PM fractions
   const pmNoise = randomGaussian(0, profile.airQuality.noiseStd);
@@ -137,8 +138,7 @@ export function generateDeviceTelemetry(device, roomType = 'STUDY_ROOM', virtual
     wifi_rssi: wifiRssi,
     data: {
       acoustics: {
-        noise_avg: roundTo(noiseAvg, 1),
-        noise_peak: roundTo(noisePeak, 1)
+        noise: roundTo(noise, 1)
       },
       air_quality: {
         pm1_0: roundTo(pm1_0, 1),

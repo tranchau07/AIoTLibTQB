@@ -27,7 +27,7 @@ public class TelemetryConflationService {
 
     Map<String, String> lastPublishedSignature = new ConcurrentHashMap<>();
 
-    @Scheduled(fixedRate = 1000)
+    @Scheduled(fixedRateString = "${app.telemetry.conflation-ms:500}")
     public void conflateAndPublish() {
         Map<String, TelemetryResponse> allLatest = latestTelemetryCache.getAllRoomLatest();
         if (allLatest == null || allLatest.isEmpty()) {

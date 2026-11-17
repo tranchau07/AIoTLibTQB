@@ -11,10 +11,15 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 @Service
@@ -34,14 +39,34 @@ public class TelemetrySanitizerService {
     public static final double LUX_MAX = 65535.0;
 
     private static final Duration FORWARD_FILL_WINDOW = Duration.ofSeconds(30);
+    private static final Duration NOISE_WINDOW = Duration.ofSeconds(30);
     private static final long CACHE_MAX_SIZE = 50_000L;
+    private static final long NOISE_CACHE_MAX_SIZE = 10_000L;
+    private static final int MAX_NOISE_WINDOW_SAMPLES = 1_000;
     private static final Duration CACHE_EXPIRE_AFTER_ACCESS = Duration.ofMinutes(10);
+
+    Clock clock;
 
     @lombok.experimental.PackagePrivate
     Cache<String, TimestampedValue> fieldCache = Caffeine.newBuilder()
             .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS)
             .maximumSize(CACHE_MAX_SIZE)
             .build();
+
+    @lombok.experimental.PackagePrivate
+    Cache<String, NoiseSlidingWindow> noiseWindowCache = Caffeine.newBuilder()
+            .expireAfterAccess(CACHE_EXPIRE_AFTER_ACCESS)
+            .maximumSize(NOISE_CACHE_MAX_SIZE)
+            .build();
+
+    @Autowired
+    public TelemetrySanitizerService(@Autowired(required = false) Clock clock) {
+        this.clock = clock != null ? clock : Clock.systemUTC();
+    }
+
+    public TelemetrySanitizerService() {
+        this(Clock.systemUTC());
+    }
 
     @lombok.experimental.PackagePrivate
     void putCacheEntry(String deviceId, String fieldKey, TimestampedValue value) {
@@ -63,7 +88,7 @@ public class TelemetrySanitizerService {
             return new SanitizedMetrics(null, null, null);
         }
 
-        Instant now = Instant.now();
+        Instant now = clock.instant();
 
         // 1. Âm học (Acoustics)
         AcousticMetrics acoustics = sanitizeAcoustics(deviceId, data.getAcoustics(), now);
@@ -78,17 +103,75 @@ public class TelemetrySanitizerService {
     }
 
     private AcousticMetrics sanitizeAcoustics(String deviceId, TelemetryPayload.AcousticsData in, Instant now) {
-        Double avg = sanitizeField(deviceId, "acoustics.noiseAvg", (in != null ? in.getNoiseAvg() : null), NOISE_MIN, NOISE_AVG_MAX, now);
-        Double peak = sanitizePeakWithoutForwardFill(deviceId, "acoustics.noisePeak", (in != null ? in.getNoisePeak() : null), NOISE_MIN, NOISE_PEAK_MAX);
+        String safeDeviceKey = deviceId != null ? deviceId : "unknown";
 
-        if (avg == null && peak == null) {
-            return null;
+        // Luồng mới: Thiết bị chỉ gửi độ ồn tức thời (noise), Server tự tính noiseAvg (cửa sổ trượt 30s) & noisePeak
+        if (in != null && in.getNoise() != null) {
+            double rawNoise = in.getNoise();
+            if (Double.isFinite(rawNoise) && rawNoise >= NOISE_MIN && rawNoise <= NOISE_PEAK_MAX) {
+                NoiseSlidingWindow window = noiseWindowCache.get(safeDeviceKey, k -> new NoiseSlidingWindow());
+                double computedAvg = window.recordAndAverage(rawNoise, now, NOISE_WINDOW);
+                double noiseAvg = roundToOneDecimal(Math.min(computedAvg, NOISE_AVG_MAX));
+                double noisePeak = roundToOneDecimal(Math.min(Math.max(rawNoise, noiseAvg), NOISE_PEAK_MAX));
+                return AcousticMetrics.builder()
+                        .noiseAvg(noiseAvg)
+                        .noisePeak(noisePeak)
+                        .build();
+            }
+
+            log.warn("Sensor out-of-bounds rejected for device '{}', metric 'acoustics.noise': value={} (expected [{}, {}])",
+                    deviceId, rawNoise, NOISE_MIN, NOISE_PEAK_MAX);
+            Double fallbackAvg = getNoiseWindowAverage(safeDeviceKey, now);
+            if (fallbackAvg == null) {
+                return null;
+            }
+            return AcousticMetrics.builder()
+                    .noiseAvg(fallbackAvg)
+                    .noisePeak(null)
+                    .build();
         }
 
+        // Tương thích ngược: Payload cũ gửi sẵn noise_avg / noise_peak
+        if (in != null && (in.getNoiseAvg() != null || in.getNoisePeak() != null)) {
+            Double avg = sanitizeField(deviceId, "acoustics.noiseAvg", in.getNoiseAvg(), NOISE_MIN, NOISE_AVG_MAX, now);
+            Double peak = sanitizePeakWithoutForwardFill(deviceId, "acoustics.noisePeak", in.getNoisePeak(), NOISE_MIN, NOISE_PEAK_MAX);
+            if (avg == null && peak == null) {
+                return null;
+            }
+            return AcousticMetrics.builder()
+                    .noiseAvg(avg)
+                    .noisePeak(peak)
+                    .build();
+        }
+
+        // Trường hợp acoustics bị null hoặc noise = null: forward-fill noiseAvg trong 30s, tuyệt đối không forward-fill noisePeak
+        Double avg = getNoiseWindowAverage(safeDeviceKey, now);
+        if (avg == null) {
+            avg = sanitizeField(deviceId, "acoustics.noiseAvg", null, NOISE_MIN, NOISE_AVG_MAX, now);
+        }
+        if (avg == null) {
+            return null;
+        }
         return AcousticMetrics.builder()
                 .noiseAvg(avg)
-                .noisePeak(peak)
+                .noisePeak(null)
                 .build();
+    }
+
+    private Double getNoiseWindowAverage(String safeDeviceKey, Instant now) {
+        NoiseSlidingWindow window = noiseWindowCache.getIfPresent(safeDeviceKey);
+        if (window == null) {
+            return null;
+        }
+        Double avg = window.averageIfActive(now, NOISE_WINDOW);
+        if (avg == null) {
+            return null;
+        }
+        return roundToOneDecimal(Math.min(avg, NOISE_AVG_MAX));
+    }
+
+    private static double roundToOneDecimal(double value) {
+        return Math.round(value * 10.0) / 10.0;
     }
 
     private Double sanitizePeakWithoutForwardFill(String deviceId, String fieldKey, Double incomingValue, double min, double max) {
@@ -167,6 +250,53 @@ public class TelemetrySanitizerService {
     }
 
     public record TimestampedValue(Double value, Instant timestamp) {}
+
+    @lombok.experimental.PackagePrivate
+    static final class NoiseSlidingWindow {
+        private final ReentrantLock lock = new ReentrantLock();
+        private final Deque<TimestampedValue> samples = new ArrayDeque<>();
+
+        double recordAndAverage(double value, Instant now, Duration windowSize) {
+            lock.lock();
+            try {
+                pruneExpired(now, windowSize);
+                samples.addLast(new TimestampedValue(value, now));
+                while (samples.size() > MAX_NOISE_WINDOW_SAMPLES) {
+                    samples.pollFirst();
+                }
+                return computeMean();
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        Double averageIfActive(Instant now, Duration windowSize) {
+            lock.lock();
+            try {
+                pruneExpired(now, windowSize);
+                if (samples.isEmpty()) {
+                    return null;
+                }
+                return computeMean();
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        private void pruneExpired(Instant now, Duration windowSize) {
+            samples.removeIf(s -> Duration.between(s.timestamp(), now).compareTo(windowSize) > 0);
+        }
+
+        private double computeMean() {
+            double sum = 0.0;
+            int count = 0;
+            for (TimestampedValue s : samples) {
+                sum += s.value();
+                count++;
+            }
+            return count > 0 ? sum / count : 0.0;
+        }
+    }
 
     @Data
     @AllArgsConstructor

@@ -407,4 +407,48 @@ class MqttMessageDispatcherServiceTest {
         verify(deviceWatchdogService).recordOfflineDevice("ESP32_ROOM_101");
         verify(deviceMetadataCache).invalidate("ESP32_ROOM_101");
     }
+
+    @Test
+    @DisplayName("dispatch() - Giải mã JSON chỉ có acoustics.noise và tính/lưu noiseAvg + noisePeak thông qua TelemetrySanitizerService")
+    void dispatch_telemetry_rawNoiseField_computesAndSavesAcousticMetrics() {
+        TelemetrySanitizerService realSanitizer = new TelemetrySanitizerService();
+        MqttMessageDispatcherService realDispatcher = new MqttMessageDispatcherService(
+                objectMapper,
+                deviceMetadataCache,
+                alertService,
+                telemetryRepository,
+                realSanitizer,
+                discoveredDeviceService,
+                comfortScoreService,
+                mongoTemplate
+        );
+        realDispatcher.setDeviceWatchdogService(deviceWatchdogService);
+
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+
+        String json = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "wifi_rssi": -60,
+          "data": {
+            "acoustics": { "noise": 86.0 },
+            "environment": { "temperature": 24.5, "humidity": 55.0, "lux": 420.0 }
+          }
+        }
+        """.formatted(Instant.now().toEpochMilli());
+
+        var msg = MessageBuilder.withPayload(json)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build();
+
+        realDispatcher.dispatch(msg);
+
+        ArgumentCaptor<TelemetryRecord> captor = ArgumentCaptor.forClass(TelemetryRecord.class);
+        verify(telemetryRepository).save(captor.capture());
+        assertThat(captor.getValue().getAcoustics()).isNotNull();
+        assertThat(captor.getValue().getAcoustics().getNoiseAvg()).isEqualTo(86.0);
+        assertThat(captor.getValue().getAcoustics().getNoisePeak()).isEqualTo(86.0);
+        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), any());
+    }
 }

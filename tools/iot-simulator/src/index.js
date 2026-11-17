@@ -21,8 +21,8 @@ export class IoTCircuitSimulator {
     const parsedSpeed = parseFloat(options.speed ?? env.simSpeed ?? 1);
     this.speed = Number.isFinite(parsedSpeed) && parsedSpeed > 0 ? parsedSpeed : 1;
 
-    const parsedInterval = parseInt(options.intervalMs ?? env.simIntervalMs ?? 5000, 10);
-    this.intervalMs = Number.isFinite(parsedInterval) && parsedInterval > 0 ? parsedInterval : 5000;
+    const parsedInterval = parseInt(options.intervalMs ?? env.simIntervalMs ?? 500, 10);
+    this.intervalMs = Number.isFinite(parsedInterval) && parsedInterval > 0 ? parsedInterval : 500;
 
     const parsedDuration = options.duration !== undefined ? parseInt(options.duration, 10) : 0;
     this.durationSec = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : 0;
@@ -251,8 +251,7 @@ export class IoTCircuitSimulator {
       const metricsSummary =
         `T=${telemetry.data.environment.temperature}°C, ` +
         `H=${telemetry.data.environment.humidity}%, ` +
-        `NoiseAvg=${telemetry.data.acoustics.noise_avg}dBA, ` +
-        `NoisePeak=${telemetry.data.acoustics.noise_peak}dBA, ` +
+        `Noise=${telemetry.data.acoustics.noise}dBA, ` +
         `PM2.5=${telemetry.data.air_quality.pm2_5}µg/m³, ` +
         `Lux=${telemetry.data.environment.lux}`;
 
@@ -411,7 +410,7 @@ export function parseCliArgs(argv = process.argv.slice(2), baseEnv = env) {
   const args = {
     scenario: baseEnv.defaultScenario || 'normal',
     speed: baseEnv.simSpeed || 1,
-    intervalMs: baseEnv.simIntervalMs || 5000,
+    intervalMs: baseEnv.simIntervalMs || 500,
     duration: 0,
     devices: null,
     forceRemote: Boolean(baseEnv.forceRemote),
@@ -483,7 +482,7 @@ Options:
                         device-dropout | flap | lwt | bad-payload | burst | demo
                         (default: DEFAULT_SCENARIO or normal)
   --speed <number>      Time acceleration multiplier (default: SIM_SPEED or 1)
-  --interval <seconds>  Interval between telemetry broadcasts per device (default: SIM_INTERVAL_MS or 5s)
+  --interval <seconds>  Interval between telemetry broadcasts per device (default: SIM_INTERVAL_MS or 0.5s)
   --duration <seconds>  Total duration in seconds to run before auto-stop (default: 0 = infinite)
   --devices <count>     Limit number of devices simulated (default: all in config)
   --broker <url>        MQTT broker URL (default: MQTT_BROKER_URL or mqtt://localhost:1883)

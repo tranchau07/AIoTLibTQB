@@ -29,7 +29,7 @@ cp .env.example .env
 | `API_BASE_URL` | `http://localhost:8080` | URL Backend REST API |
 | `ADMIN_USERNAME` | `admin` | Tài khoản quản trị để gọi Provisioning |
 | `ADMIN_PASSWORD` | `CHANGE_ME_LOCAL_DEV_ADMIN` | Mật khẩu Admin (khớp `INITIAL_ADMIN_PASSWORD`) |
-| `SIM_INTERVAL_MS` | `5000` | Chu kỳ phát telemetry (ms) |
+| `SIM_INTERVAL_MS` | `500` | Chu kỳ phát telemetry (ms) |
 | `SIM_SPEED` | `1` | Hệ số tua nhanh thời gian mô phỏng |
 | `DEFAULT_SCENARIO` | `normal` | Kịch bản mặc định (`normal`, `demo`...) |
 | `FORCE_REMOTE` | `false` | Cho phép kết nối broker ngoài loopback |
@@ -47,8 +47,8 @@ cp .env.example .env
 
 | Tham Số `--scenario` | Mô Tả & Mục Đích Kiểm Thử | Lệnh Chạy Mẫu |
 | :--- | :--- | :--- |
-| `normal` | Vi khí hậu ổn định theo chu kỳ ngày đêm | `node src/index.js --scenario normal --devices 3 --duration 60 --interval 5` |
-| `noise-spike` | Ồn nền $> 68$ dBA & đỉnh $> 82$ dBA kích hoạt Alert FSM | `node src/index.js --scenario noise-spike --devices 3 --duration 35 --interval 3` |
+| `normal` | Vi khí hậu ổn định theo chu kỳ ngày đêm | `node src/index.js --scenario normal --devices 3 --duration 60 --interval 0.5` |
+| `noise-spike` | Phát giá trị `noise` vượt ngưỡng kèm xung $> 75$ / $\ge 85$ dBA để Server tính `noiseAvg`/`noisePeak` và kích hoạt Alert FSM | `node src/index.js --scenario noise-spike --devices 3 --duration 35 --interval 0.5` |
 | `pm25-high` | Bụi mịn $\text{PM}_{2.5}$ tăng `68–80` µg/m³ | `node src/index.js --scenario pm25-high --devices 2 --duration 30 --interval 3` |
 | `heat/humid` | Quá nhiệt (`35.5–36.5°C`) & ẩm cao (`85–88% RH`) | `node src/index.js --scenario heat/humid --devices 2 --duration 30 --interval 3` |
 | `device-dropout` | Ngừng gửi tin $> 2$ phút test `DeviceWatchdogService` | `node src/index.js --scenario device-dropout --devices 2 --duration 140 --interval 5` |

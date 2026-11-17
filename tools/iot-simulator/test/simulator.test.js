@@ -67,6 +67,10 @@ test('[SIM-06] generateDeviceTelemetry enforces profile min/max bounds for BOOK_
     const packet = generateDeviceTelemetry(storageDevice, 'BOOK_STORAGE', new Date('2026-10-29T14:00:00Z').getTime(), {});
     assert.ok(packet.data.environment.temperature >= 18.0 && packet.data.environment.temperature <= 22.0);
     assert.ok(packet.data.environment.humidity >= 45.0 && packet.data.environment.humidity <= 52.0);
+    assert.equal(typeof packet.data.acoustics.noise, 'number');
+    assert.ok(packet.data.acoustics.noise >= 30.0 && packet.data.acoustics.noise <= 130.0);
+    assert.equal(packet.data.acoustics.noise_avg, undefined);
+    assert.equal(packet.data.acoustics.noise_peak, undefined);
   }
 });
 
@@ -74,8 +78,8 @@ test('[SIM-06] getScenarioModifiers for SCENARIOS.DEMO returns dynamic modifiers
   const dev = { hardwareId: 'ESP32_ROOM_102', zoneId: 'ZONE_B' };
   const mods = getScenarioModifiers(SCENARIOS.DEMO, dev, 9, 45);
   assert.ok(Object.keys(mods).length > 0);
-  assert.equal(typeof mods.noiseAvgOffset, 'number');
-  assert.ok(mods.noiseAvgOffset > 0);
+  assert.equal(typeof mods.noiseOffset, 'number');
+  assert.ok(mods.noiseOffset > 0);
 });
 
 test('[MQTT-01 & SIM-03] IoTCircuitSimulator defaults to perDeviceAuth and stop() awaits QoS 1 publish before graceful end(false)', async () => {
@@ -105,4 +109,20 @@ test('[MQTT-01 & SIM-03] IoTCircuitSimulator defaults to perDeviceAuth and stop(
     'publish:devices/ESP32_ROOM_101/status:1',
     'end:force=false'
   ]);
+});
+
+test('SCENARIOS.NOISE_SPIKE emits instantaneous noise spikes without noise_avg/noise_peak and defaults to 500ms interval', () => {
+  const parsed = parseCliArgs([], {});
+  assert.equal(parsed.intervalMs, 500);
+
+  const dev = { hardwareId: 'ESP32_ROOM_101', zoneId: 'ZONE_A' };
+  const samples = [];
+  for (let step = 1; step <= 6; step++) {
+    const mods = getScenarioModifiers(SCENARIOS.NOISE_SPIKE, dev, step, step * 0.5);
+    const pkt = generateDeviceTelemetry(dev, 'STUDY_ROOM', Date.now(), mods);
+    samples.push(pkt.data.acoustics.noise);
+    assert.equal(pkt.data.acoustics.noise_avg, undefined);
+    assert.equal(pkt.data.acoustics.noise_peak, undefined);
+  }
+  assert.ok(Math.max(...samples) >= 85.0);
 });

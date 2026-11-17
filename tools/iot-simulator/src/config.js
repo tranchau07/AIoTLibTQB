@@ -24,7 +24,7 @@ export const roomsConfig = loadJson('config/rooms.json');
 export const profilesConfig = loadJson('config/profiles.json');
 
 const rawKeepalive = parseInt(process.env.MQTT_KEEPALIVE || '30', 10);
-const rawIntervalMs = parseInt(process.env.SIM_INTERVAL_MS || '5000', 10);
+const rawIntervalMs = parseInt(process.env.SIM_INTERVAL_MS || '500', 10);
 const rawSpeed = parseFloat(process.env.SIM_SPEED || '1');
 
 export const env = {
@@ -40,7 +40,7 @@ export const env = {
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminPassword: process.env.ADMIN_PASSWORD || '',
 
-  simIntervalMs: Number.isFinite(rawIntervalMs) && rawIntervalMs > 0 ? rawIntervalMs : 5000,
+  simIntervalMs: Number.isFinite(rawIntervalMs) && rawIntervalMs > 0 ? rawIntervalMs : 500,
   simSpeed: Number.isFinite(rawSpeed) && rawSpeed > 0 ? rawSpeed : 1,
   defaultScenario: process.env.DEFAULT_SCENARIO || 'normal',
 
