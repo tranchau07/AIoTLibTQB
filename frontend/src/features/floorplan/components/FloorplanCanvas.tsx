@@ -79,6 +79,10 @@ import {
   evaluateRoomReliability,
   type RoomReliabilitySummary,
 } from '@/lib/floorplan/reliability';
+import type {
+  OneHourDeltaResult,
+  PlaybackRoomState,
+} from '@/lib/floorplan/timeAnalysis';
 import { formatMetrics } from '@/lib/format/metrics';
 import { isTelemetryStale } from '@/lib/format/datetime';
 import { FLOORPLAN_I18N_VI } from '@/messages/vi';
@@ -206,6 +210,8 @@ export interface FloorplanCanvasProps {
   roomMatchesFilterMap?: Record<string, boolean>;
   /** Điều khiển viewport từ bên ngoài (dành cho Deep Link / đồng bộ Minimap) */
   viewport?: ViewportTransform;
+  /** Khung nhìn khôi phục ban đầu từ Deep Link (giữ nguyên tương tác zoom/fit sau đó) */
+  initialViewport?: ViewportTransform | null;
   onViewportChange?: (viewport: ViewportTransform) => void;
   /** Chế độ toàn màn hình (do trang cha truyền vào để giữ Tree/Drawer hoạt động khi fullscreen) */
   isFullscreen?: boolean;
@@ -220,6 +226,10 @@ export interface FloorplanCanvasProps {
   onlyExceedingThreshold?: boolean;
   /** Chuỗi lịch sử gần nhất theo roomId (để vẽ sparkline trên hover popover) */
   roomTelemetryHistoryMap?: Record<string, readonly number[]>;
+  /** Chênh lệch -1h theo roomId để hiển thị mũi tên xu hướng ↑ ↓ → */
+  roomDeltaMap?: Record<string, OneHourDeltaResult>;
+  /** Trạng thái khởi phát / lan truyền khi phát lại sự kiện */
+  playbackRoomStateMap?: Record<string, PlaybackRoomState>;
   /** Bật/tắt popover chi tiết khi di chuột qua phòng */
   showHoverPopover?: boolean;
 }
@@ -252,6 +262,7 @@ export function FloorplanCanvas({
   activeStatusFilter = 'ALL',
   roomMatchesFilterMap,
   viewport: controlledViewport,
+  initialViewport = null,
   onViewportChange,
   isFullscreen: controlledFullscreen,
   onToggleFullscreen,
@@ -259,6 +270,8 @@ export function FloorplanCanvas({
   onHoverRoomChange,
   onlyExceedingThreshold = false,
   roomTelemetryHistoryMap,
+  roomDeltaMap,
+  playbackRoomStateMap,
   showHoverPopover = true,
 }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -285,11 +298,9 @@ export function FloorplanCanvas({
   const [cadImageLoadedFloor, setCadImageLoadedFloor] = useState<number | null>(
     null
   );
-  const [internalViewport, setInternalViewport] = useState<ViewportTransform>({
-    scale: 1,
-    tx: 0,
-    ty: 0,
-  });
+  const [internalViewport, setInternalViewport] = useState<ViewportTransform>(
+    () => initialViewport ?? { scale: 1, tx: 0, ty: 0 }
+  );
   const [internalFullscreen, setInternalFullscreen] = useState<boolean>(false);
   const [roomBadgeAnchors, setRoomBadgeAnchors] = useState<
     Array<{
@@ -485,6 +496,26 @@ export function FloorplanCanvas({
 
   // Tự fit-to-view khi zoomedRoomId thay đổi
   const prevZoomedRoomIdRef = useRef<string | null>(null);
+  const prevFloorRef = useRef<number>(activeFloor);
+  const appliedInitialViewportSigRef = useRef<string | null>(null);
+
+  // Khôi phục Viewport từ Deep Link trước các effect auto-fit để không bị ghi đè scale/tx/ty ban đầu
+  useEffect(() => {
+    if (!initialViewport || controlledViewport) return;
+    const sig = `${initialViewport.scale.toFixed(3)}:${initialViewport.tx.toFixed(2)}:${initialViewport.ty.toFixed(2)}`;
+    if (appliedInitialViewportSigRef.current === sig) return;
+    appliedInitialViewportSigRef.current = sig;
+    prevZoomedRoomIdRef.current = zoomedRoomId ?? null;
+    prevFloorRef.current = activeFloor;
+    commitViewport(initialViewport);
+  }, [
+    initialViewport,
+    controlledViewport,
+    zoomedRoomId,
+    activeFloor,
+    commitViewport,
+  ]);
+
   const roomPolygonsSignature = useMemo(
     () => enrichedRooms.map((er) => er.room.id).join(','),
     [enrichedRooms]
@@ -526,7 +557,6 @@ export function FloorplanCanvas({
   ]);
 
   // Reset viewport về 1x khi chuyển sang tầng mới (trừ khi vừa fit theo deep-link/zoomedRoomId)
-  const prevFloorRef = useRef<number>(activeFloor);
   useEffect(() => {
     if (prevFloorRef.current !== activeFloor) {
       prevFloorRef.current = activeFloor;
@@ -1025,6 +1055,11 @@ export function FloorplanCanvas({
         pixelVertices: Point2D[];
         severity: AlertSeverity | undefined;
       }> = [];
+      const playbackRoomOutlines: Array<{
+        roomId: string;
+        pixelVertices: Point2D[];
+        role: 'ORIGIN' | 'SPREAD';
+      }> = [];
 
       // Render each room polygon with strict ctx.clip() & area-adaptive Gaussian diffusion
       for (const {
@@ -1044,6 +1079,8 @@ export function FloorplanCanvas({
         const roomLatest = roomTelemetryMap[room.id];
         const roomMetricValue = extractLayerMetricValue(roomLatest, layer);
         const roomReliability = roomReliabilityMap?.[room.id];
+        const oneHourDelta = roomDeltaMap?.[room.id];
+        const playbackState = playbackRoomStateMap?.[room.id];
         const isSyntheticRoom =
           room.id.startsWith('PRESET_') || Boolean(roomLatest?.isSynthetic);
         const roomIsStale = Boolean(
@@ -1250,6 +1287,16 @@ export function FloorplanCanvas({
             severity: alertSeverity,
           });
         }
+        if (
+          playbackState?.propagationRole === 'ORIGIN' ||
+          playbackState?.propagationRole === 'SPREAD'
+        ) {
+          playbackRoomOutlines.push({
+            roomId: room.id,
+            pixelVertices,
+            role: playbackState.propagationRole,
+          });
+        }
 
         // Structural Columns (BTCT) & Door Opening (CUA)
         if (
@@ -1322,9 +1369,18 @@ export function FloorplanCanvas({
             : '';
         const stalePrefix =
           roomIsStale && (showReliabilityLayer || !isSyntheticRoom) ? '⌛ ' : '';
+        const playbackPrefix =
+          playbackState?.propagationRole === 'ORIGIN'
+            ? '★#1 '
+            : playbackState?.propagationRole === 'SPREAD' && playbackState.rank
+              ? `#${playbackState.rank} `
+              : '';
+        const deltaSuffix = oneHourDelta?.hasBaseline
+          ? ` ${oneHourDelta.text}`
+          : '';
         const compactText = isSyntheticRoom
-          ? `${stalePrefix}${statusPrefix}${shortCode} · ${metricLabel} (MP)`
-          : `${stalePrefix}${statusPrefix}${shortCode} · ${metricLabel}`;
+          ? `${playbackPrefix}${stalePrefix}${statusPrefix}${shortCode} · ${metricLabel}${deltaSuffix} (MP)`
+          : `${playbackPrefix}${stalePrefix}${statusPrefix}${shortCode} · ${metricLabel}${deltaSuffix}`;
 
         const values = idwSamples.map((s) => s.value);
         const minVal = values.length > 1 ? Math.min(...values) : null;
@@ -1352,12 +1408,16 @@ export function FloorplanCanvas({
         }
 
         const titleLine = isSyntheticRoom
-          ? `${codeLabel} · Mô phỏng`
-          : codeLabel;
-        const subLine =
-          zoomViewport.scale >= ZOOM_CONFIG.overviewMaxScale && spreadText
+          ? `${playbackPrefix}${codeLabel} · Mô phỏng`
+          : `${playbackPrefix}${codeLabel}`;
+        const baseSubLine = oneHourDelta
+          ? `${stalePrefix}${statusPrefix}${metricLabel} (${oneHourDelta.text})`
+          : zoomViewport.scale >= ZOOM_CONFIG.overviewMaxScale && spreadText
             ? `${stalePrefix}${statusPrefix}${metricLabel} · ${spreadText}`
             : `${stalePrefix}${statusPrefix}${metricLabel}`;
+        const subLine = playbackState?.propagationLabelVi
+          ? `${baseSubLine} · ${playbackState.propagationLabelVi}`
+          : baseSubLine;
 
         let effectiveStyle: RoomLabelStyle = lodConfig.roomLabel;
         if (zoomedRoomId) {
@@ -1370,12 +1430,20 @@ export function FloorplanCanvas({
           isZoomTarget ||
           isSelected ||
           hasAlert ||
+          playbackState?.propagationRole === 'ORIGIN' ||
+          playbackState?.propagationRole === 'SPREAD' ||
           areaM2 >= lodConfig.hideSmallRoomsUnderM2;
 
         const priority = computeRoomLabelPriority({
           isZoomTarget,
-          alertSeverity,
-          hasAlert,
+          alertSeverity:
+            playbackState?.propagationRole === 'ORIGIN'
+              ? 'CRITICAL'
+              : alertSeverity,
+          hasAlert:
+            hasAlert ||
+            playbackState?.propagationRole === 'ORIGIN' ||
+            playbackState?.propagationRole === 'SPREAD',
           isSelected,
           areaM2,
         });
@@ -1401,6 +1469,29 @@ export function FloorplanCanvas({
           techWarningText,
           priority,
         });
+      }
+
+      // Draw Event Playback Origin (#1) / Spread (#2+) highlights
+      for (const pbOutline of playbackRoomOutlines) {
+        const isOrigin = pbOutline.role === 'ORIGIN';
+        ctx.save();
+        ctx.beginPath();
+        pbOutline.pixelVertices.forEach((p, vIdx) => {
+          if (vIdx === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.closePath();
+        ctx.lineWidth = (isOrigin ? 5.5 : 3.5) / Math.sqrt(zoomViewport.scale);
+        ctx.strokeStyle = isOrigin
+          ? 'rgba(244, 63, 94, 0.5)'
+          : 'rgba(245, 158, 11, 0.35)';
+        ctx.stroke();
+
+        ctx.setLineDash(isOrigin ? [] : [5, 3]);
+        ctx.lineWidth = (isOrigin ? 2.6 : 2.0) / Math.sqrt(zoomViewport.scale);
+        ctx.strokeStyle = isOrigin ? '#E11D48' : '#D97706';
+        ctx.stroke();
+        ctx.restore();
       }
 
       // Draw Highlighted Double Borders for Alerting Rooms ABOVE normal room borders
@@ -1860,6 +1951,8 @@ export function FloorplanCanvas({
     activeStatusFilter,
     roomMatchesFilterMap,
     onlyExceedingThreshold,
+    roomDeltaMap,
+    playbackRoomStateMap,
     showHoverPopover,
   ]);
 
@@ -2205,6 +2298,8 @@ export function FloorplanCanvas({
       preset,
       value: primaryVal,
       historyValues: roomTelemetryHistoryMap?.[room.id],
+      oneHourDelta: roomDeltaMap?.[room.id] ?? null,
+      playbackState: playbackRoomStateMap?.[room.id] ?? null,
       openAlertsCount,
       reliability,
       left: popoverPlacement.left,
@@ -2229,6 +2324,8 @@ export function FloorplanCanvas({
     firingRoomSet,
     roomTelemetryHistoryMap,
     roomReliabilityMap,
+    roomDeltaMap,
+    playbackRoomStateMap,
   ]);
 
   const hoveredBayTooltipData = useMemo(() => {
@@ -3027,6 +3124,8 @@ export function FloorplanCanvas({
               layer={layer}
               value={hoveredPopoverData.value}
               historyValues={hoveredPopoverData.historyValues}
+              oneHourDelta={hoveredPopoverData.oneHourDelta}
+              playbackState={hoveredPopoverData.playbackState}
               openAlertsCount={hoveredPopoverData.openAlertsCount}
               preset={hoveredPopoverData.preset}
               reliability={hoveredPopoverData.reliability}

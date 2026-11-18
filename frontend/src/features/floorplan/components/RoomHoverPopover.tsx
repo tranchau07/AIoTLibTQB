@@ -5,6 +5,10 @@ import { ArrowUpRight, Sparkles } from 'lucide-react';
 import type { HeatmapLayerMetric } from '@/config/thresholds';
 import { formatLayerMetricValue } from '@/features/floorplan/components/FloorplanCanvas';
 import type { RoomReliabilitySummary } from '@/lib/floorplan/reliability';
+import type {
+  OneHourDeltaResult,
+  PlaybackRoomState,
+} from '@/lib/floorplan/timeAnalysis';
 import {
   METRIC_LAYER_META,
   getMetricStatusSymbol,
@@ -16,6 +20,8 @@ export interface RoomHoverPopoverProps {
   layer: HeatmapLayerMetric;
   value: number | null | undefined;
   historyValues?: readonly number[];
+  oneHourDelta?: OneHourDeltaResult | null;
+  playbackState?: PlaybackRoomState | null;
   openAlertsCount?: number;
   preset?: { areaM2?: number; roomType?: RoomType } | null;
   reliability?: RoomReliabilitySummary | null;
@@ -72,6 +78,8 @@ export function RoomHoverPopover({
   layer,
   value,
   historyValues,
+  oneHourDelta,
+  playbackState,
   openAlertsCount = 0,
   preset,
   reliability,
@@ -143,6 +151,47 @@ export function RoomHoverPopover({
           <p className="text-[10px] text-slate-300">{meta.shortLabel}</p>
         </div>
       </div>
+
+      {oneHourDelta && (
+        <div
+          data-testid="popover-delta-1h"
+          className="mt-1.5 flex items-center justify-between gap-2 rounded border border-slate-800 bg-slate-900/90 px-2 py-1 text-[11px]"
+        >
+          <span className="text-slate-300">So với 1 giờ trước</span>
+          <span
+            className={`font-mono font-semibold tabular-nums ${
+              !oneHourDelta.hasBaseline
+                ? 'text-slate-400'
+                : oneHourDelta.trend === 'STABLE'
+                  ? 'text-slate-200'
+                  : (layer === 'comfortScore' || layer === 'wifiRssi')
+                    ? oneHourDelta.trend === 'DOWN'
+                      ? 'text-rose-300'
+                      : 'text-emerald-300'
+                    : oneHourDelta.trend === 'UP'
+                      ? 'text-amber-300'
+                      : 'text-emerald-300'
+            }`}
+          >
+            {oneHourDelta.text}
+          </span>
+        </div>
+      )}
+
+      {playbackState?.propagationLabelVi && (
+        <div
+          data-testid="popover-playback-role"
+          className={`mt-1.5 rounded border px-2 py-1 text-[11px] font-semibold ${
+            playbackState.propagationRole === 'ORIGIN'
+              ? 'border-rose-400/60 bg-rose-950/90 text-rose-100'
+              : playbackState.propagationRole === 'SPREAD'
+                ? 'border-amber-400/60 bg-amber-950/90 text-amber-100'
+                : 'border-emerald-400/50 bg-emerald-950/80 text-emerald-100'
+          }`}
+        >
+          Diễn biến: {playbackState.propagationLabelVi}
+        </div>
+      )}
 
       {/* Status + Threshold Comparison */}
       <div

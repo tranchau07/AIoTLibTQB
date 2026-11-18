@@ -72,18 +72,37 @@ import {
   ManagerSummaryStrip,
   computeBuildingSummaryMetrics,
 } from '@/features/floorplan/components/ManagerSummaryStrip';
+import { TimeComparisonBar } from '@/features/floorplan/components/TimeComparisonBar';
 import { formatRealtimeAlertAnnouncementVi } from '@/lib/floorplan/alertWorkflow';
+import type { ViewportTransform } from '@/lib/floorplan/coords';
+import {
+  buildFloorplanShareUrl,
+  parseFloorplanUrlState,
+  serializeFloorplanUrlState,
+} from '@/lib/floorplan/deepLink';
+import {
+  exportFloorplanReportPdf,
+  exportFloorplanReportPng,
+} from '@/lib/floorplan/exportReport';
 import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
 import { computeVisualPolygonCenter } from '@/lib/floorplan/polygon';
 import {
   evaluateRoomReliability,
   type RoomReliabilitySummary,
 } from '@/lib/floorplan/reliability';
+import {
+  buildEventPlaybackFrames,
+  computeOneHourDelta,
+  computeTypicalDayFloorSnapshot,
+  type FloorplanTimeMode,
+  type OneHourDeltaResult,
+} from '@/lib/floorplan/timeAnalysis';
 import { computeRoomBlindspotRatio } from '@/lib/floorplan/weatherPalette';
 import type {
   AlertResponse,
   AlertSeverity,
   AlertWorkflowUpdateRequest,
+  BucketDataPoint,
   DeviceResponse,
   RoleName,
   RoomResponse,
@@ -193,6 +212,23 @@ export default function FloorplanPage() {
     useState<EffectiveRoleView | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isTreeCollapsed, setIsTreeCollapsed] = useState<boolean>(false);
+  const [timeMode, setTimeMode] = useState<FloorplanTimeMode>('live');
+  const [typicalHour, setTypicalHour] = useState<number>(15);
+  const [playbackIndex, setPlaybackIndex] = useState<number>(0);
+  const [isPlaybackPlaying, setIsPlaybackPlaying] = useState<boolean>(false);
+  const [viewportState, setViewportState] = useState<ViewportTransform>({
+    scale: 1,
+    tx: 0,
+    ty: 0,
+  });
+  const [restoredInitialViewport, setRestoredInitialViewport] =
+    useState<ViewportTransform | null>(null);
+  const [deepLinkCopied, setDeepLinkCopied] = useState<boolean>(false);
+  const lastWrittenSearchRef = useRef<string | null>(null);
+  const initialUrlHydratedRef = useRef<boolean>(false);
+  const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [liveAlertAnnouncement, setLiveAlertAnnouncement] =
     useState<string>('');
@@ -208,7 +244,12 @@ export default function FloorplanPage() {
 
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      if (copyFeedbackTimerRef.current) {
+        clearTimeout(copyFeedbackTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -688,6 +729,183 @@ export default function FloorplanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [realFloorDevices, floorDevices, realDeviceTelemetrySignature, roomTelemetryMap]);
 
+  // Chiều thời gian (-1h / Phát lại sự kiện / Ngày điển hình theo giờ)
+  const bucketAnchorMs = useMemo(
+    () => Math.floor(nowMs / (5 * 60_000)) * (5 * 60_000),
+    [nowMs]
+  );
+
+  const activeBucketSpec = useMemo(() => {
+    if (timeMode === 'compare_1h' || timeMode === 'playback') {
+      return {
+        interval: '15m' as const,
+        start: new Date(bucketAnchorMs - 2.5 * 3600_000).toISOString(),
+        end: new Date(bucketAnchorMs).toISOString(),
+      };
+    }
+    if (timeMode === 'typical_day') {
+      return {
+        interval: '1h' as const,
+        start: new Date(bucketAnchorMs - 7 * 86400_000).toISOString(),
+        end: new Date(bucketAnchorMs).toISOString(),
+      };
+    }
+    return null;
+  }, [timeMode, bucketAnchorMs]);
+
+  const timeBucketQueries = useQueries({
+    queries: activeBucketSpec
+      ? realFloorRooms.map((room) => ({
+          queryKey: telemetryKeys.roomBuckets(
+            room.id,
+            activeBucketSpec.interval,
+            activeBucketSpec.start,
+            activeBucketSpec.end
+          ),
+          queryFn: () =>
+            telemetryApi.getRoomBuckets({
+              roomId: room.id,
+              interval: activeBucketSpec.interval,
+              start: activeBucketSpec.start,
+              end: activeBucketSpec.end,
+            }),
+        }))
+      : [],
+  });
+
+  const roomBucketsSignature = realFloorRooms
+    .map((r, idx) => {
+      const q = timeBucketQueries[idx];
+      return `${r.id}:${q?.data?.dataPoints?.length ?? 0}:${q?.dataUpdatedAt ?? 0}`;
+    })
+    .join('|');
+
+  const roomBucketsByRoomId = useMemo(() => {
+    const map: Record<string, readonly BucketDataPoint[] | undefined> = {};
+    realFloorRooms.forEach((r, idx) => {
+      map[r.id] = timeBucketQueries[idx]?.data?.dataPoints;
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realFloorRooms, roomBucketsSignature]);
+
+  const roomDeltaMap = useMemo(() => {
+    if (timeMode !== 'compare_1h') return undefined;
+    const map: Record<string, OneHourDeltaResult> = {};
+    for (const room of visibleFloorRooms) {
+      const val = extractLayerMetricValue(
+        roomTelemetryMap[room.id],
+        selectedLayer
+      );
+      map[room.id] = computeOneHourDelta(
+        val,
+        roomBucketsByRoomId[room.id],
+        selectedLayer,
+        nowMs
+      );
+    }
+    return map;
+  }, [
+    timeMode,
+    visibleFloorRooms,
+    roomTelemetryMap,
+    roomBucketsByRoomId,
+    selectedLayer,
+    nowMs,
+  ]);
+
+  const playbackFrames = useMemo(() => {
+    if (timeMode !== 'playback') return [];
+    return buildEventPlaybackFrames(
+      visibleFloorRooms,
+      roomBucketsByRoomId,
+      selectedLayer,
+      roomTelemetryMap
+    );
+  }, [
+    timeMode,
+    visibleFloorRooms,
+    roomBucketsByRoomId,
+    selectedLayer,
+    roomTelemetryMap,
+  ]);
+
+  const safePlaybackIndex =
+    playbackFrames.length > 0
+      ? Math.max(0, Math.min(playbackFrames.length - 1, playbackIndex))
+      : 0;
+
+  const activePlaybackFrame =
+    timeMode === 'playback'
+      ? (playbackFrames[safePlaybackIndex] ?? null)
+      : null;
+
+  useEffect(() => {
+    if (
+      timeMode !== 'playback' ||
+      !isPlaybackPlaying ||
+      playbackFrames.length <= 1
+    ) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setPlaybackIndex((prev) =>
+        prev >= playbackFrames.length - 1 ? 0 : prev + 1
+      );
+    }, 900);
+    return () => clearInterval(timer);
+  }, [timeMode, isPlaybackPlaying, playbackFrames.length]);
+
+  const typicalDaySnapshot = useMemo(() => {
+    if (timeMode !== 'typical_day') return null;
+    return computeTypicalDayFloorSnapshot(
+      visibleFloorRooms,
+      typicalHour,
+      roomBucketsByRoomId,
+      roomTelemetryMap
+    );
+  }, [
+    timeMode,
+    visibleFloorRooms,
+    typicalHour,
+    roomBucketsByRoomId,
+    roomTelemetryMap,
+  ]);
+
+  const effectiveRoomTelemetryMap = useMemo(() => {
+    if (timeMode === 'playback' && activePlaybackFrame) {
+      return {
+        ...roomTelemetryMap,
+        ...activePlaybackFrame.telemetryByRoomId,
+      };
+    }
+    if (timeMode === 'typical_day' && typicalDaySnapshot) {
+      return {
+        ...roomTelemetryMap,
+        ...typicalDaySnapshot.telemetryByRoomId,
+      };
+    }
+    return roomTelemetryMap;
+  }, [
+    timeMode,
+    roomTelemetryMap,
+    activePlaybackFrame,
+    typicalDaySnapshot,
+  ]);
+
+  const effectiveDeviceTelemetryMap = useMemo(() => {
+    if (timeMode === 'live' || timeMode === 'compare_1h') {
+      return deviceTelemetryMap;
+    }
+    const map: Record<string, TelemetryResponse | null | undefined> = {};
+    for (const d of floorDevices) {
+      if (d.roomId) {
+        map[d.id] = effectiveRoomTelemetryMap[d.roomId] ?? null;
+      }
+    }
+    return map;
+  }, [timeMode, deviceTelemetryMap, floorDevices, effectiveRoomTelemetryMap]);
+
   const unconfiguredRooms = useMemo(
     () =>
       backendFloorRooms.filter(
@@ -796,8 +1014,16 @@ export default function FloorplanPage() {
   );
 
   const selectedRoomTelemetry = selectedRoom
-    ? roomTelemetryMap[selectedRoom.id]
+    ? effectiveRoomTelemetryMap[selectedRoom.id]
     : null;
+
+  const selectedRoomDelta =
+    selectedRoom && roomDeltaMap ? (roomDeltaMap[selectedRoom.id] ?? null) : null;
+
+  const selectedRoomPlaybackState =
+    selectedRoom && activePlaybackFrame
+      ? (activePlaybackFrame.roomStates[selectedRoom.id] ?? null)
+      : null;
 
   const selectedRoomReliability = selectedRoom
     ? roomReliabilityMap[selectedRoom.id] ?? null
@@ -982,93 +1208,308 @@ export default function FloorplanPage() {
     });
   }, [isStudentView, capabilities.canViewAlerts, queryClient]);
 
-  // Đồng bộ tham số URL (?floor=...&roomId=...&deviceId=...&hardwareId=...&layer=...&alertId=...)
-  // khi điều hướng từ nút "Tiếp nhận" ở trang Cảnh báo (/alerts) hoặc Tổng quan (/dashboard)
-  const appliedDeepLinkRef = useRef<string | null>(null);
+  // Khôi phục trạng thái đầy đủ từ URL (Deep Link + Alert Acknowledge navigation)
+  const [urlHydrated, setUrlHydrated] = useState<boolean>(false);
+  const pendingUrlFloorRef = useRef<number | null>(null);
+  const pendingUrlAlertIdRef = useRef<string | null>(null);
+  const appliedUrlDeviceSigRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const search = window.location.search;
-    if (!search) return;
 
-    const params = new URLSearchParams(search);
-    const qFloor = Number(params.get('floor'));
-    const qRoomId = params.get('roomId');
-    const qDeviceId = params.get('deviceId');
-    const qHardwareId = params.get('hardwareId');
-    const qLayer = params.get('layer') as HeatmapLayerMetric | null;
-    const qAlertId = params.get('alertId');
-
-    // Khóa chữ ký bao gồm trạng thái đã tải danh sách phòng/thiết bị để tinh chỉnh chính xác khi dữ liệu API về
-    const dataReadySig = `${search}|rooms:${allBackendRooms.length}:${floorRooms.length}|devs:${floorDevices.length}|alerts:${activeAlerts.length}`;
-    if (appliedDeepLinkRef.current === dataReadySig) return;
-    appliedDeepLinkRef.current = dataReadySig;
-
-    // Nếu có alertId và tìm thấy bản ghi cảnh báo, ưu tiên phân giải đầy đủ từ cảnh báo
-    const matchedAlert = qAlertId
-      ? (alertsQuery.data?.content ?? []).find((a) => a.id === qAlertId)
-      : undefined;
-
-    if (matchedAlert && !qRoomId && !qDeviceId && !qHardwareId) {
-      focusAlertOnMap(matchedAlert);
+    if (!search) {
+      setUrlHydrated(true);
       return;
     }
 
-    const effectiveRoomId = qRoomId ?? matchedAlert?.roomId ?? null;
-    const effectiveDeviceId = qDeviceId ?? matchedAlert?.deviceId ?? null;
-    const effectiveHardwareId = qHardwareId ?? matchedAlert?.hardwareId ?? null;
-
-    // Xác định tầng từ query hoặc từ danh sách phòng toàn tòa nhà
-    const matchedRoomAcrossBuilding = effectiveRoomId
-      ? allBackendRooms.find((r) => r.id === effectiveRoomId)
-      : undefined;
-    const targetFloor =
-      Number.isFinite(qFloor) && floorOptions.includes(qFloor)
-        ? qFloor
-        : matchedRoomAcrossBuilding?.floor;
-
+    // Bỏ qua nếu URL hiện tại do chính state sync vừa ghi ra và không còn alertId/floor chờ phân giải
     if (
-      typeof targetFloor === 'number' &&
-      floorOptions.includes(targetFloor) &&
-      targetFloor !== selectedFloor
+      lastWrittenSearchRef.current !== null &&
+      search === lastWrittenSearchRef.current &&
+      !pendingUrlAlertIdRef.current &&
+      pendingUrlFloorRef.current === null
     ) {
-      setSelectedFloor(targetFloor);
+      if (!urlHydrated) setUrlHydrated(true);
+      return;
     }
 
+    const params = new URLSearchParams(search);
+    const rawFloorNum = Number(params.get('floor'));
+    const parsed = parseFloorplanUrlState(search, floorOptions, {
+      floor: DEFAULT_FLOORPLAN_CONFIG.defaultFloor,
+      layer: DEFAULT_FLOORPLAN_CONFIG.defaultLayer,
+    });
+
+    if (!urlHydrated || (lastWrittenSearchRef.current !== null && search !== lastWrittenSearchRef.current)) {
+      if (Number.isInteger(rawFloorNum) && rawFloorNum > 0 && !floorOptions.includes(rawFloorNum)) {
+        pendingUrlFloorRef.current = rawFloorNum;
+      } else {
+        pendingUrlFloorRef.current = null;
+      }
+
+      if (parsed.alertId && !parsed.roomId && !parsed.deviceId && !parsed.hardwareId) {
+        pendingUrlAlertIdRef.current = parsed.alertId;
+      } else {
+        pendingUrlAlertIdRef.current = null;
+      }
+
+      const matchedRoomAcrossBuilding = parsed.roomId
+        ? allBackendRooms.find((r) => r.id === parsed.roomId)
+        : undefined;
+      const targetFloor = params.has('floor')
+        ? parsed.floor
+        : matchedRoomAcrossBuilding?.floor ?? selectedFloor;
+
+      if (floorOptions.includes(targetFloor) && targetFloor !== selectedFloor) {
+        setSelectedFloor(targetFloor);
+      }
+
+      if (params.has('layer') && parsed.layer !== selectedLayer) {
+        setSelectedLayer(parsed.layer);
+      }
+
+      if (parsed.roomId) {
+        setSelectedRoomId(parsed.roomId);
+        setZoomedRoomId(parsed.roomId);
+      }
+
+      if (params.has('timeMode') && parsed.timeMode !== timeMode) {
+        setTimeMode(parsed.timeMode);
+      }
+      if (params.has('hour') && typeof parsed.hour === 'number') {
+        setTypicalHour(parsed.hour);
+      }
+      if (params.has('statusFilter') || params.has('alertFilter')) {
+        setStatusFilter(parsed.statusFilter);
+      }
+
+      if (params.has('scale') || params.has('tx') || params.has('ty')) {
+        const restoredVp: ViewportTransform = {
+          scale: parsed.scale,
+          tx: parsed.tx,
+          ty: parsed.ty,
+        };
+        setViewportState(restoredVp);
+        setRestoredInitialViewport(restoredVp);
+      }
+
+      lastWrittenSearchRef.current = search;
+      setUrlHydrated(true);
+    }
+
+    // Giải quyết trễ khi tầng tùy chỉnh từ API vừa tải về
     if (
-      qLayer &&
-      LAYER_OPTIONS.some((opt) => opt.key === qLayer) &&
-      qLayer !== selectedLayer
+      pendingUrlFloorRef.current !== null &&
+      floorOptions.includes(pendingUrlFloorRef.current)
     ) {
-      setSelectedLayer(qLayer);
+      setSelectedFloor(pendingUrlFloorRef.current);
+      pendingUrlFloorRef.current = null;
     }
 
-    if (effectiveRoomId) {
-      setSelectedRoomId(effectiveRoomId);
-      setZoomedRoomId(effectiveRoomId);
+    // Giải quyết deep-link theo alertId sau khi dữ liệu cảnh báo tải xong
+    if (pendingUrlAlertIdRef.current && alertsQuery.data) {
+      const matchedAlert = alertsQuery.data.content.find(
+        (a) => a.id === pendingUrlAlertIdRef.current
+      );
+      if (matchedAlert) {
+        pendingUrlAlertIdRef.current = null;
+        focusAlertOnMap(matchedAlert);
+      }
     }
 
-    if (effectiveDeviceId || effectiveHardwareId) {
+    // Ghim trạm cảm biến khi danh sách thiết bị tải xong
+    const effectiveDevId = parsed.deviceId ?? null;
+    const effectiveHwId = parsed.hardwareId ?? null;
+    const devSig = `${search}|devs:${floorDevices.length}`;
+    if (
+      (effectiveDevId || effectiveHwId) &&
+      appliedUrlDeviceSigRef.current !== devSig
+    ) {
+      appliedUrlDeviceSigRef.current = devSig;
       const matchedFloorDevice = floorDevices.find(
         (d) =>
-          (effectiveDeviceId && d.id === effectiveDeviceId) ||
-          (effectiveHardwareId &&
-            (d.hardwareId === effectiveHardwareId ||
-              d.id === effectiveHardwareId))
+          (effectiveDevId && d.id === effectiveDevId) ||
+          (effectiveHwId &&
+            (d.hardwareId === effectiveHwId || d.id === effectiveHwId))
       );
       setFocusedDeviceId(
-        matchedFloorDevice?.id ?? effectiveDeviceId ?? effectiveHardwareId
+        matchedFloorDevice?.id ?? effectiveDevId ?? effectiveHwId
       );
     }
   }, [
+    urlHydrated,
     allBackendRooms,
-    floorRooms.length,
     floorDevices,
-    activeAlerts.length,
     alertsQuery.data,
     focusAlertOnMap,
     floorOptions,
     selectedFloor,
     selectedLayer,
+    timeMode,
+  ]);
+
+  const currentUrlState = useMemo(
+    () => ({
+      floor: selectedFloor,
+      roomId: selectedRoomId,
+      deviceId: focusedDeviceId,
+      layer: selectedLayer,
+      scale: viewportState.scale,
+      tx: viewportState.tx,
+      ty: viewportState.ty,
+      timeMode,
+      hour: typicalHour,
+      statusFilter,
+    }),
+    [
+      selectedFloor,
+      selectedRoomId,
+      focusedDeviceId,
+      selectedLayer,
+      viewportState.scale,
+      viewportState.tx,
+      viewportState.ty,
+      timeMode,
+      typicalHour,
+      statusFilter,
+    ]
+  );
+
+  // Đồng bộ 2 chiều trạng thái xem ra URL khi người dùng tương tác (sau khi đã khôi phục xong)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !urlHydrated) return;
+    if (pendingUrlAlertIdRef.current || pendingUrlFloorRef.current !== null) {
+      return;
+    }
+
+    const isDefaultState =
+      currentUrlState.floor === DEFAULT_FLOORPLAN_CONFIG.defaultFloor &&
+      !currentUrlState.roomId &&
+      !currentUrlState.deviceId &&
+      currentUrlState.layer === DEFAULT_FLOORPLAN_CONFIG.defaultLayer &&
+      currentUrlState.scale <= 1.001 &&
+      Math.abs(currentUrlState.tx) < 0.5 &&
+      Math.abs(currentUrlState.ty) < 0.5 &&
+      currentUrlState.timeMode === 'live' &&
+      currentUrlState.statusFilter === 'ALL';
+
+    if (!window.location.search && isDefaultState) {
+      return;
+    }
+
+    const nextQuery = serializeFloorplanUrlState(currentUrlState);
+    const nextSearch = `?${nextQuery}`;
+    if (window.location.search === nextSearch) {
+      lastWrittenSearchRef.current = nextSearch;
+      return;
+    }
+    lastWrittenSearchRef.current = nextSearch;
+    window.history.replaceState(null, '', nextSearch);
+  }, [urlHydrated, currentUrlState]);
+
+  const activeTimeModeLabel = useMemo(() => {
+    switch (timeMode) {
+      case 'compare_1h':
+        return FLOORPLAN_I18N_VI.timeAnalysis.modes.compare_1h;
+      case 'playback':
+        return activePlaybackFrame
+          ? `${FLOORPLAN_I18N_VI.timeAnalysis.modes.playback} (${activePlaybackFrame.timestamp})`
+          : FLOORPLAN_I18N_VI.timeAnalysis.modes.playback;
+      case 'typical_day':
+        return `${FLOORPLAN_I18N_VI.timeAnalysis.modes.typical_day} (${String(
+          typicalHour
+        ).padStart(2, '0')}:00)`;
+      case 'live':
+      default:
+        return FLOORPLAN_I18N_VI.timeAnalysis.modes.live;
+    }
+  }, [timeMode, activePlaybackFrame, typicalHour]);
+
+  const handleCopyDeepLink = useCallback(async () => {
+    const shareUrl = buildFloorplanShareUrl(currentUrlState);
+    if (typeof window !== 'undefined') {
+      const nextSearch = `?${serializeFloorplanUrlState(currentUrlState)}`;
+      lastWrittenSearchRef.current = nextSearch;
+      window.history.replaceState(null, '', nextSearch);
+    }
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      }
+    } catch {
+      // Ignore clipboard write rejection in restricted contexts
+    }
+    setDeepLinkCopied(true);
+    if (copyFeedbackTimerRef.current) {
+      clearTimeout(copyFeedbackTimerRef.current);
+    }
+    copyFeedbackTimerRef.current = setTimeout(() => {
+      setDeepLinkCopied(false);
+    }, 2200);
+  }, [currentUrlState]);
+
+  const floorOpenAlerts = useMemo(
+    () => activeAlerts.filter((a) => !a.roomId || floorRoomIds.has(a.roomId)),
+    [activeAlerts, floorRoomIds]
+  );
+
+  const handleExportPng = useCallback(() => {
+    const root = workspaceFullscreenRef.current;
+    const staticCanvas =
+      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="static-base-canvas"]') ??
+      null;
+    const dynamicCanvas =
+      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="dynamic-heatmap-canvas"]') ??
+      null;
+    exportFloorplanReportPng({
+      floor: selectedFloor,
+      layer: selectedLayer,
+      staticCanvas,
+      dynamicCanvas,
+      rooms: visibleFloorRooms,
+      roomTelemetryMap: effectiveRoomTelemetryMap,
+      openAlerts: floorOpenAlerts,
+      exportedBy: currentUser?.username ?? 'Quản lý thư viện',
+      timeModeLabel: activeTimeModeLabel,
+    });
+  }, [
+    selectedFloor,
+    selectedLayer,
+    visibleFloorRooms,
+    effectiveRoomTelemetryMap,
+    floorOpenAlerts,
+    currentUser?.username,
+    activeTimeModeLabel,
+  ]);
+
+  const handleExportPdf = useCallback(() => {
+    const root = workspaceFullscreenRef.current;
+    const staticCanvas =
+      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="static-base-canvas"]') ??
+      null;
+    const dynamicCanvas =
+      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="dynamic-heatmap-canvas"]') ??
+      null;
+    exportFloorplanReportPdf({
+      floor: selectedFloor,
+      layer: selectedLayer,
+      staticCanvas,
+      dynamicCanvas,
+      rooms: visibleFloorRooms,
+      roomTelemetryMap: effectiveRoomTelemetryMap,
+      openAlerts: floorOpenAlerts,
+      exportedBy: currentUser?.username ?? 'Quản lý thư viện',
+      timeModeLabel: activeTimeModeLabel,
+    });
+  }, [
+    selectedFloor,
+    selectedLayer,
+    visibleFloorRooms,
+    effectiveRoomTelemetryMap,
+    floorOpenAlerts,
+    currentUser?.username,
+    activeTimeModeLabel,
   ]);
 
   // ============================================================================
@@ -1814,6 +2255,35 @@ export default function FloorplanPage() {
         />
       ) : (
         <div className="space-y-2">
+          {/* Time Dimension Bar (-1h, Playback, Typical Day, Deep Link, PNG/PDF Export) */}
+          {!isStudentView && (
+            <TimeComparisonBar
+              timeMode={timeMode}
+              onTimeModeChange={(nextMode) => {
+                setTimeMode(nextMode);
+                setIsPlaybackPlaying(false);
+                if (nextMode === 'playback') {
+                  setPlaybackIndex(0);
+                }
+              }}
+              frames={playbackFrames}
+              playbackIndex={safePlaybackIndex}
+              onPlaybackIndexChange={(idx) => {
+                setIsPlaybackPlaying(false);
+                setPlaybackIndex(idx);
+              }}
+              isPlaying={isPlaybackPlaying}
+              onTogglePlay={() => setIsPlaybackPlaying((p) => !p)}
+              typicalHour={typicalHour}
+              onTypicalHourChange={setTypicalHour}
+              typicalSummaryNote={typicalDaySnapshot?.summaryNoteVi}
+              onCopyDeepLink={() => void handleCopyDeepLink()}
+              deepLinkCopied={deepLinkCopied}
+              onExportPng={handleExportPng}
+              onExportPdf={handleExportPdf}
+            />
+          )}
+
           {/* Dynamic Navigation Breadcrumb: Tầng X › Phòng Y */}
           <nav
             aria-label="Đường dẫn vị trí bản đồ"
@@ -1888,8 +2358,8 @@ export default function FloorplanPage() {
                 <FloorplanCanvas
                   rooms={visibleFloorRooms}
                   devices={floorDevices}
-                  roomTelemetryMap={roomTelemetryMap}
-                  deviceTelemetryMap={deviceTelemetryMap}
+                  roomTelemetryMap={effectiveRoomTelemetryMap}
+                  deviceTelemetryMap={effectiveDeviceTelemetryMap}
                   layer={selectedLayer}
                   selectedRoomId={selectedRoomId}
                   onSelectRoom={(room) => {
@@ -1930,6 +2400,10 @@ export default function FloorplanPage() {
                   roomMatchesFilterMap={roomMatchesFilterMap}
                   onlyExceedingThreshold={onlyExceedingThreshold}
                   roomTelemetryHistoryMap={roomTelemetryHistoryMap}
+                  initialViewport={restoredInitialViewport}
+                  onViewportChange={setViewportState}
+                  roomDeltaMap={roomDeltaMap}
+                  playbackRoomStateMap={activePlaybackFrame?.roomStates}
                   isFullscreen={isFullscreen}
                   onToggleFullscreen={handleToggleFullscreen}
                   maxViewportHeightPx={maxViewportHeightPx}
@@ -2036,6 +2510,41 @@ export default function FloorplanPage() {
                     <span className="text-2xs text-slate-400">/100</span>
                   </div>
                 </div>
+
+                {/* Time Mode Readout (-1h Delta / Playback Propagation Role) */}
+                {!isStudentView &&
+                  (selectedRoomDelta || selectedRoomPlaybackState) && (
+                    <div
+                      data-testid="drawer-time-analysis-card"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs"
+                    >
+                      {selectedRoomDelta && (
+                        <div className="flex items-center gap-1.5 font-semibold text-slate-800">
+                          <span className="text-slate-600">Biến động -1h:</span>
+                          <span data-testid="drawer-delta-1h" className="tabular-nums text-sky-900">
+                            {selectedRoomDelta.textWithContext}
+                          </span>
+                        </div>
+                      )}
+                      {selectedRoomPlaybackState && (
+                        <div className="flex items-center gap-1.5 font-semibold">
+                          <span className="text-slate-600">Phát lại sự cố:</span>
+                          <span
+                            data-testid="drawer-playback-role"
+                            className={`rounded px-1.5 py-0.5 ${
+                              selectedRoomPlaybackState.propagationRole === 'ORIGIN'
+                                ? 'bg-rose-100 text-rose-900'
+                                : selectedRoomPlaybackState.propagationRole === 'SPREAD'
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : 'bg-slate-200 text-slate-800'
+                            }`}
+                          >
+                            {selectedRoomPlaybackState.propagationLabelVi}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                 {/* Manager-Friendly Data Reliability Summary */}
                 {!isStudentView && selectedRoomReliability && (
@@ -2414,7 +2923,7 @@ export default function FloorplanPage() {
             </thead>
             <tbody>
               {visibleFloorRooms.map((room, idx) => {
-                const tel = roomTelemetryMap[room.id];
+                const tel = effectiveRoomTelemetryMap[room.id];
                 const preset = resolveRoomPreset(room, idx);
                 const layerVal = extractLayerMetricValue(tel, selectedLayer);
 
