@@ -67,6 +67,7 @@ public class MqttMessageDispatcherService {
     }
 
     private static final Duration LAST_SEEN_THROTTLE_WINDOW = Duration.ofSeconds(30);
+    private static final Duration STALE_ALERT_EVALUATION_THRESHOLD = Duration.ofSeconds(60);
     private static final int MONGO_WRITE_PERMITS = 30;
     private static final long MONGO_ACQUIRE_TIMEOUT_MS = 3000;
 
@@ -159,7 +160,7 @@ public class MqttMessageDispatcherService {
                     DeviceMetadata metadata = deviceMetadataCache.get(hardwareId).orElse(null);
                     if (metadata != null && metadata.isActive()) {
                         if (isOffline) {
-                            alertService.triggerDeviceOfflineAlert(metadata.getId(), metadata.getHardwareId(), metadata.getRoomId());
+                            alertService.triggerDeviceOfflineAlert(metadata.getId(), metadata.getHardwareId(), metadata.getRoomId(), metadata.getZoneId());
                             if (deviceWatchdogService != null) {
                                 deviceWatchdogService.recordOfflineDevice(hardwareId);
                             }
@@ -234,21 +235,44 @@ public class MqttMessageDispatcherService {
             TelemetrySanitizerService.SanitizedMetrics sanitized =
                     telemetrySanitizerService.sanitize(device.getId(), telemetryPayload.getData());
 
+            // Chuẩn hóa thời gian đo (hỗ trợ cả millis/seconds, bảo toàn lịch sử buffered, kẹp lệch tương lai/pre-2020)
+            Instant now = Instant.now();
+            Instant timestamp = parseAndNormalizeTimestamp(telemetryPayload.getTimestamp(), now, hardwareId);
+            boolean isStalePacket = Duration.between(timestamp, now).compareTo(STALE_ALERT_EVALUATION_THRESHOLD) > 0;
+
+            boolean emptyCleanMetrics = isEmptyMetrics(sanitized);
+            boolean hasOutOfBoundsSensor = sanitized != null && sanitized.isHasOutOfBoundsSensor();
+            boolean allValidReadings = sanitized != null && sanitized.isAllValidReadings();
+
+            // Đánh giá sức khỏe phần cứng cảm biến trước khi bỏ qua bản tin rỗng,
+            // đảm bảo cảm biến hỏng hoàn toàn (> 30s) vẫn kích hoạt SENSOR_MALFUNCTION.
+            if (alertService != null && !isStalePacket && (!emptyCleanMetrics || hasOutOfBoundsSensor)) {
+                alertService.evaluateSensorHealth(
+                        device.getId(),
+                        device.getHardwareId(),
+                        device.getRoomId(),
+                        device.getZoneId(),
+                        hasOutOfBoundsSensor,
+                        allValidReadings,
+                        sanitized.getMalfunctioningSensors()
+                );
+            }
+
             // R3: Bỏ qua bản tin telemetry không chứa bất kỳ số liệu cảm biến hợp lệ nào (empty record)
-            if (isEmptyMetrics(sanitized)) {
+            if (emptyCleanMetrics) {
                 log.debug("Discarded empty telemetry record with no valid metrics: hardwareId={}", hardwareId);
                 return;
             }
 
             // Đánh giá cảnh báo FSM theo thời gian thực (in-memory, không query DB) với dữ liệu đã lọc sạch
-            if (alertService != null) {
+            // Bỏ qua các bản tin cũ gửi bù sau khi mất mạng (trễ > 60 giây) để tránh báo động giả
+            if (alertService != null && !isStalePacket) {
                 TelemetryPayload.TelemetryData cleanData = toTelemetryData(sanitized);
-                alertService.evaluateTelemetry(device.getId(), device.getHardwareId(), device.getRoomId(), cleanData);
+                alertService.evaluateTelemetry(device.getId(), device.getHardwareId(), device.getRoomId(), device.getZoneId(), cleanData);
+            } else if (isStalePacket) {
+                log.debug("Skipped FSM alert evaluation for stale buffered telemetry: hardwareId={}, packetTs={}, now={}",
+                        hardwareId, timestamp, now);
             }
-
-            // Chuẩn hóa thời gian đo (hỗ trợ cả millis/seconds, bảo toàn lịch sử buffered, kẹp lệch tương lai/pre-2020)
-            Instant now = Instant.now();
-            Instant timestamp = parseAndNormalizeTimestamp(telemetryPayload.getTimestamp(), now, hardwareId);
 
             ComfortScoreRecord comfortScore = comfortScoreService.calculateForRoom(sanitized, device.getRoomId());
 

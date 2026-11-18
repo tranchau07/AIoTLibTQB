@@ -18,7 +18,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
@@ -89,26 +91,40 @@ public class TelemetrySanitizerService {
         }
 
         Instant now = clock.instant();
+        RawValidationTracker tracker = new RawValidationTracker();
 
         // 1. Âm học (Acoustics)
-        AcousticMetrics acoustics = sanitizeAcoustics(deviceId, data.getAcoustics(), now);
+        AcousticMetrics acoustics = sanitizeAcoustics(deviceId, data.getAcoustics(), now, tracker);
 
         // 2. Bụi mịn (Air Quality)
-        AirQualityMetrics airQuality = sanitizeAirQuality(deviceId, data.getAirQuality(), now);
+        AirQualityMetrics airQuality = sanitizeAirQuality(deviceId, data.getAirQuality(), now, tracker);
 
         // 3. Môi trường nhiệt ẩm ánh sáng (Environment)
-        EnvironmentMetrics environment = sanitizeEnvironment(deviceId, data.getEnvironment(), now);
+        EnvironmentMetrics environment = sanitizeEnvironment(deviceId, data.getEnvironment(), now, tracker);
 
-        return new SanitizedMetrics(acoustics, airQuality, environment);
+        return new SanitizedMetrics(
+                acoustics,
+                airQuality,
+                environment,
+                tracker.hasOutOfBounds(),
+                tracker.allValidReadings(),
+                List.copyOf(tracker.malfunctioningSensors)
+        );
     }
 
-    private AcousticMetrics sanitizeAcoustics(String deviceId, TelemetryPayload.AcousticsData in, Instant now) {
+    private AcousticMetrics sanitizeAcoustics(
+            String deviceId,
+            TelemetryPayload.AcousticsData in,
+            Instant now,
+            RawValidationTracker tracker
+    ) {
         String safeDeviceKey = deviceId != null ? deviceId : "unknown";
 
         // Luồng mới: Thiết bị chỉ gửi độ ồn tức thời (noise), Server tự tính noiseAvg (cửa sổ trượt 30s) & noisePeak
         if (in != null && in.getNoise() != null) {
             double rawNoise = in.getNoise();
             if (Double.isFinite(rawNoise) && rawNoise >= NOISE_MIN && rawNoise <= NOISE_PEAK_MAX) {
+                tracker.markValid();
                 NoiseSlidingWindow window = noiseWindowCache.get(safeDeviceKey, k -> new NoiseSlidingWindow());
                 double computedAvg = window.recordAndAverage(rawNoise, now, NOISE_WINDOW);
                 double noiseAvg = roundToOneDecimal(Math.min(computedAvg, NOISE_AVG_MAX));
@@ -119,6 +135,7 @@ public class TelemetrySanitizerService {
                         .build();
             }
 
+            tracker.markOutOfBounds("acoustics.noise");
             log.warn("Sensor out-of-bounds rejected for device '{}', metric 'acoustics.noise': value={} (expected [{}, {}])",
                     deviceId, rawNoise, NOISE_MIN, NOISE_PEAK_MAX);
             Double fallbackAvg = getNoiseWindowAverage(safeDeviceKey, now);
@@ -133,8 +150,8 @@ public class TelemetrySanitizerService {
 
         // Tương thích ngược: Payload cũ gửi sẵn noise_avg / noise_peak
         if (in != null && (in.getNoiseAvg() != null || in.getNoisePeak() != null)) {
-            Double avg = sanitizeField(deviceId, "acoustics.noiseAvg", in.getNoiseAvg(), NOISE_MIN, NOISE_AVG_MAX, now);
-            Double peak = sanitizePeakWithoutForwardFill(deviceId, "acoustics.noisePeak", in.getNoisePeak(), NOISE_MIN, NOISE_PEAK_MAX);
+            Double avg = sanitizeField(deviceId, "acoustics.noiseAvg", in.getNoiseAvg(), NOISE_MIN, NOISE_AVG_MAX, now, tracker);
+            Double peak = sanitizePeakWithoutForwardFill(deviceId, "acoustics.noisePeak", in.getNoisePeak(), NOISE_MIN, NOISE_PEAK_MAX, tracker);
             if (avg == null && peak == null) {
                 return null;
             }
@@ -147,7 +164,7 @@ public class TelemetrySanitizerService {
         // Trường hợp acoustics bị null hoặc noise = null: forward-fill noiseAvg trong 30s, tuyệt đối không forward-fill noisePeak
         Double avg = getNoiseWindowAverage(safeDeviceKey, now);
         if (avg == null) {
-            avg = sanitizeField(deviceId, "acoustics.noiseAvg", null, NOISE_MIN, NOISE_AVG_MAX, now);
+            avg = sanitizeField(deviceId, "acoustics.noiseAvg", null, NOISE_MIN, NOISE_AVG_MAX, now, tracker);
         }
         if (avg == null) {
             return null;
@@ -174,25 +191,39 @@ public class TelemetrySanitizerService {
         return Math.round(value * 10.0) / 10.0;
     }
 
-    private Double sanitizePeakWithoutForwardFill(String deviceId, String fieldKey, Double incomingValue, double min, double max) {
+    private Double sanitizePeakWithoutForwardFill(
+            String deviceId,
+            String fieldKey,
+            Double incomingValue,
+            double min,
+            double max,
+            RawValidationTracker tracker
+    ) {
         if (incomingValue == null) {
             return null;
         }
 
-        if (incomingValue >= min && incomingValue <= max) {
+        if (Double.isFinite(incomingValue) && incomingValue >= min && incomingValue <= max) {
+            tracker.markValid();
             return incomingValue;
         }
 
+        tracker.markOutOfBounds(fieldKey);
         log.warn("Sensor out-of-bounds rejected for device '{}', metric '{}': value={} (expected [{}, {}])",
                 deviceId, fieldKey, incomingValue, min, max);
         return null;
     }
 
-    private AirQualityMetrics sanitizeAirQuality(String deviceId, TelemetryPayload.AirQualityData in, Instant now) {
-        Double pm1_0 = sanitizeField(deviceId, "airQuality.pm1_0", (in != null ? in.getPm1_0() : null), PM_MIN, PM_MAX, now);
-        Double pm2_5 = sanitizeField(deviceId, "airQuality.pm2_5", (in != null ? in.getPm2_5() : null), PM_MIN, PM_MAX, now);
-        Double pm4_0 = sanitizeField(deviceId, "airQuality.pm4_0", (in != null ? in.getPm4_0() : null), PM_MIN, PM_MAX, now);
-        Double pm10 = sanitizeField(deviceId, "airQuality.pm10", (in != null ? in.getPm10() : null), PM_MIN, PM_MAX, now);
+    private AirQualityMetrics sanitizeAirQuality(
+            String deviceId,
+            TelemetryPayload.AirQualityData in,
+            Instant now,
+            RawValidationTracker tracker
+    ) {
+        Double pm1_0 = sanitizeField(deviceId, "airQuality.pm1_0", (in != null ? in.getPm1_0() : null), PM_MIN, PM_MAX, now, tracker);
+        Double pm2_5 = sanitizeField(deviceId, "airQuality.pm2_5", (in != null ? in.getPm2_5() : null), PM_MIN, PM_MAX, now, tracker);
+        Double pm4_0 = sanitizeField(deviceId, "airQuality.pm4_0", (in != null ? in.getPm4_0() : null), PM_MIN, PM_MAX, now, tracker);
+        Double pm10 = sanitizeField(deviceId, "airQuality.pm10", (in != null ? in.getPm10() : null), PM_MIN, PM_MAX, now, tracker);
 
         if (pm1_0 == null && pm2_5 == null && pm4_0 == null && pm10 == null) {
             return null;
@@ -206,10 +237,15 @@ public class TelemetrySanitizerService {
                 .build();
     }
 
-    private EnvironmentMetrics sanitizeEnvironment(String deviceId, TelemetryPayload.EnvironmentData in, Instant now) {
-        Double temp = sanitizeField(deviceId, "env.temperature", (in != null ? in.getTemperature() : null), TEMP_MIN, TEMP_MAX, now);
-        Double hum = sanitizeField(deviceId, "env.humidity", (in != null ? in.getHumidity() : null), HUMIDITY_MIN, HUMIDITY_MAX, now);
-        Double lux = sanitizeField(deviceId, "env.lux", (in != null ? in.getLux() : null), LUX_MIN, LUX_MAX, now);
+    private EnvironmentMetrics sanitizeEnvironment(
+            String deviceId,
+            TelemetryPayload.EnvironmentData in,
+            Instant now,
+            RawValidationTracker tracker
+    ) {
+        Double temp = sanitizeField(deviceId, "env.temperature", (in != null ? in.getTemperature() : null), TEMP_MIN, TEMP_MAX, now, tracker);
+        Double hum = sanitizeField(deviceId, "env.humidity", (in != null ? in.getHumidity() : null), HUMIDITY_MIN, HUMIDITY_MAX, now, tracker);
+        Double lux = sanitizeField(deviceId, "env.lux", (in != null ? in.getLux() : null), LUX_MIN, LUX_MAX, now, tracker);
 
         if (temp == null && hum == null && lux == null) {
             return null;
@@ -222,18 +258,31 @@ public class TelemetrySanitizerService {
                 .build();
     }
 
-    private Double sanitizeField(String deviceId, String fieldKey, Double incomingValue, double min, double max, Instant now) {
+    private Double sanitizeField(
+            String deviceId,
+            String fieldKey,
+            Double incomingValue,
+            double min,
+            double max,
+            Instant now,
+            RawValidationTracker tracker
+    ) {
         String cacheKey = buildCacheKey(deviceId, fieldKey);
         TimestampedValue lastKnown = fieldCache.getIfPresent(cacheKey);
 
-        boolean hasValidIncoming = incomingValue != null && incomingValue >= min && incomingValue <= max;
+        boolean hasValidIncoming = incomingValue != null
+                && Double.isFinite(incomingValue)
+                && incomingValue >= min
+                && incomingValue <= max;
         if (hasValidIncoming) {
             // New valid reading from physical sensor: update cache with current timestamp
             fieldCache.put(cacheKey, new TimestampedValue(incomingValue, now));
+            tracker.markValid();
             return incomingValue;
         }
 
         if (incomingValue != null) {
+            tracker.markOutOfBounds(fieldKey);
             log.warn("Sensor out-of-bounds rejected for device '{}', metric '{}': value={} (expected [{}, {}])",
                     deviceId, fieldKey, incomingValue, min, max);
         }
@@ -247,6 +296,27 @@ public class TelemetrySanitizerService {
 
         // Expired or no previous value: do not forward-fill
         return null;
+    }
+
+    private static final class RawValidationTracker {
+        boolean hasValidRawReading = false;
+        final List<String> malfunctioningSensors = new ArrayList<>();
+
+        void markValid() {
+            this.hasValidRawReading = true;
+        }
+
+        void markOutOfBounds(String fieldKey) {
+            this.malfunctioningSensors.add(fieldKey);
+        }
+
+        boolean hasOutOfBounds() {
+            return !malfunctioningSensors.isEmpty();
+        }
+
+        boolean allValidReadings() {
+            return !hasOutOfBounds() && hasValidRawReading;
+        }
     }
 
     public record TimestampedValue(Double value, Instant timestamp) {}
@@ -305,5 +375,14 @@ public class TelemetrySanitizerService {
         AcousticMetrics acoustics;
         AirQualityMetrics airQuality;
         EnvironmentMetrics environment;
+        boolean hasOutOfBoundsSensor;
+        boolean allValidReadings;
+        List<String> malfunctioningSensors;
+
+        public SanitizedMetrics(AcousticMetrics acoustics, AirQualityMetrics airQuality, EnvironmentMetrics environment) {
+            this(acoustics, airQuality, environment, false,
+                    acoustics != null || airQuality != null || environment != null,
+                    List.of());
+        }
     }
 }

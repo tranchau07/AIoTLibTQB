@@ -115,6 +115,7 @@ public class DeviceWatchdogService {
             String hardwareId = device.getHardwareId();
             String deviceId = device.getId();
             String roomId = device.getRoomId();
+            String zoneId = device.getZoneId();
 
             boolean alreadyOffline = "OFFLINE".equalsIgnoreCase(device.getConnectionState())
                     || offlineDeviceHardwareIds.contains(hardwareId);
@@ -131,7 +132,7 @@ public class DeviceWatchdogService {
                 offlineDeviceHardwareIds.add(hardwareId);
 
                 // Trigger DEVICE_OFFLINE alert
-                alertService.triggerDeviceOfflineAlert(deviceId, hardwareId, roomId);
+                alertService.triggerDeviceOfflineAlert(deviceId, hardwareId, roomId, zoneId);
 
                 // Invalidate device metadata cache
                 deviceMetadataCache.invalidate(hardwareId);

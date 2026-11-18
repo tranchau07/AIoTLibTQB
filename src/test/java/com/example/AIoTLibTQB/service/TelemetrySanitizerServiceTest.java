@@ -232,4 +232,63 @@ class TelemetrySanitizerServiceTest {
             return now;
         }
     }
+
+    @Test
+    @DisplayName("Hạng mục 9: Ghi nhận đầy đủ hasOutOfBoundsSensor, malfunctioningSensors và allValidReadings trên các ca hợp lệ, hỏng cảm biến, trộn kênh & forward-fill rỗng")
+    void sanitize_sensorHealthTrackingFlags() {
+        var mutableClock = new MutableClock(java.time.Instant.parse("2026-11-17T09:00:00Z"));
+        var timedSanitizer = new TelemetrySanitizerService(mutableClock);
+
+        // 1. Bản tin hoàn toàn hợp lệ -> allValidReadings = true, hasOutOfBoundsSensor = false
+        var validData = TelemetryPayload.TelemetryData.builder()
+                .acoustics(TelemetryPayload.AcousticsData.builder().noise(46.0).build())
+                .airQuality(TelemetryPayload.AirQualityData.builder().pm2_5(18.0).build())
+                .environment(TelemetryPayload.EnvironmentData.builder().temperature(25.0).humidity(55.0).lux(350.0).build())
+                .build();
+        var validResult = timedSanitizer.sanitize("dev-health-1", validData);
+        assertThat(validResult.isHasOutOfBoundsSensor()).isFalse();
+        assertThat(validResult.isAllValidReadings()).isTrue();
+        assertThat(validResult.getMalfunctioningSensors()).isEmpty();
+
+        // 2. Cảm biến gửi toàn giá trị ngoài dải (-99°C, 150%RH, -10 µg/m³, 150 dBA) -> hasOutOfBoundsSensor = true, allValidReadings = false
+        mutableClock.advance(java.time.Duration.ofSeconds(5));
+        var brokenData = TelemetryPayload.TelemetryData.builder()
+                .acoustics(TelemetryPayload.AcousticsData.builder().noise(150.0).build())
+                .airQuality(TelemetryPayload.AirQualityData.builder().pm2_5(-10.0).build())
+                .environment(TelemetryPayload.EnvironmentData.builder().temperature(-99.0).humidity(150.0).build())
+                .build();
+        var brokenResult = timedSanitizer.sanitize("dev-health-1", brokenData);
+        assertThat(brokenResult.isHasOutOfBoundsSensor()).isTrue();
+        assertThat(brokenResult.isAllValidReadings()).isFalse();
+        assertThat(brokenResult.getMalfunctioningSensors())
+                .containsExactlyInAnyOrder("acoustics.noise", "airQuality.pm2_5", "env.temperature", "env.humidity");
+
+        // 3. Kênh trộn lẫn (nhiệt độ -40°C lỗi, nhưng độ ẩm 52% và tiếng ồn 44dBA hợp lệ) -> vẫn báo hasOutOfBoundsSensor = true, allValidReadings = false
+        mutableClock.advance(java.time.Duration.ofSeconds(5));
+        var mixedData = TelemetryPayload.TelemetryData.builder()
+                .acoustics(TelemetryPayload.AcousticsData.builder().noise(44.0).build())
+                .environment(TelemetryPayload.EnvironmentData.builder().temperature(-40.0).humidity(52.0).build())
+                .build();
+        var mixedResult = timedSanitizer.sanitize("dev-health-1", mixedData);
+        assertThat(mixedResult.isHasOutOfBoundsSensor()).isTrue();
+        assertThat(mixedResult.isAllValidReadings()).isFalse();
+        assertThat(mixedResult.getMalfunctioningSensors()).containsExactly("env.temperature");
+        assertThat(mixedResult.getEnvironment().getHumidity()).isEqualTo(52.0);
+        assertThat(mixedResult.getAcoustics().getNoiseAvg()).isNotNull();
+
+        // 4. Bản tin hoàn toàn null đang dùng forward-fill trong 30s -> không có mẫu đọc thô mới => allValidReadings = false, hasOutOfBoundsSensor = false
+        mutableClock.advance(java.time.Duration.ofSeconds(5));
+        var emptyForwardFill = TelemetryPayload.TelemetryData.builder().build();
+        var forwardFillOnlyResult = timedSanitizer.sanitize("dev-health-1", emptyForwardFill);
+        assertThat(forwardFillOnlyResult.getEnvironment()).isNotNull();
+        assertThat(forwardFillOnlyResult.isHasOutOfBoundsSensor()).isFalse();
+        assertThat(forwardFillOnlyResult.isAllValidReadings()).isFalse();
+        assertThat(forwardFillOnlyResult.getMalfunctioningSensors()).isEmpty();
+
+        // 5. Dữ liệu null đầu vào -> allValidReadings = false, hasOutOfBoundsSensor = false
+        var nullResult = timedSanitizer.sanitize("dev-health-1", null);
+        assertThat(nullResult.isHasOutOfBoundsSensor()).isFalse();
+        assertThat(nullResult.isAllValidReadings()).isFalse();
+        assertThat(nullResult.getMalfunctioningSensors()).isEmpty();
+    }
 }

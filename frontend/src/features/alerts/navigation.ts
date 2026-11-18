@@ -11,26 +11,69 @@ export interface AlertFloorplanTarget {
   href: string;
 }
 
+function resolveAirOrSensorLayerFromMessage(
+  message: string | null | undefined,
+  fallback: HeatmapLayerMetric
+): HeatmapLayerMetric {
+  const msg = (message ?? '').toLowerCase();
+  if (
+    msg.includes('humidity') ||
+    msg.includes('%rh') ||
+    /(\d|\b)rh\b/.test(msg) ||
+    msg.includes('ẩm')
+  ) {
+    return 'humidity';
+  }
+  if (
+    msg.includes('temperature') ||
+    msg.includes('°c') ||
+    msg.includes('nhiệt')
+  ) {
+    return 'temperature';
+  }
+  if (
+    msg.includes('pm2.5') ||
+    msg.includes('pm2_5') ||
+    msg.includes('µg/m³') ||
+    msg.includes('bụi')
+  ) {
+    return 'pm2_5';
+  }
+  return fallback;
+}
+
 /**
  * Suy luận lớp bản đồ nhiệt (HeatmapLayerMetric) phù hợp nhất với loại cảnh báo sự cố.
  */
 export function resolveAlertHeatmapLayer(
-  alert: Pick<AlertResponse, 'type' | 'message'>
+  alert: Pick<AlertResponse, 'type' | 'message'> & { metricType?: string | null }
 ): HeatmapLayerMetric {
+  switch (alert.metricType?.trim()) {
+    case 'NOISE_AVG':
+    case 'NOISE_PEAK':
+      return 'noiseAvg';
+    case 'TEMPERATURE':
+      return 'temperature';
+    case 'HUMIDITY_HIGH':
+    case 'HUMIDITY_LOW':
+      return 'humidity';
+    case 'PM2_5':
+      return 'pm2_5';
+    case 'DEVICE_OFFLINE':
+      return 'wifiRssi';
+    default:
+      break;
+  }
+
   switch (alert.type) {
     case 'NOISE_EXCEEDED':
       return 'noiseAvg';
     case 'AIR_UNHEALTHY':
-      return 'pm2_5';
+      return resolveAirOrSensorLayerFromMessage(alert.message, 'pm2_5');
     case 'DEVICE_OFFLINE':
       return 'wifiRssi';
-    case 'SENSOR_MALFUNCTION': {
-      const msg = (alert.message ?? '').toLowerCase();
-      if (msg.includes('ẩm') || msg.includes('rh') || msg.includes('humidity')) {
-        return 'humidity';
-      }
-      return 'temperature';
-    }
+    case 'SENSOR_MALFUNCTION':
+      return resolveAirOrSensorLayerFromMessage(alert.message, 'temperature');
     default:
       return 'comfortScore';
   }
@@ -42,6 +85,7 @@ export function resolveAlertHeatmapLayer(
  */
 export function resolveAlertFloorplanTarget(
   alert: Pick<AlertResponse, 'id' | 'type' | 'message'> & {
+    metricType?: string | null;
     roomId?: string | null;
     deviceId?: string | null;
     hardwareId?: string | null;

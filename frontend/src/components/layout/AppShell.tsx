@@ -1,8 +1,15 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   Building2,
@@ -22,15 +29,19 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/features/auth/store';
-import { useMyInfoQuery } from '@/features/auth/queries';
+import { authKeys, useMyInfoQuery } from '@/features/auth/queries';
 import { useUnreadAlertsCountQuery } from '@/features/alerts/queries';
+import { useDevicesQuery } from '@/features/devices/queries';
+import { decodeJwtScope } from '@/lib/rbac/scope-parser';
 import {
+  type AlertZoneScope,
   useGlobalAlertStream,
   useStompConnectionState,
 } from '@/lib/realtime/use-room-stream';
+import { formatBottleneckReasonVi } from '@/lib/format/metrics';
 import { UI_TEXT_VI } from '@/messages/vi';
 import { Skeleton, useToast } from '@/components/ui/primitives';
-import type { AlertResponse } from '@/types/api';
+import type { AlertResponse, UserResponse } from '@/types/api';
 
 interface NavItem {
   href: string;
@@ -49,6 +60,7 @@ interface NavGroup {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -70,14 +82,116 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [hydrateFromStorage, router]);
 
+  const jwtSubject = useMemo(() => {
+    const sub = accessToken ? decodeJwtScope(accessToken).username : null;
+    return sub && sub.trim().length > 0 ? sub : null;
+  }, [accessToken]);
+
+  const isMatchingSessionUser = useCallback(
+    (candidate: UserResponse | null | undefined): candidate is UserResponse =>
+      Boolean(
+        accessToken &&
+          candidate &&
+          (!jwtSubject || candidate.username === jwtSubject)
+      ),
+    [accessToken, jwtSubject]
+  );
+
   const hasSessionToken = Boolean(accessToken || refreshToken);
   const myInfoQuery = useMyInfoQuery(hasSessionToken);
 
+  const lastNonNullSessionRef = useRef<{
+    token: string | null;
+    subject: string | null;
+  }>({
+    token: accessToken,
+    subject: jwtSubject,
+  });
+  const evictedStaleForTokenRef = useRef<string | null>(null);
+  const evictedScopeCacheForTokenRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (myInfoQuery.data) {
+    if (!accessToken) {
+      evictedStaleForTokenRef.current = null;
+      evictedScopeCacheForTokenRef.current = null;
+      queryClient.removeQueries({ queryKey: ['alerts'] });
+      queryClient.removeQueries({ queryKey: ['devices'] });
+      return;
+    }
+
+    const prevSession = lastNonNullSessionRef.current;
+    const tokenChanged = prevSession.token !== accessToken;
+    const sessionSwitchedInPlace =
+      tokenChanged &&
+      prevSession.token !== null &&
+      (prevSession.subject !== jwtSubject || !jwtSubject);
+    const hasMismatchedMyInfo = Boolean(
+      myInfoQuery.data && !isMatchingSessionUser(myInfoQuery.data)
+    );
+
+    lastNonNullSessionRef.current = { token: accessToken, subject: jwtSubject };
+
+    if (user && (!isMatchingSessionUser(user) || sessionSwitchedInPlace)) {
+      setUser(null);
+    }
+
+    if (
+      sessionSwitchedInPlace ||
+      (hasMismatchedMyInfo && evictedStaleForTokenRef.current !== accessToken)
+    ) {
+      const shouldResetMyInfo =
+        sessionSwitchedInPlace || !myInfoQuery.isFetching;
+      if (shouldResetMyInfo) {
+        evictedStaleForTokenRef.current = accessToken;
+        void queryClient.resetQueries({ queryKey: authKeys.myInfo });
+      }
+      if (
+        sessionSwitchedInPlace ||
+        evictedScopeCacheForTokenRef.current !== accessToken
+      ) {
+        evictedScopeCacheForTokenRef.current = accessToken;
+        queryClient.removeQueries({ queryKey: ['alerts'], type: 'inactive' });
+        void queryClient.resetQueries({
+          queryKey: ['alerts'],
+          type: 'active',
+          predicate: (q) =>
+            sessionSwitchedInPlace || q.state.fetchStatus !== 'fetching',
+        });
+        queryClient.removeQueries({ queryKey: ['devices'], type: 'inactive' });
+        void queryClient.resetQueries({
+          queryKey: ['devices'],
+          type: 'active',
+          predicate: (q) =>
+            sessionSwitchedInPlace || q.state.fetchStatus !== 'fetching',
+        });
+      }
+    }
+  }, [
+    accessToken,
+    jwtSubject,
+    isMatchingSessionUser,
+    myInfoQuery.data,
+    myInfoQuery.isFetching,
+    user,
+    setUser,
+    queryClient,
+  ]);
+
+  useEffect(() => {
+    if (isMatchingSessionUser(myInfoQuery.data)) {
       setUser(myInfoQuery.data);
     }
-  }, [myInfoQuery.data, setUser]);
+  }, [isMatchingSessionUser, myInfoQuery.data, setUser]);
+
+  useEffect(() => {
+    return () => {
+      if (!useAuthStore.getState().accessToken) {
+        queryClient.removeQueries({ queryKey: authKeys.myInfo });
+        queryClient.removeQueries({ queryKey: ['alerts'] });
+        queryClient.removeQueries({ queryKey: ['devices'] });
+      }
+    };
+  }, [queryClient]);
 
   useEffect(() => {
     if (hydrated && !accessToken && !refreshToken) {
@@ -99,12 +213,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       if (alert.status === 'FIRING') {
         const isHighOrCritical =
           alert.severity === 'HIGH' || alert.severity === 'CRITICAL';
+        const formattedMessage = alert.message
+          ? formatBottleneckReasonVi(alert.message)
+          : '';
         pushToast({
           title: isHighOrCritical
             ? `Cảnh báo ${alert.severity === 'CRITICAL' ? 'khẩn cấp' : 'mức cao'}`
             : 'Cảnh báo mới',
           message:
-            alert.message || `Thiết bị ${alert.hardwareId} phát cảnh báo`,
+            formattedMessage || `Thiết bị ${alert.hardwareId} phát cảnh báo`,
           variant: 'danger',
           sticky: isHighOrCritical,
           playSound: isHighOrCritical,
@@ -114,9 +231,71 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     [pushToast]
   );
 
+  const hasMismatchedMyInfo = Boolean(
+    myInfoQuery.data && !isMatchingSessionUser(myInfoQuery.data)
+  );
+  const validatedMyInfo = isMatchingSessionUser(myInfoQuery.data)
+    ? myInfoQuery.data
+    : null;
+  const validatedStoreUser = isMatchingSessionUser(user) ? user : null;
+  const effectiveUser = validatedMyInfo ?? validatedStoreUser;
+  const isAdmin = useMemo(
+    () =>
+      capabilities.isAdmin ||
+      Boolean(
+        effectiveUser?.roles?.some(
+          (r) => r.name === 'ADMIN' || r.name === 'ROLE_ADMIN'
+        )
+      ),
+    [capabilities.isAdmin, effectiveUser?.roles]
+  );
+  const assignedZones = effectiveUser?.assignedZones;
+
+  const shouldLoadScopeDevices = Boolean(
+    accessToken &&
+      capabilities.canViewAlerts &&
+      !isAdmin &&
+      assignedZones &&
+      assignedZones.length > 0 &&
+      capabilities.canViewDevices
+  );
+  const scopeDevicesQuery = useDevicesQuery(
+    { page: 0, size: 100 },
+    shouldLoadScopeDevices
+  );
+
+  const { allowedRoomIds, allowedDeviceIds } = useMemo(() => {
+    const rooms = new Set<string>();
+    const devices = new Set<string>();
+    if (!assignedZones || assignedZones.length === 0) {
+      return { allowedRoomIds: rooms, allowedDeviceIds: devices };
+    }
+    const assignedZoneSet = new Set(assignedZones);
+    for (const device of scopeDevicesQuery.data?.content ?? []) {
+      if (device.zoneId && assignedZoneSet.has(device.zoneId)) {
+        devices.add(device.id);
+        if (device.roomId) {
+          rooms.add(device.roomId);
+        }
+      }
+    }
+    return { allowedRoomIds: rooms, allowedDeviceIds: devices };
+  }, [assignedZones, scopeDevicesQuery.data]);
+
+  const alertZoneScope = useMemo<AlertZoneScope>(
+    () => ({
+      isAdmin,
+      assignedZones,
+      allowedRoomIds,
+      allowedDeviceIds,
+    }),
+    [isAdmin, assignedZones, allowedRoomIds, allowedDeviceIds]
+  );
+
   useGlobalAlertStream(
     Boolean(accessToken && capabilities.canViewAlerts),
-    handleIncomingAlert
+    handleIncomingAlert,
+    alertZoneScope
   );
 
   const navGroups: NavGroup[] = useMemo(
@@ -218,8 +397,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const unreadCount = unreadAlertsQuery.data ?? 0;
-  const initials = (user?.username?.[0] ?? '?').toUpperCase();
+  const unreadCount = hasMismatchedMyInfo ? 0 : unreadAlertsQuery.data ?? 0;
+  const initials = (effectiveUser?.username?.[0] ?? '?').toUpperCase();
 
   const sidebar = (
     <div className="flex h-full flex-col">
@@ -293,11 +472,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </span>
           <span className="min-w-0 flex-1 leading-tight">
             <span className="block truncate text-[13px] font-medium text-slate-900">
-              {user?.username ?? 'Đang tải…'}
+              {effectiveUser?.username ?? 'Đang tải…'}
             </span>
             <span className="block truncate text-2xs text-slate-500">
-              {user?.assignedZones && user.assignedZones.length > 0
-                ? `Phân vùng: ${user.assignedZones.join(', ')}`
+              {effectiveUser?.assignedZones && effectiveUser.assignedZones.length > 0
+                ? `Phân vùng: ${effectiveUser.assignedZones.join(', ')}`
                 : 'Hồ sơ & phiên đăng nhập'}
             </span>
           </span>

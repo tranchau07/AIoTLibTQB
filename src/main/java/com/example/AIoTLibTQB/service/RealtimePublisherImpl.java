@@ -50,17 +50,25 @@ public class RealtimePublisherImpl implements RealtimePublisher {
 
     @Override
     public void publishAlert(AlertResponse alert) {
+        if (alert == null) {
+            return;
+        }
         if (messagingTemplate != null) {
             try {
                 messagingTemplate.convertAndSend("/topic/alerts", alert);
                 log.info("Published alert to /topic/alerts: id={}, type={}, status={}",
                         alert.getId(), alert.getType(), alert.getStatus());
+                if (alert.getZoneId() != null && !alert.getZoneId().isBlank()) {
+                    String zoneTopic = "/topic/zones/" + alert.getZoneId() + "/alerts";
+                    messagingTemplate.convertAndSend(zoneTopic, alert);
+                    log.debug("Published alert also to {}: id={}", zoneTopic, alert.getId());
+                }
             } catch (Exception e) {
                 log.warn("Failed to publish alert to /topic/alerts: {}", e.getMessage());
             }
         } else {
-            log.info("RealtimePublisher (stub): alert id={}, type={}, status={}, msg={}",
-                    alert.getId(), alert.getType(), alert.getStatus(), alert.getMessage());
+            log.info("RealtimePublisher (stub): alert id={}, type={}, status={}, zoneId={}, msg={}",
+                    alert.getId(), alert.getType(), alert.getStatus(), alert.getZoneId(), alert.getMessage());
         }
     }
 }

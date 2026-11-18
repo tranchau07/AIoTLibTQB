@@ -52,6 +52,7 @@ class DeviceServiceTest {
     @Mock UserRepository userRepository;
     @Mock DiscoveredDeviceService discoveredDeviceService;
     @Mock DeviceMetadataCache deviceMetadataCache;
+    @Mock AlertService alertService;
 
     @InjectMocks DeviceService deviceService;
 
@@ -299,6 +300,21 @@ class DeviceServiceTest {
 
             verify(deviceRepository).deleteById("dev-001");
             verify(deviceMetadataCache).invalidate("HW-001");
+            verify(alertService).resolveActiveAlertsForDevice("dev-001", "HW-001");
+        }
+
+        @Test
+        @DisplayName("toggleStatus() - Chỉ đóng cảnh báo khi deactivate (active=false), không đóng khi kích hoạt lại (active=true)")
+        void toggleStatus_resolvesAlertsOnlyWhenDeactivating() {
+            Device d = buildDevice("dev-001", "HW-001", "Z1");
+            when(deviceRepository.findById("dev-001")).thenReturn(Optional.of(d));
+            when(deviceRepository.save(any(Device.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            deviceService.toggleStatus("dev-001", true);
+            verify(alertService, never()).resolveActiveAlertsForDevice(any(), any());
+
+            deviceService.toggleStatus("dev-001", false);
+            verify(alertService, times(1)).resolveActiveAlertsForDevice("dev-001", "HW-001");
         }
 
         @Test

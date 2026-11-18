@@ -339,8 +339,33 @@ export interface ToastItem {
   playSound?: boolean;
 }
 
+export const ALERT_AUDIO_MUTED_STORAGE_KEY = 'aiot_alert_audio_muted';
+
 export function shouldAutoDismissToast(item: Pick<ToastItem, 'sticky'>): boolean {
   return !item.sticky;
+}
+
+export function appendToastWithStickyProtection(
+  prev: readonly ToastItem[],
+  next: ToastItem,
+  maxToasts = 5
+): ToastItem[] {
+  if (maxToasts <= 0) {
+    return [];
+  }
+  if (prev.length < maxToasts) {
+    return [...prev, next];
+  }
+  const updated = [...prev];
+  while (updated.length >= maxToasts) {
+    const removableIdx = updated.findIndex((t) => !t.sticky);
+    if (removableIdx !== -1) {
+      updated.splice(removableIdx, 1);
+    } else {
+      updated.shift();
+    }
+  }
+  return [...updated, next];
 }
 
 interface ToastContextValue {
@@ -368,8 +393,36 @@ const TOAST_ICON: Record<ToastItem['variant'], React.ReactNode> = {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [audioMuted, setAudioMuted] = useState<boolean>(false);
+  const [audioMuted, setAudioMutedState] = useState<boolean>(false);
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    try {
+      if (
+        typeof window !== 'undefined' &&
+        window.localStorage.getItem(ALERT_AUDIO_MUTED_STORAGE_KEY) === 'true'
+      ) {
+        setAudioMutedState(true);
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
+
+  const setAudioMuted = useCallback((muted: boolean) => {
+    setAudioMutedState(muted);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          ALERT_AUDIO_MUTED_STORAGE_KEY,
+          String(muted)
+        );
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
 
   useEffect(() => {
     const unlock = () => setAudioUnlocked(true);
@@ -378,6 +431,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     return () => {
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);
+      const existingCtx = audioCtxRef.current;
+      audioCtxRef.current = null;
+      if (existingCtx && typeof existingCtx.close === 'function') {
+        void existingCtx.close().catch(() => {});
+      }
     };
   }, []);
 
@@ -389,7 +447,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         (window as unknown as { webkitAudioContext?: typeof AudioContext })
           .webkitAudioContext;
       if (!AudioCtx) return;
-      const ctx = new AudioCtx();
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        audioCtxRef.current = new AudioCtx();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+        void ctx.resume();
+      }
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -413,7 +477,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const pushToast = useCallback(
     (item: Omit<ToastItem, 'id'>) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      setToasts((prev) => [...prev.slice(-4), { ...item, id }]);
+      setToasts((prev) => appendToastWithStickyProtection(prev, { ...item, id }));
       if (item.playSound) {
         playAlertChime();
       }

@@ -170,6 +170,9 @@ public class RoomService {
         }
         if (alertRuleEngine != null) {
             alertRuleEngine.invalidateRoomCache(id);
+            if (updated.getType() != RoomType.BOOK_STORAGE) {
+                alertRuleEngine.onRoomTypeChanged(id, updated.getType());
+            }
         }
         log.info("Room updated: '{}' (code={})", updated.getName(), updated.getCode());
         return toRoomResponse(updated);

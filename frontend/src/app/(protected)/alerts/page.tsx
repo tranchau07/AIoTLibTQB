@@ -30,6 +30,7 @@ import {
   AlertSeverityBadge,
   AlertStatusBadge,
   AlertTypeBadge,
+  resolveAlertValueFormat,
 } from '@/features/alerts/components/AlertBadges';
 import { useAuthStore } from '@/features/auth/store';
 import { useDevicesQuery } from '@/features/devices/queries';
@@ -38,7 +39,10 @@ import {
   formatRelativeTimeVi,
   formatVietnamDateTime,
 } from '@/lib/format/datetime';
-import { formatNumber } from '@/lib/format/metrics';
+import {
+  formatBottleneckReasonVi,
+  formatNumber,
+} from '@/lib/format/metrics';
 import { ApiError } from '@/lib/http/error-mapper';
 import { useStompConnectionState } from '@/lib/realtime/use-room-stream';
 import { ERROR_MESSAGES_VI, UI_TEXT_VI } from '@/messages/vi';
@@ -216,11 +220,12 @@ export default function AlertsCenterPage() {
 
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
               setSortBy((prev) =>
                 prev === 'startedAt' ? 'severity' : 'startedAt'
-              )
-            }
+              );
+              setPage(0);
+            }}
             className="btn-secondary btn-sm"
           >
             <span>
@@ -438,9 +443,7 @@ export default function AlertsCenterPage() {
                 </thead>
                 <tbody>
                   {alerts.map((alert) => {
-                    const typeMeta = ALERT_TYPE_META[alert.type];
-                    const unit = typeMeta?.unit;
-                    const decimals = typeMeta?.decimals ?? 1;
+                    const valueFormat = resolveAlertValueFormat(alert);
                     const floorplanTarget = resolveAlertFloorplanTarget(
                       alert,
                       rooms,
@@ -493,16 +496,43 @@ export default function AlertsCenterPage() {
                         </td>
 
                         <td className="whitespace-nowrap tabular">
-                          <div className="font-semibold text-red-600">
-                            Đo: {formatNumber(alert.currentValue, decimals, unit)}
-                          </div>
-                          <div className="text-2xs text-slate-400">
-                            Ngưỡng: {formatNumber(alert.threshold, decimals, unit)}
-                          </div>
+                          {valueFormat.isOffline ? (
+                            <>
+                              <div className="font-semibold text-red-600">
+                                Mất kết nối
+                              </div>
+                              <div className="text-2xs text-slate-400">
+                                Ngưỡng: --
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="font-semibold text-red-600">
+                                Đo:{' '}
+                                {formatNumber(
+                                  alert.currentValue,
+                                  valueFormat.decimals,
+                                  valueFormat.unit
+                                )}
+                              </div>
+                              <div className="text-2xs text-slate-400">
+                                Ngưỡng:{' '}
+                                {formatNumber(
+                                  alert.threshold,
+                                  valueFormat.decimals,
+                                  valueFormat.unit
+                                )}
+                              </div>
+                            </>
+                          )}
                         </td>
 
                         <td className="max-w-xs text-xs text-slate-700">
-                          <div>{alert.message || '--'}</div>
+                          <div>
+                            {(alert.message &&
+                              formatBottleneckReasonVi(alert.message)) ||
+                              '--'}
+                          </div>
                           {alert.recommendedAction && (
                             <div className="mt-1 rounded border border-amber-200 bg-amber-50/70 px-2 py-1 text-2xs text-amber-900">
                               <strong className="font-semibold">SOP:</strong>{' '}

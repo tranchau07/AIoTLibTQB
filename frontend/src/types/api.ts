@@ -408,7 +408,10 @@ export interface AlertResponse {
   deviceId: string;
   hardwareId: string;
   roomId: string | null;
+  zoneId?: string | null;
   type: AlertType;
+  metricType?: string | null;
+  unit?: string | null;
   severity?: AlertSeverity;
   severityRank?: number;
   status: AlertStatus;

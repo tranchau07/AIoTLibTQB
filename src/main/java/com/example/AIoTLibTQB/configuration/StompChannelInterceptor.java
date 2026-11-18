@@ -19,6 +19,8 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.stereotype.Component;
 
 import java.security.Principal;
+import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * STOMP inbound channel security interceptor.
@@ -30,6 +32,8 @@ import java.security.Principal;
 @RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class StompChannelInterceptor implements ChannelInterceptor {
+
+    static final Pattern ZONE_ALERTS_TOPIC_PATTERN = Pattern.compile("^/topic/zones/[^/]+/alerts$");
 
     CustomJwtDecoder customJwtDecoder;
     JwtAuthenticationConverter jwtAuthenticationConverter;
@@ -111,23 +115,20 @@ public class StompChannelInterceptor implements ChannelInterceptor {
             return;
         }
 
-        if ("/topic/alerts".equals(destination) && user instanceof Authentication auth) {
-            boolean canViewAlerts = auth.getAuthorities() != null && !auth.getAuthorities().isEmpty()
-                    && auth.getAuthorities().stream().anyMatch(a ->
-                            "VIEW_ALERTS".equals(a.getAuthority())
+        boolean isAlertDestination = "/topic/alerts".equals(destination)
+                || ZONE_ALERTS_TOPIC_PATTERN.matcher(destination).matches();
+        if (isAlertDestination) {
+            boolean canViewAlerts = user instanceof Authentication auth
+                    && auth.getAuthorities() != null
+                    && !auth.getAuthorities().isEmpty()
+                    && auth.getAuthorities().stream()
+                            .filter(Objects::nonNull)
+                            .anyMatch(a -> "VIEW_ALERTS".equals(a.getAuthority())
                                     || "ADMIN".equals(a.getAuthority())
-                                    || "ROLE_ADMIN".equals(a.getAuthority())
-                                    || "LIBRARIAN".equals(a.getAuthority())
-                                    || "ROLE_LIBRARIAN".equals(a.getAuthority())
-                                    || "ZONE_MANAGER".equals(a.getAuthority())
-                                    || "ROLE_ZONE_MANAGER".equals(a.getAuthority())
-                                    || "MAINTENANCE".equals(a.getAuthority())
-                                    || "ROLE_MAINTENANCE".equals(a.getAuthority())
-                                    || "VIEWER".equals(a.getAuthority())
-                                    || "ROLE_VIEWER".equals(a.getAuthority()));
+                                    || "ROLE_ADMIN".equals(a.getAuthority()));
             if (!canViewAlerts) {
-                log.warn("STOMP SUBSCRIBE rejected: user {} lacks VIEW_ALERTS for /topic/alerts", user.getName());
-                throw new MessageDeliveryException("Access denied: VIEW_ALERTS permission required for /topic/alerts");
+                log.warn("STOMP SUBSCRIBE rejected: user {} lacks VIEW_ALERTS for {}", user.getName(), destination);
+                throw new MessageDeliveryException("Access denied: VIEW_ALERTS permission required for " + destination);
             }
         }
 

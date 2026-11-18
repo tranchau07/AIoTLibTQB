@@ -258,4 +258,73 @@ class StompChannelInterceptorTest {
                 .isInstanceOf(MessageDeliveryException.class)
                 .hasMessageContaining("Access denied");
     }
+
+    @Test
+    @DisplayName("SUBSCRIBE to /topic/alerts and /topic/zones/{zoneId}/alerts with custom role + VIEW_ALERTS succeeds")
+    void subscribe_alerts_customRoleWithViewAlertsPermission_succeeds() {
+        TestingAuthenticationToken user = new TestingAuthenticationToken(
+                "custom_user", "pass", "CUSTOM_ROLE", "VIEW_ALERTS");
+
+        for (String destination : new String[]{"/topic/alerts", "/topic/zones/ZONE_A/alerts"}) {
+            StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+            accessor.setLeaveMutable(true);
+            accessor.setDestination(destination);
+            accessor.setUser(user);
+            Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+            assertThat(interceptor.preSend(message, messageChannel)).isNotNull();
+        }
+    }
+
+    @Test
+    @DisplayName("SUBSCRIBE to /topic/alerts and /topic/zones/{zoneId}/alerts with ADMIN or ROLE_ADMIN succeeds")
+    void subscribe_alerts_adminAuthorities_succeeds() {
+        for (String authority : new String[]{"ADMIN", "ROLE_ADMIN"}) {
+            TestingAuthenticationToken admin = new TestingAuthenticationToken("admin_user", "pass", authority);
+            for (String destination : new String[]{"/topic/alerts", "/topic/zones/ZONE_B/alerts"}) {
+                StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+                accessor.setLeaveMutable(true);
+                accessor.setDestination(destination);
+                accessor.setUser(admin);
+                Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+                assertThat(interceptor.preSend(message, messageChannel)).isNotNull();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("SUBSCRIBE to /topic/alerts and /topic/zones/{zoneId}/alerts rejects VIEWER/LIBRARIAN/MAINTENANCE/ZONE_MANAGER without VIEW_ALERTS")
+    void subscribe_alerts_rolesWithoutViewAlertsPermission_throwsMessageDeliveryException() {
+        for (String role : new String[]{"VIEWER", "ROLE_VIEWER", "LIBRARIAN", "ZONE_MANAGER", "MAINTENANCE"}) {
+            TestingAuthenticationToken strippedUser = new TestingAuthenticationToken(
+                    "user_" + role, "pass", role, "READ_SENSOR_DATA");
+
+            for (String destination : new String[]{"/topic/alerts", "/topic/zones/ZONE_A/alerts"}) {
+                StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+                accessor.setLeaveMutable(true);
+                accessor.setDestination(destination);
+                accessor.setUser(strippedUser);
+                Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+                assertThatThrownBy(() -> interceptor.preSend(message, messageChannel))
+                        .isInstanceOf(MessageDeliveryException.class)
+                        .hasMessageContaining("Access denied: VIEW_ALERTS permission required for " + destination);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("SUBSCRIBE to /topic/zones/{zoneId}/alerts with unauthenticated user throws MessageDeliveryException")
+    void subscribe_zoneAlerts_unauthenticatedUser_throwsMessageDeliveryException() {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        accessor.setLeaveMutable(true);
+        accessor.setDestination("/topic/zones/ZONE_A/alerts");
+        accessor.setUser(null);
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        assertThatThrownBy(() -> interceptor.preSend(message, messageChannel))
+                .isInstanceOf(MessageDeliveryException.class)
+                .hasMessageContaining("Access denied: user must be authenticated to subscribe");
+    }
 }

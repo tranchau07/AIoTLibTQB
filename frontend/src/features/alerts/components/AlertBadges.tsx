@@ -10,7 +10,12 @@ import {
   WifiOff,
   Cpu,
 } from 'lucide-react';
-import type { AlertSeverity, AlertStatus, AlertType } from '@/types/api';
+import type {
+  AlertResponse,
+  AlertSeverity,
+  AlertStatus,
+  AlertType,
+} from '@/types/api';
 
 export interface SeverityMetaConfig {
   labelVi: string;
@@ -118,7 +123,7 @@ export const ALERT_TYPE_META: Record<
     icon: <WifiOff className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />,
     dotClass: 'bg-slate-400',
     badgeClass: 'badge-neutral',
-    unit: 'giây',
+    unit: undefined,
     decimals: 0,
   },
   SENSOR_MALFUNCTION: {
@@ -131,6 +136,87 @@ export const ALERT_TYPE_META: Record<
     decimals: 1,
   },
 };
+
+export interface AlertValueFormat {
+  unit?: string;
+  decimals: number;
+  isOffline: boolean;
+}
+
+function resolveUnitFromAlertMessage(message: string | null | undefined): string | undefined {
+  const msg = (message ?? '').toLowerCase();
+  if (
+    msg.includes('humidity') ||
+    msg.includes('%rh') ||
+    /(\d|\b)rh\b/.test(msg) ||
+    msg.includes('ẩm')
+  ) {
+    return '%RH';
+  }
+  if (msg.includes('temperature') || msg.includes('°c') || msg.includes('nhiệt')) {
+    return '°C';
+  }
+  if (
+    msg.includes('pm2.5') ||
+    msg.includes('pm2_5') ||
+    msg.includes('µg/m³') ||
+    msg.includes('bụi')
+  ) {
+    return 'µg/m³';
+  }
+  if (msg.includes('dba') || msg.includes('noise') || msg.includes('ồn')) {
+    return 'dBA';
+  }
+  return undefined;
+}
+
+export function resolveAlertValueFormat(
+  alert: Pick<AlertResponse, 'type' | 'metricType' | 'unit' | 'message'>
+): AlertValueFormat {
+  const normalizedMetric = alert.metricType?.trim();
+  if (alert.type === 'DEVICE_OFFLINE' || normalizedMetric === 'DEVICE_OFFLINE') {
+    return { unit: undefined, decimals: 0, isOffline: true };
+  }
+
+  const explicitUnit = alert.unit?.trim();
+  if (explicitUnit) {
+    return { unit: explicitUnit, decimals: 1, isOffline: false };
+  }
+
+  switch (normalizedMetric) {
+    case 'NOISE_AVG':
+    case 'NOISE_PEAK':
+      return { unit: 'dBA', decimals: 1, isOffline: false };
+    case 'TEMPERATURE':
+      return { unit: '°C', decimals: 1, isOffline: false };
+    case 'HUMIDITY_HIGH':
+    case 'HUMIDITY_LOW':
+      return { unit: '%RH', decimals: 1, isOffline: false };
+    case 'PM2_5':
+      return { unit: 'µg/m³', decimals: 1, isOffline: false };
+    default:
+      break;
+  }
+
+  if (alert.type === 'NOISE_EXCEEDED') {
+    return { unit: 'dBA', decimals: 1, isOffline: false };
+  }
+  if (alert.type === 'AIR_UNHEALTHY') {
+    return {
+      unit: resolveUnitFromAlertMessage(alert.message) ?? 'µg/m³',
+      decimals: 1,
+      isOffline: false,
+    };
+  }
+  if (alert.type === 'SENSOR_MALFUNCTION') {
+    return {
+      unit: resolveUnitFromAlertMessage(alert.message),
+      decimals: 1,
+      isOffline: false,
+    };
+  }
+  return { unit: undefined, decimals: 1, isOffline: false };
+}
 
 /**
  * FE-A11Y-01: Combines color dot + symbolic icon + explicit Vietnamese label

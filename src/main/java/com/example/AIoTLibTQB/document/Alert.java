@@ -7,6 +7,7 @@ import lombok.*;
 import lombok.experimental.FieldDefaults;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -18,7 +19,8 @@ import java.time.Instant;
 @CompoundIndexes({
         @CompoundIndex(name = "idx_alert_device_type_status", def = "{'deviceId': 1, 'type': 1, 'status': 1, 'startedAt': -1}"),
         @CompoundIndex(name = "idx_alert_hardware_type_status", def = "{'hardwareId': 1, 'type': 1, 'status': 1}"),
-        @CompoundIndex(name = "idx_alert_status_started", def = "{'status': 1, 'startedAt': -1}")
+        @CompoundIndex(name = "idx_alert_status_started", def = "{'status': 1, 'startedAt': -1}"),
+        @CompoundIndex(name = "idx_alert_zone_status_started", def = "{'zoneId': 1, 'status': 1, 'startedAt': -1}")
 })
 @Data
 @Builder
@@ -30,6 +32,9 @@ public class Alert {
     @Id
     String id;
 
+    @Version
+    Long version;
+
     @Indexed
     String deviceId;
 
@@ -37,6 +42,9 @@ public class Alert {
 
     @Indexed
     String roomId;
+
+    @Indexed
+    String zoneId;
 
     AlertType type;
 

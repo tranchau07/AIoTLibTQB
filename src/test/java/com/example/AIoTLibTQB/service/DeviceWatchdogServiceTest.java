@@ -158,7 +158,8 @@ class DeviceWatchdogServiceTest {
             verify(alertService).triggerDeviceOfflineAlert(
                     eq("dev-stale-1"),
                     eq("ESP32_STALE_1"),
-                    eq("room-101")
+                    eq("room-101"),
+                    eq("zone-A")
             );
 
             // 3. Invalidate DeviceMetadataCache
@@ -193,7 +194,7 @@ class DeviceWatchdogServiceTest {
             assertThat(watchdogService.isOffline("ESP32_NULL_1")).isTrue();
 
             verify(mongoTemplate).updateFirst(any(), any(), eq(Device.class));
-            verify(alertService).triggerDeviceOfflineAlert("dev-null-1", "ESP32_NULL_1", "room-102");
+            verify(alertService).triggerDeviceOfflineAlert("dev-null-1", "ESP32_NULL_1", "room-102", "zone-B");
             verify(deviceMetadataCache).invalidate("ESP32_NULL_1");
             verify(deviceRepository, never()).save(any());
         }
@@ -218,7 +219,7 @@ class DeviceWatchdogServiceTest {
             watchdogService.scanOfflineDevices();
 
             verify(mongoTemplate, never()).updateFirst(any(), any(), eq(Device.class));
-            verify(alertService, never()).triggerDeviceOfflineAlert(any(), any(), any());
+            verify(alertService, never()).triggerDeviceOfflineAlert(any(), any(), any(), any());
             verify(deviceMetadataCache, never()).invalidate(any());
             assertThat(watchdogService.isOffline("ESP32_RECENT_1")).isFalse();
         }
@@ -242,7 +243,7 @@ class DeviceWatchdogServiceTest {
 
             // Không ghi lại DB và không trigger alert lại
             verify(mongoTemplate, never()).updateFirst(any(), any(), eq(Device.class));
-            verify(alertService, never()).triggerDeviceOfflineAlert(any(), any(), any());
+            verify(alertService, never()).triggerDeviceOfflineAlert(any(), any(), any(), any());
             verify(deviceMetadataCache, never()).invalidate(any());
 
             // Vẫn đảm bảo có mặt trong tập in-memory

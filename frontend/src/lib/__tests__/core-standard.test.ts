@@ -52,6 +52,7 @@ import {
   resolveAlertFloorplanTarget,
   resolveAlertHeatmapLayer,
 } from '@/features/alerts/navigation';
+import { resolveAlertValueFormat } from '@/features/alerts/components/AlertBadges';
 import {
   computeLabelPlacements,
   getLodConfig,
@@ -887,6 +888,147 @@ describe('11. Alert Acknowledge Deep-Link to Floorplan Room & Sensor Node', () =
     ).toBe('humidity');
   });
 
+  it('prioritizes metricType and falls back cleanly on AIR_UNHEALTHY legacy messages (Hạng mục 5 Test 2)', () => {
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'TEMPERATURE',
+        message: 'Cảnh báo nhiệt độ',
+      })
+    ).toBe('temperature');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'HUMIDITY_HIGH',
+        message: 'Cảnh báo độ ẩm kho sách',
+      })
+    ).toBe('humidity');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'HUMIDITY_LOW',
+        message: 'Độ ẩm thấp',
+      })
+    ).toBe('humidity');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'PM2_5',
+        message: 'Bụi mịn vượt ngưỡng',
+      })
+    ).toBe('pm2_5');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'NOISE_EXCEEDED',
+        metricType: 'NOISE_PEAK',
+        message: 'Peak noise spike',
+      })
+    ).toBe('noiseAvg');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'DEVICE_OFFLINE',
+        metricType: 'DEVICE_OFFLINE',
+        message: 'Mất kết nối',
+      })
+    ).toBe('wifiRssi');
+
+    // Bản ghi cũ không có metricType -> suy luận đúng từ message cho AIR_UNHEALTHY & SENSOR_MALFUNCTION
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        metricType: null,
+        message: 'Temperature (33.5 °C) exceeded threshold (32.0 °C)',
+      })
+    ).toBe('temperature');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        message: 'Book storage humidity (64.0 %RH) exceeded max threshold (60.0 %RH)',
+      })
+    ).toBe('humidity');
+    // Kiểm tra không bị false-positive từ chữ 'rh' trong 'overheat'
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'SENSOR_MALFUNCTION',
+        message: 'Sensor overheat detected (48.0 °C)',
+      })
+    ).toBe('temperature');
+    // Mặc định AIR_UNHEALTHY không gợi ý -> pm2_5; SENSOR_MALFUNCTION không gợi ý -> temperature
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'AIR_UNHEALTHY',
+        message: 'Air quality issue',
+      })
+    ).toBe('pm2_5');
+    expect(
+      resolveAlertHeatmapLayer({
+        type: 'SENSOR_MALFUNCTION',
+        message: 'Hardware probe fault',
+      })
+    ).toBe('temperature');
+  });
+
+  it('resolves exact unit & decimals for Temperature, Humidity, PM2.5, Noise and Offline alerts (Hạng mục 5 Test 3)', () => {
+    expect(
+      resolveAlertValueFormat({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'TEMPERATURE',
+        unit: '°C',
+        message: 'Temperature (34.0 °C)',
+      })
+    ).toEqual({ unit: '°C', decimals: 1, isOffline: false });
+
+    expect(
+      resolveAlertValueFormat({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'HUMIDITY_HIGH',
+        unit: '%RH',
+        message: 'Book storage humidity (65.0 %RH)',
+      })
+    ).toEqual({ unit: '%RH', decimals: 1, isOffline: false });
+
+    expect(
+      resolveAlertValueFormat({
+        type: 'AIR_UNHEALTHY',
+        metricType: 'PM2_5',
+        unit: 'µg/m³',
+        message: 'PM2.5 particulate level (60.0 µg/m³)',
+      })
+    ).toEqual({ unit: 'µg/m³', decimals: 1, isOffline: false });
+
+    expect(
+      resolveAlertValueFormat({
+        type: 'NOISE_EXCEEDED',
+        metricType: 'NOISE_PEAK',
+        unit: 'dBA',
+        message: 'Peak noise spike',
+      })
+    ).toEqual({ unit: 'dBA', decimals: 1, isOffline: false });
+
+    expect(
+      resolveAlertValueFormat({
+        type: 'DEVICE_OFFLINE',
+        metricType: 'DEVICE_OFFLINE',
+        unit: null,
+        message: 'Device is offline: hardwareId=ESP32-1',
+      })
+    ).toEqual({ unit: undefined, decimals: 0, isOffline: true });
+
+    // Legacy record fallback (missing unit and metricType)
+    expect(
+      resolveAlertValueFormat({
+        type: 'AIR_UNHEALTHY',
+        message: 'Temperature (33.5 °C) exceeded threshold (32.0 °C)',
+      })
+    ).toEqual({ unit: '°C', decimals: 1, isOffline: false });
+    expect(
+      resolveAlertValueFormat({
+        type: 'AIR_UNHEALTHY',
+        message: 'Book storage humidity (64.0 %RH) exceeded max threshold',
+      })
+    ).toEqual({ unit: '%RH', decimals: 1, isOffline: false });
+  });
+
   it('builds floorplan deep-link with floor, roomId, deviceId, hardwareId, layer, and alertId', () => {
     const rooms = [
       { id: 'room-402', code: 'P402', name: 'Kho sách Tự chọn T4', floor: 4 },
@@ -906,6 +1048,8 @@ describe('11. Alert Acknowledge Deep-Link to Floorplan Room & Sensor Node', () =
       hardwareId: 'ESP32-NODE-09',
       roomId: 'room-402',
       type: 'NOISE_EXCEEDED',
+      metricType: 'NOISE_AVG',
+      unit: 'dBA',
       severity: 'HIGH',
       status: 'FIRING',
       message: 'Độ ồn vượt ngưỡng 65 dBA',
@@ -926,8 +1070,14 @@ describe('11. Alert Acknowledge Deep-Link to Floorplan Room & Sensor Node', () =
     expect(target.href).toBe(
       '/floorplan?floor=4&roomId=room-402&deviceId=dev-node-09&hardwareId=ESP32-NODE-09&layer=noiseAvg&alertId=alert-999'
     );
+
+    const tempAlert: AlertResponse = {
+      ...alert,
+      type: 'AIR_UNHEALTHY',
+      metricType: 'TEMPERATURE',
+      unit: '°C',
+    };
+    const tempTarget = resolveAlertFloorplanTarget(tempAlert, rooms, devices);
+    expect(tempTarget.layer).toBe('temperature');
   });
 });
-
-
-

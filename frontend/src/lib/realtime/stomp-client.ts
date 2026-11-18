@@ -20,16 +20,67 @@ export function mergeRealtimeTelemetry(
   return incoming;
 }
 
+export interface UpsertRealtimeAlertOptions {
+  sortBy?: 'startedAt' | 'severity';
+  direction?: 'ASC' | 'DESC';
+  maxSize?: number;
+}
+
+const SEVERITY_WEIGHT: Record<string, number> = {
+  CRITICAL: 4,
+  HIGH: 3,
+  MEDIUM: 2,
+  LOW: 1,
+};
+
+function resolveAlertSeverityWeight(alert: AlertResponse): number {
+  if (
+    typeof alert.severityRank === 'number' &&
+    !Number.isNaN(alert.severityRank)
+  ) {
+    return alert.severityRank;
+  }
+  return alert.severity ? (SEVERITY_WEIGHT[alert.severity] ?? 0) : 0;
+}
+
+function getStartedAtMs(alert: AlertResponse): number {
+  const ms = new Date(alert.startedAt).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 export function upsertRealtimeAlertList(
   currentList: readonly AlertResponse[],
-  incoming: AlertResponse
+  incoming: AlertResponse,
+  options?: UpsertRealtimeAlertOptions
 ): AlertResponse[] {
   const index = currentList.findIndex((a) => a.id === incoming.id);
-  if (index === -1) {
-    return [incoming, ...currentList];
+  const updated =
+    index === -1
+      ? [incoming, ...currentList]
+      : currentList.map((item, idx) => (idx === index ? incoming : item));
+
+  if (options?.sortBy === 'severity') {
+    const dir = options.direction === 'ASC' ? 1 : -1;
+    updated.sort((a, b) => {
+      const rankDiff =
+        resolveAlertSeverityWeight(a) - resolveAlertSeverityWeight(b);
+      if (rankDiff !== 0) {
+        return dir * rankDiff;
+      }
+      return getStartedAtMs(b) - getStartedAtMs(a);
+    });
+  } else if (options?.sortBy === 'startedAt') {
+    const dir = options.direction === 'ASC' ? 1 : -1;
+    updated.sort((a, b) => dir * (getStartedAtMs(a) - getStartedAtMs(b)));
   }
-  const updated = [...currentList];
-  updated[index] = incoming;
+
+  if (
+    typeof options?.maxSize === 'number' &&
+    options.maxSize > 0 &&
+    updated.length > options.maxSize
+  ) {
+    return updated.slice(0, options.maxSize);
+  }
   return updated;
 }
 

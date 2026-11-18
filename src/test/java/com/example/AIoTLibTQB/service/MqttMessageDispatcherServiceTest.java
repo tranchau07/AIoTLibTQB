@@ -3,6 +3,7 @@ package com.example.AIoTLibTQB.service;
 import com.example.AIoTLibTQB.document.AcousticMetrics;
 import com.example.AIoTLibTQB.document.ComfortScoreRecord;
 import com.example.AIoTLibTQB.document.Device;
+import com.example.AIoTLibTQB.document.EnvironmentMetrics;
 import com.example.AIoTLibTQB.document.TelemetryRecord;
 import com.example.AIoTLibTQB.repository.TelemetryRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +23,7 @@ import org.springframework.messaging.support.MessageBuilder;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,7 +91,7 @@ class MqttMessageDispatcherServiceTest {
         verify(mongoTemplate).updateFirst(any(), any(), eq(Device.class));
         verify(telemetryRepository).save(any(TelemetryRecord.class));
         verify(discoveredDeviceService, never()).recordDiscovered(any(), any());
-        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), any());
+        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), eq("zone-A"), any());
     }
 
     @Test
@@ -114,7 +116,7 @@ class MqttMessageDispatcherServiceTest {
         verify(discoveredDeviceService).recordDiscovered("ESP32_UNKNOWN", -72);
         verify(telemetryRepository, never()).save(any());
         verify(mongoTemplate, never()).updateFirst(any(), any(), eq(Device.class));
-        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any());
+        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -380,7 +382,7 @@ class MqttMessageDispatcherServiceTest {
 
         org.mockito.InOrder inOrder = inOrder(telemetrySanitizerService, alertService);
         inOrder.verify(telemetrySanitizerService).sanitize(eq("dev-1"), any());
-        inOrder.verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), any());
+        inOrder.verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), eq("zone-A"), any());
     }
 
     @Test
@@ -403,7 +405,7 @@ class MqttMessageDispatcherServiceTest {
 
         dispatcherService.dispatch(msg);
 
-        verify(alertService).triggerDeviceOfflineAlert("dev-1", "ESP32_ROOM_101", "room-1");
+        verify(alertService).triggerDeviceOfflineAlert("dev-1", "ESP32_ROOM_101", "room-1", "zone-A");
         verify(deviceWatchdogService).recordOfflineDevice("ESP32_ROOM_101");
         verify(deviceMetadataCache).invalidate("ESP32_ROOM_101");
     }
@@ -449,6 +451,213 @@ class MqttMessageDispatcherServiceTest {
         assertThat(captor.getValue().getAcoustics()).isNotNull();
         assertThat(captor.getValue().getAcoustics().getNoiseAvg()).isEqualTo(86.0);
         assertThat(captor.getValue().getAcoustics().getNoisePeak()).isEqualTo(86.0);
-        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), any());
+        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), eq("zone-A"), any());
+    }
+
+    @Test
+    @DisplayName("Hạng mục 2 Test 5 (Store-and-Forward trễ > 60s): Bản tin timestamp = now - 120s (40°C) vẫn lưu MongoDB nhưng KHÔNG gọi alertService.evaluateTelemetry()")
+    void dispatch_telemetry_staleBufferedPacket_savesHistoryButSkipsAlertFsm() {
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
+                new TelemetrySanitizerService.SanitizedMetrics(
+                        null, null, EnvironmentMetrics.builder().temperature(40.0).build())
+        );
+
+        long staleEpochSeconds = Instant.now().minusSeconds(120).getEpochSecond();
+        String json = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": {
+            "environment": { "temperature": 40.0 }
+          }
+        }
+        """.formatted(staleEpochSeconds);
+
+        var msg = MessageBuilder.withPayload(json)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build();
+
+        dispatcherService.dispatch(msg);
+
+        ArgumentCaptor<TelemetryRecord> captor = ArgumentCaptor.forClass(TelemetryRecord.class);
+        verify(telemetryRepository, times(1)).save(captor.capture());
+        assertThat(captor.getValue().getTimestamp().getEpochSecond()).isEqualTo(staleEpochSeconds);
+        assertThat(captor.getValue().getEnvironment().getTemperature()).isEqualTo(40.0);
+
+        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any(), any());
+        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Hạng mục 2 (Store-and-Forward millis trễ > 60s vs trễ nhẹ 30s): Millis > 60s bỏ qua FSM; bản tin trễ 30s vẫn đánh giá FSM")
+    void dispatch_telemetry_staleMillisSkipped_whileRecentWithin60sEvaluated() {
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+        when(telemetrySanitizerService.sanitize(eq("dev-1"), any())).thenReturn(
+                new TelemetrySanitizerService.SanitizedMetrics(
+                        null, null, EnvironmentMetrics.builder().temperature(39.0).build())
+        );
+
+        long staleMillis = Instant.now().minusSeconds(120).toEpochMilli();
+        String staleJson = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": { "environment": { "temperature": 39.0 } }
+        }
+        """.formatted(staleMillis);
+
+        dispatcherService.dispatch(MessageBuilder.withPayload(staleJson)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build());
+
+        verify(telemetryRepository, times(1)).save(any(TelemetryRecord.class));
+        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any(), any());
+
+        long recentMillis = Instant.now().minusSeconds(30).toEpochMilli();
+        String recentJson = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": { "environment": { "temperature": 39.0 } }
+        }
+        """.formatted(recentMillis);
+
+        dispatcherService.dispatch(MessageBuilder.withPayload(recentJson)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build());
+
+        verify(telemetryRepository, times(2)).save(any(TelemetryRecord.class));
+        verify(alertService, times(1)).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), eq("zone-A"), any());
+    }
+
+    @Test
+    @DisplayName("Hạng mục 9: Cảm biến hỏng hoàn toàn (-99.0°C, empty clean metrics) vẫn gọi evaluateSensorHealth nhưng không lưu TelemetryRecord rỗng vào DB")
+    void dispatch_telemetry_completelyMalfunctioningSensor_evaluatesSensorHealthWithoutSavingEmptyRecord() {
+        TelemetrySanitizerService realSanitizer = new TelemetrySanitizerService();
+        MqttMessageDispatcherService realDispatcher = new MqttMessageDispatcherService(
+                objectMapper,
+                deviceMetadataCache,
+                alertService,
+                telemetryRepository,
+                realSanitizer,
+                discoveredDeviceService,
+                comfortScoreService,
+                mongoTemplate
+        );
+        realDispatcher.setDeviceWatchdogService(deviceWatchdogService);
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+
+        String json = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": {
+            "environment": { "temperature": -99.0 }
+          }
+        }
+        """.formatted(Instant.now().getEpochSecond());
+
+        var msg = MessageBuilder.withPayload(json)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build();
+
+        realDispatcher.dispatch(msg);
+
+        verify(alertService).evaluateSensorHealth(
+                eq("dev-1"),
+                eq("ESP32_ROOM_101"),
+                eq("room-1"),
+                eq("zone-A"),
+                eq(true),
+                eq(false),
+                eq(List.of("env.temperature"))
+        );
+        verify(telemetryRepository, never()).save(any());
+        verify(alertService, never()).evaluateTelemetry(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Hạng mục 9: Bản tin hợp lệ gọi evaluateSensorHealth(false, true, []) song song với evaluateTelemetry & lưu Time-Series")
+    void dispatch_telemetry_validPacket_callsEvaluateSensorHealthHealthy() {
+        TelemetrySanitizerService realSanitizer = new TelemetrySanitizerService();
+        MqttMessageDispatcherService realDispatcher = new MqttMessageDispatcherService(
+                objectMapper,
+                deviceMetadataCache,
+                alertService,
+                telemetryRepository,
+                realSanitizer,
+                discoveredDeviceService,
+                comfortScoreService,
+                mongoTemplate
+        );
+        realDispatcher.setDeviceWatchdogService(deviceWatchdogService);
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+
+        String json = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": {
+            "environment": { "temperature": 25.0, "humidity": 55.0 }
+          }
+        }
+        """.formatted(Instant.now().getEpochSecond());
+
+        var msg = MessageBuilder.withPayload(json)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build();
+
+        realDispatcher.dispatch(msg);
+
+        verify(alertService).evaluateSensorHealth(
+                eq("dev-1"),
+                eq("ESP32_ROOM_101"),
+                eq("room-1"),
+                eq("zone-A"),
+                eq(false),
+                eq(true),
+                eq(List.of())
+        );
+        verify(alertService).evaluateTelemetry(eq("dev-1"), eq("ESP32_ROOM_101"), eq("room-1"), eq("zone-A"), any());
+        verify(telemetryRepository).save(any(TelemetryRecord.class));
+    }
+
+    @Test
+    @DisplayName("Hạng mục 9: Bản tin trễ > 60s (store-and-forward) chứa giá trị ngoài dải cũng bỏ qua evaluateSensorHealth")
+    void dispatch_telemetry_staleBufferedOutOfBoundsPacket_skipsEvaluateSensorHealth() {
+        TelemetrySanitizerService realSanitizer = new TelemetrySanitizerService();
+        MqttMessageDispatcherService realDispatcher = new MqttMessageDispatcherService(
+                objectMapper,
+                deviceMetadataCache,
+                alertService,
+                telemetryRepository,
+                realSanitizer,
+                discoveredDeviceService,
+                comfortScoreService,
+                mongoTemplate
+        );
+        realDispatcher.setDeviceWatchdogService(deviceWatchdogService);
+        when(deviceMetadataCache.get("ESP32_ROOM_101")).thenReturn(Optional.of(mockDevice));
+
+        String staleJson = """
+        {
+          "hardware_id": "ESP32_ROOM_101",
+          "timestamp": %d,
+          "data": {
+            "environment": { "temperature": -99.0 }
+          }
+        }
+        """.formatted(Instant.now().minusSeconds(120).getEpochSecond());
+
+        var msg = MessageBuilder.withPayload(staleJson)
+                .setHeader(MqttHeaders.RECEIVED_TOPIC, "devices/ESP32_ROOM_101/telemetry")
+                .build();
+
+        realDispatcher.dispatch(msg);
+
+        verify(alertService, never()).evaluateSensorHealth(any(), any(), any(), any(), anyBoolean(), anyBoolean(), any());
+        verify(alertService, never()).evaluateSensorHealth(any(), any(), any(), any(), anyBoolean(), anyBoolean());
+        verify(telemetryRepository, never()).save(any());
     }
 }

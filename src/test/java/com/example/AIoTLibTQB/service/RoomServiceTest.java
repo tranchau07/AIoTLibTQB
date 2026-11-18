@@ -9,6 +9,7 @@ import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.dto.response.RoomResponse;
 import com.example.AIoTLibTQB.enums.ErrorCode;
+import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.exception.AppException;
 import com.example.AIoTLibTQB.repository.DeviceRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
@@ -40,6 +41,9 @@ class RoomServiceTest {
 
     @Mock
     DeviceRepository deviceRepository;
+
+    @Mock
+    AlertRuleEngine alertRuleEngine;
 
     @InjectMocks
     RoomService roomService;
@@ -287,5 +291,31 @@ class RoomServiceTest {
                 .isInstanceOf(AppException.class)
                 .extracting(e -> ((AppException) e).getErrorCode())
                 .isEqualTo(ErrorCode.INVALID_PARAMETER);
+    }
+
+    @Test
+    @DisplayName("update() - Đổi RoomType khác BOOK_STORAGE gọi onRoomTypeChanged để tự đóng cảnh báo độ ẩm")
+    void update_roomTypeChangedFromBookStorage_notifiesAlertRuleEngine() {
+        Room room = buildRoom("r1", "ROOM_201", "Kho sách", 2);
+        room.setType(RoomType.BOOK_STORAGE);
+        when(roomRepository.findById("r1")).thenReturn(Optional.of(room));
+        when(roomRepository.save(any(Room.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Giữ nguyên BOOK_STORAGE -> chỉ invalidate cache, KHÔNG đóng cảnh báo độ ẩm
+        RoomUpdateRequest keepStorageReq = RoomUpdateRequest.builder()
+                .type(RoomType.BOOK_STORAGE)
+                .build();
+        roomService.update("r1", keepStorageReq);
+        verify(alertRuleEngine).invalidateRoomCache("r1");
+        verify(alertRuleEngine, never()).onRoomTypeChanged(any(), any());
+
+        // Chuyển sang STUDY_ROOM -> gọi onRoomTypeChanged
+        RoomUpdateRequest switchStudyReq = RoomUpdateRequest.builder()
+                .type(RoomType.STUDY_ROOM)
+                .build();
+        RoomResponse updated = roomService.update("r1", switchStudyReq);
+        assertThat(updated.getType()).isEqualTo(RoomType.STUDY_ROOM);
+        verify(alertRuleEngine, times(2)).invalidateRoomCache("r1");
+        verify(alertRuleEngine, times(1)).onRoomTypeChanged("r1", RoomType.STUDY_ROOM);
     }
 }

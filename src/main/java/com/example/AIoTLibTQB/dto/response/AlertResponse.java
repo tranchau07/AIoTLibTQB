@@ -19,7 +19,10 @@ public class AlertResponse {
     String deviceId;
     String hardwareId;
     String roomId;
+    String zoneId;
     AlertType type;
+    String metricType;
+    String unit;
     AlertSeverity severity;
     Integer severityRank;
     AlertStatus status;

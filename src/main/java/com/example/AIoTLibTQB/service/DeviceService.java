@@ -45,6 +45,8 @@ public class DeviceService {
     DiscoveredDeviceService discoveredDeviceService;
     @NonFinal
     DeviceMetadataCache deviceMetadataCache;
+    @NonFinal
+    AlertService alertService;
 
     public DeviceService(
             DeviceRepository deviceRepository,
@@ -53,12 +55,26 @@ public class DeviceService {
             UserRepository userRepository,
             DiscoveredDeviceService discoveredDeviceService,
             @Autowired(required = false) DeviceMetadataCache deviceMetadataCache) {
+        this(deviceRepository, passwordEncoder, authenticationService, userRepository,
+                discoveredDeviceService, deviceMetadataCache, null);
+    }
+
+    @Autowired
+    public DeviceService(
+            DeviceRepository deviceRepository,
+            PasswordEncoder passwordEncoder,
+            AuthenticationService authenticationService,
+            UserRepository userRepository,
+            DiscoveredDeviceService discoveredDeviceService,
+            @Autowired(required = false) DeviceMetadataCache deviceMetadataCache,
+            @Autowired(required = false) AlertService alertService) {
         this.deviceRepository = deviceRepository;
         this.passwordEncoder = passwordEncoder;
         this.authenticationService = authenticationService;
         this.userRepository = userRepository;
         this.discoveredDeviceService = discoveredDeviceService;
         this.deviceMetadataCache = deviceMetadataCache;
+        this.alertService = alertService;
     }
 
     private static final long ONLINE_THRESHOLD_MINUTES = 5L;
@@ -276,6 +292,9 @@ public class DeviceService {
         if (deviceMetadataCache != null && saved.getHardwareId() != null) {
             deviceMetadataCache.invalidate(saved.getHardwareId());
         }
+        if (!active && alertService != null) {
+            alertService.resolveActiveAlertsForDevice(saved.getId(), saved.getHardwareId());
+        }
         return toDeviceResponse(saved);
     }
 
@@ -285,6 +304,9 @@ public class DeviceService {
         deviceRepository.deleteById(id);
         if (deviceMetadataCache != null && device.getHardwareId() != null) {
             deviceMetadataCache.invalidate(device.getHardwareId());
+        }
+        if (alertService != null) {
+            alertService.resolveActiveAlertsForDevice(device.getId(), device.getHardwareId());
         }
     }
 

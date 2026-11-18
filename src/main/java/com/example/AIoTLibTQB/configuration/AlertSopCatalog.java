@@ -49,6 +49,9 @@ public final class AlertSopCatalog {
         if (alertType == AlertType.DEVICE_OFFLINE || "DEVICE_OFFLINE".equals(metric)) {
             return "SOP Kỹ thuật IoT: Kiểm tra nguồn cấp 5V DC của trạm ESP32, tín hiệu Wi-Fi RSSI tại phòng và kết nối MQTT Broker.";
         }
+        if (alertType == AlertType.SENSOR_MALFUNCTION || "SENSOR_MALFUNCTION".equals(metric)) {
+            return "SOP Kỹ thuật Cảm biến: Giá trị đo vượt ngoài dải vật lý hợp lệ liên tục; kiểm tra dây tín hiệu I2C/UART và hiệu chuẩn hoặc thay thế module cảm biến.";
+        }
         return "SOP Vận hành: Kiểm tra trực tiếp hiện trường phòng và xác nhận trạng thái thiết bị cảm biến.";
     }
 }

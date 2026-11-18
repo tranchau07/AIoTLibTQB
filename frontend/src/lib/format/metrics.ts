@@ -118,24 +118,70 @@ export function formatBottleneckReasonVi(
 ): string {
   if (!reason) return '';
   const trimmed = reason.trim();
-  const noiseMatch = trimmed.match(
+
+  const noiseAvgMatch = trimmed.match(
     /^Average noise level \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
-  if (noiseMatch) {
-    return `Độ ồn trung bình (${noiseMatch[1]}) vượt ngưỡng cho phép (${noiseMatch[2]})`;
+  if (noiseAvgMatch) {
+    return `Độ ồn trung bình (${noiseAvgMatch[1]}) vượt ngưỡng cho phép (${noiseAvgMatch[2]})`;
   }
-  const pmMatch = trimmed.match(
+
+  const noisePeakMatch = trimmed.match(
+    /^Peak noise spike \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
+  );
+  if (noisePeakMatch) {
+    return `Tiếng ồn đột biến (${noisePeakMatch[1]}) vượt ngưỡng cho phép (${noisePeakMatch[2]})`;
+  }
+
+  const pmFineMatch = trimmed.match(
     /^PM2\.5 fine dust \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
-  if (pmMatch) {
-    return `Bụi mịn PM2.5 (${pmMatch[1]}) vượt ngưỡng an toàn (${pmMatch[2]})`;
+  if (pmFineMatch) {
+    return `Bụi mịn PM2.5 (${pmFineMatch[1]}) vượt ngưỡng an toàn (${pmFineMatch[2]})`;
   }
-  const tempMatch = trimmed.match(
+
+  const pmParticulateMatch = trimmed.match(
+    /^PM2\.5 particulate level \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
+  );
+  if (pmParticulateMatch) {
+    return `Nồng độ bụi mịn PM2.5 (${pmParticulateMatch[1]}) vượt ngưỡng cho phép (${pmParticulateMatch[2]})`;
+  }
+
+  const tempRangeMatch = trimmed.match(
     /^Temperature \(([^)]+)\) out of optimal range \(([^)]+)\)$/i
   );
-  if (tempMatch) {
-    return `Nhiệt độ (${tempMatch[1]}) nằm ngoài ngưỡng tối ưu (${tempMatch[2]})`;
+  if (tempRangeMatch) {
+    return `Nhiệt độ (${tempRangeMatch[1]}) nằm ngoài ngưỡng tối ưu (${tempRangeMatch[2]})`;
   }
+
+  const tempExceedMatch = trimmed.match(
+    /^Temperature \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
+  );
+  if (tempExceedMatch) {
+    return `Nhiệt độ (${tempExceedMatch[1]}) vượt ngưỡng cho phép (${tempExceedMatch[2]})`;
+  }
+
+  const humidityHighMatch = trimmed.match(
+    /^(?:Book storage )?humidity \(([^)]+)\) exceeded max threshold \(([^)]+)\)$/i
+  );
+  if (humidityHighMatch) {
+    return `Độ ẩm kho sách (${humidityHighMatch[1]}) vượt ngưỡng tối đa (${humidityHighMatch[2]})`;
+  }
+
+  const humidityLowMatch = trimmed.match(
+    /^(?:Book storage )?humidity \(([^)]+)\) dropped below min threshold \(([^)]+)\)$/i
+  );
+  if (humidityLowMatch) {
+    return `Độ ẩm kho sách (${humidityLowMatch[1]}) xuống dưới ngưỡng tối thiểu (${humidityLowMatch[2]})`;
+  }
+
+  const offlineMatch = trimmed.match(
+    /^Device is offline:\s*hardwareId=(.+)$/i
+  );
+  if (offlineMatch) {
+    return `Thiết bị mất kết nối (mã phần cứng: ${offlineMatch[1].trim()})`;
+  }
+
   if (/^Sub-optimal comfort index$/i.test(trimmed)) {
     return 'Chỉ số tiện nghi tổng hợp dưới mức tối ưu';
   }

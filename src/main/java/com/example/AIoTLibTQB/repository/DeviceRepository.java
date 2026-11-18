@@ -4,6 +4,7 @@ import com.example.AIoTLibTQB.document.Device;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -14,6 +15,8 @@ public interface DeviceRepository extends MongoRepository<Device, String> {
     boolean existsByHardwareId(String hardwareId);
 
     List<Device> findByZoneId(String zoneId);
+
+    List<Device> findByZoneIdIn(Collection<String> zoneIds);
 
     List<Device> findByZoneIdAndIsActiveTrue(String zoneId);
 

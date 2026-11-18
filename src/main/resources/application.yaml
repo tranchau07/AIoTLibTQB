@@ -41,3 +41,9 @@ mqtt:
 app:
   security:
     initial-admin-password: ${INITIAL_ADMIN_PASSWORD:}
+  alert:
+    email:
+      enabled: ${ALERT_EMAIL_ENABLED:false}
+      from: ${ALERT_EMAIL_FROM:noreply@aiotlibtqb.edu.vn}
+      cooldown-minutes: ${ALERT_EMAIL_COOLDOWN_MINUTES:30}
+      high-escalation-minutes: ${ALERT_EMAIL_HIGH_ESCALATION_MINUTES:10}

@@ -70,10 +70,16 @@ public class AlertController {
 
     @RequestMapping(value = "/{id}/resolve", method = {RequestMethod.POST, RequestMethod.PATCH})
     @PreAuthorize("hasAuthority('MANAGE_ALERT_CONFIG')")
-    public ApiResponse<AlertResponse> resolveAlert(@PathVariable String id) {
+    public ApiResponse<AlertResponse> resolveAlert(
+            @PathVariable String id,
+            @RequestParam(required = false) Integer snoozeMinutes
+    ) {
         String username = extractUsername();
+        int safeSnoozeMinutes = snoozeMinutes != null
+                ? Math.max(0, Math.min(240, snoozeMinutes))
+                : 15;
         return ApiResponse.<AlertResponse>builder()
-                .result(alertService.resolveAlert(id, username))
+                .result(alertService.resolveAlert(id, username, safeSnoozeMinutes))
                 .build();
     }
 
