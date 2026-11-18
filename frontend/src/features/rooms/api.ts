@@ -3,6 +3,8 @@ import type {
   PageResponse,
   PublicRoomStatusResponse,
   RoomCreationRequest,
+  RoomFurnitureResponse,
+  RoomFurnitureUpdateRequest,
   RoomResponse,
   RoomThresholdConfig,
   RoomUpdateRequest,
@@ -34,6 +36,20 @@ export const roomsApi = {
 
   updateThresholds: (id: string, body: RoomThresholdConfig) =>
     httpClient.put<RoomResponse>(`/rooms/${id}/thresholds`, body),
+
+  getFurniture: (id: string) =>
+    httpClient.get<RoomFurnitureResponse>(`/rooms/${encodeURIComponent(id)}/furniture`),
+
+  getPublicFurniture: (id: string) =>
+    httpClient.get<RoomFurnitureResponse>(
+      `/public/rooms/${encodeURIComponent(id)}/furniture`
+    ),
+
+  updateFurniture: (id: string, body: RoomFurnitureUpdateRequest) =>
+    httpClient.put<RoomFurnitureResponse>(
+      `/rooms/${encodeURIComponent(id)}/furniture`,
+      body
+    ),
 
   listPublic: (floor?: number) => {
     const query = floor !== undefined ? `?floor=${floor}` : '';

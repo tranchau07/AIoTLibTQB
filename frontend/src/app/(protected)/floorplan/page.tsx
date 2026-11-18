@@ -53,7 +53,12 @@ import {
 } from '@/features/alerts/queries';
 import { resolveAlertFloorplanTarget } from '@/features/alerts/navigation';
 import { useAuthStore } from '@/features/auth/store';
-import { useRoomsQuery } from '@/features/rooms/queries';
+import { roomsApi } from '@/features/rooms/api';
+import {
+  roomKeys,
+  useRoomsQuery,
+  useUpdateRoomFurnitureMutation,
+} from '@/features/rooms/queries';
 import { useDevicesQuery } from '@/features/devices/queries';
 import { telemetryKeys } from '@/features/telemetry/queries';
 import { telemetryApi } from '@/features/telemetry/api';
@@ -68,11 +73,16 @@ import {
 } from '@/features/floorplan/components/AlertInspectorDrawer';
 import { FloorRoomTree } from '@/features/floorplan/components/FloorRoomTree';
 import { FloorplanLegend } from '@/features/floorplan/components/FloorplanLegend';
+import { FurnitureLayerEditor } from '@/features/floorplan/components/FurnitureLayerEditor';
 import {
   ManagerSummaryStrip,
   computeBuildingSummaryMetrics,
 } from '@/features/floorplan/components/ManagerSummaryStrip';
 import { TimeComparisonBar } from '@/features/floorplan/components/TimeComparisonBar';
+import {
+  FURNITURE_CATALOG,
+  filterVisibleFurnitureItems,
+} from '@/config/furniture-catalog';
 import { formatRealtimeAlertAnnouncementVi } from '@/lib/floorplan/alertWorkflow';
 import type { ViewportTransform } from '@/lib/floorplan/coords';
 import {
@@ -85,6 +95,14 @@ import {
   exportFloorplanReportPng,
 } from '@/lib/floorplan/exportReport';
 import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
+import {
+  createFurnitureHistory,
+  pushFurnitureHistory,
+  redoFurnitureHistory,
+  undoFurnitureHistory,
+  validateFurnitureLayout,
+  type FurnitureHistoryState,
+} from '@/lib/floorplan/furnitureGeometry';
 import { computeVisualPolygonCenter } from '@/lib/floorplan/polygon';
 import {
   evaluateRoomReliability,
@@ -98,13 +116,16 @@ import {
   type OneHourDeltaResult,
 } from '@/lib/floorplan/timeAnalysis';
 import { computeRoomBlindspotRatio } from '@/lib/floorplan/weatherPalette';
+import { ApiError } from '@/lib/http/error-mapper';
 import type {
   AlertResponse,
   AlertSeverity,
   AlertWorkflowUpdateRequest,
   BucketDataPoint,
   DeviceResponse,
+  FurnitureItem,
   RoleName,
+  RoomFurnitureResponse,
   RoomResponse,
   TelemetryResponse,
 } from '@/types/api';
@@ -236,6 +257,25 @@ export default function FloorplanPage() {
     number | undefined
   >(undefined);
   const workspaceFullscreenRef = useRef<HTMLDivElement>(null);
+  const [showFurnitureLayer, setShowFurnitureLayer] = useState<boolean>(true);
+  const [furnitureOpacity, setFurnitureOpacity] = useState<number>(0.65);
+  const [furnitureEditMode, setFurnitureEditMode] = useState<boolean>(false);
+  const [snapFurnitureGrid, setSnapFurnitureGrid] = useState<boolean>(true);
+  const [selectedFurnitureIds, setSelectedFurnitureIds] = useState<string[]>(
+    []
+  );
+  const [furnitureHistoryByRoom, setFurnitureHistoryByRoom] = useState<
+    Record<string, FurnitureHistoryState<FurnitureItem[]>>
+  >({});
+  const [furnitureDraftByRoom, setFurnitureDraftByRoom] = useState<
+    Record<string, FurnitureItem[]>
+  >({});
+  const [furnitureConflictRoomId, setFurnitureConflictRoomId] = useState<
+    string | null
+  >(null);
+  const [furnitureErrorMsg, setFurnitureErrorMsg] = useState<string | null>(
+    null
+  );
 
   const queryClient = useQueryClient();
   const capabilities = useAuthStore((s) => s.capabilities);
@@ -312,6 +352,23 @@ export default function FloorplanPage() {
   const isLibrarianView =
     effectiveRole === 'LIBRARIAN' || effectiveRole === 'ADMIN';
   const isMaintenanceView = effectiveRole === 'MAINTENANCE';
+  const canEditFurnitureInCurrentView =
+    capabilities.canEditFurniture && !isStudentView;
+  const hideSensitiveFurniture =
+    isStudentView || !capabilities.canViewDevices;
+
+  useEffect(() => {
+    if (!canEditFurnitureInCurrentView && furnitureEditMode) {
+      setFurnitureEditMode(false);
+      setSelectedFurnitureIds([]);
+    }
+  }, [canEditFurnitureInCurrentView, furnitureEditMode]);
+
+  useEffect(() => {
+    setSelectedFurnitureIds([]);
+    setFurnitureConflictRoomId(null);
+    setFurnitureErrorMsg(null);
+  }, [selectedRoomId]);
 
   const roomsQuery = useRoomsQuery({
     page: 0,
@@ -337,6 +394,7 @@ export default function FloorplanPage() {
     capabilities.canViewAlerts && !isStudentView
   );
   const updateAlertWorkflowMutation = useUpdateAlertWorkflowMutation();
+  const updateFurnitureMutation = useUpdateRoomFurnitureMutation();
 
   const allBackendRooms = useMemo(
     () => allRoomsQuery.data?.content ?? [],
@@ -525,6 +583,31 @@ export default function FloorplanPage() {
       refetchInterval: stompConnected ? (false as const) : 15000,
     })),
   });
+
+  const furnitureRoomQueries = useQueries({
+    queries: realFloorRooms.map((room) => ({
+      queryKey: roomKeys.furniture(room.id, false),
+      queryFn: () => roomsApi.getFurniture(room.id),
+      enabled: showFurnitureLayer || furnitureEditMode,
+      retry: false,
+    })),
+  });
+
+  const furnitureQueriesSig = realFloorRooms
+    .map((room, idx) => {
+      const q = furnitureRoomQueries[idx];
+      return `${room.id}:${q?.data?.version ?? 'none'}:${q?.data?.items?.length ?? 0}:${q?.dataUpdatedAt ?? 0}`;
+    })
+    .join('|');
+
+  const serverFurnitureByRoom = useMemo(() => {
+    const map: Record<string, RoomFurnitureResponse | undefined> = {};
+    realFloorRooms.forEach((room, idx) => {
+      map[room.id] = furnitureRoomQueries[idx]?.data;
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realFloorRooms, furnitureQueriesSig]);
 
   const realRoomTelemetrySignature = realBuildingRooms
     .map((room, index) => {
@@ -996,6 +1079,27 @@ export default function FloorplanPage() {
     [floorRooms, selectedRoomId]
   );
 
+  useEffect(() => {
+    if (
+      furnitureEditMode &&
+      canEditFurnitureInCurrentView &&
+      !selectedRoomId &&
+      !roomsQuery.isLoading
+    ) {
+      const fallbackRoom = realFloorRooms[0] ?? visibleFloorRooms[0] ?? null;
+      if (fallbackRoom) {
+        setSelectedRoomId(fallbackRoom.id);
+      }
+    }
+  }, [
+    furnitureEditMode,
+    canEditFurnitureInCurrentView,
+    selectedRoomId,
+    roomsQuery.isLoading,
+    realFloorRooms,
+    visibleFloorRooms,
+  ]);
+
   const selectedRoomIdx = useMemo(
     () =>
       selectedRoom
@@ -1049,6 +1153,200 @@ export default function FloorplanPage() {
     [selectedRoom, floorDevices]
   );
 
+  const getRoomFurnitureItems = useCallback(
+    (roomId: string): FurnitureItem[] => {
+      if (furnitureDraftByRoom[roomId]) {
+        return furnitureDraftByRoom[roomId];
+      }
+      const hist = furnitureHistoryByRoom[roomId];
+      if (hist) {
+        return hist.present;
+      }
+      const serverItems = serverFurnitureByRoom[roomId]?.items ?? [];
+      return filterVisibleFurnitureItems(
+        serverItems,
+        FURNITURE_CATALOG,
+        hideSensitiveFurniture
+      );
+    },
+    [
+      furnitureDraftByRoom,
+      furnitureHistoryByRoom,
+      serverFurnitureByRoom,
+      hideSensitiveFurniture,
+    ]
+  );
+
+  const floorFurnitureItems = useMemo(() => {
+    const combined: FurnitureItem[] = [];
+    for (const room of visibleFloorRooms) {
+      if (room.id.startsWith('PRESET_')) continue;
+      combined.push(...getRoomFurnitureItems(room.id));
+    }
+    return combined;
+  }, [visibleFloorRooms, getRoomFurnitureItems]);
+
+  const selectedRoomPolygon = useMemo(
+    () =>
+      selectedRoom
+        ? resolveRoomPolygon(selectedRoom, selectedRoomIdx) ??
+          selectedRoom.boundaryPolygon ??
+          []
+        : [],
+    [selectedRoom, selectedRoomIdx]
+  );
+
+  const selectedRoomServerFurniture = selectedRoom
+    ? serverFurnitureByRoom[selectedRoom.id]
+    : undefined;
+
+  const selectedRoomFurnitureItems = useMemo(
+    () => (selectedRoom ? getRoomFurnitureItems(selectedRoom.id) : []),
+    [selectedRoom, getRoomFurnitureItems]
+  );
+
+  const selectedRoomFurnitureHistory = selectedRoom
+    ? furnitureHistoryByRoom[selectedRoom.id]
+    : undefined;
+
+  const selectedRoomFurnitureValidation = useMemo(
+    () =>
+      selectedRoom
+        ? validateFurnitureLayout(
+            selectedRoomFurnitureItems,
+            selectedRoomPolygon,
+            FURNITURE_CATALOG
+          )
+        : undefined,
+    [selectedRoom, selectedRoomFurnitureItems, selectedRoomPolygon]
+  );
+
+  const invalidFurnitureIds = useMemo(
+    () =>
+      furnitureEditMode && selectedRoomFurnitureValidation
+        ? selectedRoomFurnitureValidation.invalidIds
+        : undefined,
+    [furnitureEditMode, selectedRoomFurnitureValidation]
+  );
+
+  const commitRoomFurnitureItems = useCallback(
+    (roomId: string, nextItems: FurnitureItem[]) => {
+      setFurnitureDraftByRoom((prev) => {
+        if (!(roomId in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[roomId];
+        return copy;
+      });
+      setFurnitureErrorMsg(null);
+      setFurnitureHistoryByRoom((prev) => {
+        const baseItems =
+          prev[roomId]?.present ?? serverFurnitureByRoom[roomId]?.items ?? [];
+        const currentState = prev[roomId] ?? createFurnitureHistory(baseItems);
+        return {
+          ...prev,
+          [roomId]: pushFurnitureHistory(currentState, nextItems),
+        };
+      });
+    },
+    [serverFurnitureByRoom]
+  );
+
+  const handleUndoFurniture = useCallback((roomId: string) => {
+    setFurnitureDraftByRoom((prev) => {
+      if (!(roomId in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[roomId];
+      return copy;
+    });
+    setFurnitureHistoryByRoom((prev) => {
+      const curr = prev[roomId];
+      if (!curr) return prev;
+      return {
+        ...prev,
+        [roomId]: undoFurnitureHistory(curr),
+      };
+    });
+  }, []);
+
+  const handleRedoFurniture = useCallback((roomId: string) => {
+    setFurnitureDraftByRoom((prev) => {
+      if (!(roomId in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[roomId];
+      return copy;
+    });
+    setFurnitureHistoryByRoom((prev) => {
+      const curr = prev[roomId];
+      if (!curr) return prev;
+      return {
+        ...prev,
+        [roomId]: redoFurnitureHistory(curr),
+      };
+    });
+  }, []);
+
+  const handleReloadFurniture = useCallback(
+    async (roomId: string) => {
+      setFurnitureConflictRoomId(null);
+      setFurnitureErrorMsg(null);
+      setFurnitureDraftByRoom((prev) => {
+        const copy = { ...prev };
+        delete copy[roomId];
+        return copy;
+      });
+      setFurnitureHistoryByRoom((prev) => {
+        const copy = { ...prev };
+        delete copy[roomId];
+        return copy;
+      });
+      await queryClient.invalidateQueries({
+        queryKey: roomKeys.furniture(roomId, false),
+      });
+      await queryClient.refetchQueries({
+        queryKey: roomKeys.furniture(roomId, false),
+      });
+    },
+    [queryClient]
+  );
+
+  const handleSaveFurniture = useCallback(
+    async (roomId: string, changeNote?: string) => {
+      if (roomId.startsWith('PRESET_')) return;
+      const itemsToSave = getRoomFurnitureItems(roomId);
+      const expectedVersion = serverFurnitureByRoom[roomId]?.version ?? null;
+      setFurnitureErrorMsg(null);
+      setFurnitureConflictRoomId(null);
+      try {
+        const saved = await updateFurnitureMutation.mutateAsync({
+          id: roomId,
+          body: {
+            expectedVersion,
+            changeNote,
+            items: itemsToSave,
+          },
+        });
+        setFurnitureHistoryByRoom((prev) => ({
+          ...prev,
+          [roomId]: createFurnitureHistory(saved.items ?? itemsToSave),
+        }));
+      } catch (err) {
+        if (
+          err instanceof ApiError &&
+          (err.httpStatus === 409 || err.code === 5007)
+        ) {
+          setFurnitureConflictRoomId(roomId);
+        } else {
+          setFurnitureErrorMsg(
+            err instanceof Error
+              ? err.message
+              : 'Không thể lưu bố cục nội thất.'
+          );
+        }
+      }
+    },
+    [getRoomFurnitureItems, serverFurnitureByRoom, updateFurnitureMutation]
+  );
+
   const selectedRoomAlerts: AlertResponse[] = useMemo(() => {
     if (!selectedRoom) return [];
     return activeAlerts.filter((a) => a.roomId === selectedRoom.id);
@@ -1067,6 +1365,15 @@ export default function FloorplanPage() {
     () =>
       activeAlerts
         .flatMap((a) => [a.deviceId, a.hardwareId])
+        .filter((id): id is string => Boolean(id)),
+    [activeAlerts]
+  );
+
+  const firingRoomIds = useMemo(
+    () =>
+      activeAlerts
+        .filter((a) => a.status === 'FIRING')
+        .map((a) => a.roomId)
         .filter((id): id is string => Boolean(id)),
     [activeAlerts]
   );
@@ -1888,6 +2195,57 @@ export default function FloorplanPage() {
             </button>
           )}
 
+          {/* Furniture Layer Visibility Toggle (Architectural 1:100 Layer) */}
+          <button
+            type="button"
+            data-testid="furniture-layer-toggle-btn"
+            aria-pressed={showFurnitureLayer}
+            onClick={() => setShowFurnitureLayer((v) => !v)}
+            className={`rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${
+              showFurnitureLayer
+                ? 'border-emerald-700 bg-emerald-950 text-emerald-50'
+                : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+            }`}
+            title="Bật/tắt lớp nội thất 1:100 (chỉ hiển thị, không làm sai lệch giá trị nhiệt)"
+          >
+            {FLOORPLAN_I18N_VI.furniture.layerToggle}
+          </button>
+
+          {/* Furniture Edit Mode Toggle (RBAC: ADMIN / LIBRARIAN / MAINTENANCE / MANAGE_ZONES) */}
+          {canEditFurnitureInCurrentView && (
+            <button
+              type="button"
+              data-testid="furniture-edit-toggle-btn"
+              aria-pressed={furnitureEditMode}
+              onClick={() => {
+                const nextEdit = !furnitureEditMode;
+                setFurnitureEditMode(nextEdit);
+                if (nextEdit) {
+                  setShowFurnitureLayer(true);
+                  if (!selectedRoomId) {
+                    const fallbackRoom =
+                      realFloorRooms[0] ?? visibleFloorRooms[0] ?? null;
+                    if (fallbackRoom) {
+                      setSelectedRoomId(fallbackRoom.id);
+                    }
+                  }
+                } else {
+                  setSelectedFurnitureIds([]);
+                }
+              }}
+              className={`rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${
+                furnitureEditMode
+                  ? 'border-sky-600 bg-sky-700 text-white'
+                  : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+              }`}
+              title="Bật/tắt chế độ chỉnh sửa nội thất tỉ lệ 1:100"
+            >
+              {furnitureEditMode
+                ? FLOORPLAN_I18N_VI.furniture.exitEdit
+                : FLOORPLAN_I18N_VI.furniture.editButton}
+            </button>
+          )}
+
           {/* Toggle Full TQB Architectural Rooms */}
           <button
             type="button"
@@ -1918,6 +2276,10 @@ export default function FloorplanPage() {
                   const nextRole = e.target.value as EffectiveRoleView;
                   setAdminRoleOverride(nextRole);
                   setShowBlindspots(nextRole === 'MAINTENANCE');
+                  if (nextRole === 'USER') {
+                    setFurnitureEditMode(false);
+                    setSelectedFurnitureIds([]);
+                  }
                 }}
                 className="select h-7 py-0 text-xs font-medium"
               >
@@ -2389,10 +2751,7 @@ export default function FloorplanPage() {
                   highlightedZoneIds={
                     onlyAssignedZones ? assignedZones : undefined
                   }
-                  firingRoomIds={activeAlerts
-                    .filter((a) => a.status === 'FIRING')
-                    .map((a) => a.roomId)
-                    .filter((id): id is string => Boolean(id))}
+                  firingRoomIds={firingRoomIds}
                   roomAlertCounts={roomAlertCounts}
                   roomAlertSeverities={roomAlertSeverities}
                   overdueRoomIds={overdueRoomIds}
@@ -2407,6 +2766,33 @@ export default function FloorplanPage() {
                   isFullscreen={isFullscreen}
                   onToggleFullscreen={handleToggleFullscreen}
                   maxViewportHeightPx={maxViewportHeightPx}
+                  showFurnitureLayer={showFurnitureLayer}
+                  furnitureItems={
+                    furnitureEditMode && selectedRoom
+                      ? selectedRoomFurnitureItems
+                      : floorFurnitureItems
+                  }
+                  furnitureOpacity={furnitureOpacity}
+                  furnitureEditMode={
+                    furnitureEditMode && canEditFurnitureInCurrentView
+                  }
+                  selectedFurnitureIds={selectedFurnitureIds}
+                  invalidFurnitureIds={invalidFurnitureIds}
+                  hideSensitiveFurniture={hideSensitiveFurniture}
+                  furnitureCatalog={FURNITURE_CATALOG}
+                  snapFurnitureGrid={snapFurnitureGrid}
+                  onSelectFurnitureIds={setSelectedFurnitureIds}
+                  onUpdateFurnitureItems={(nextItems) => {
+                    if (!selectedRoom) return;
+                    setFurnitureDraftByRoom((prev) => ({
+                      ...prev,
+                      [selectedRoom.id]: nextItems,
+                    }));
+                  }}
+                  onCommitFurnitureItems={(nextItems) => {
+                    if (!selectedRoom) return;
+                    commitRoomFurnitureItems(selectedRoom.id, nextItems);
+                  }}
                 />
               </div>
 
@@ -2467,6 +2853,29 @@ export default function FloorplanPage() {
                     </h2>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    {canEditFurnitureInCurrentView && (
+                      <button
+                        type="button"
+                        data-testid="drawer-furniture-edit-btn"
+                        aria-pressed={furnitureEditMode}
+                        onClick={() => {
+                          const next = !furnitureEditMode;
+                          setFurnitureEditMode(next);
+                          if (next) {
+                            setShowFurnitureLayer(true);
+                          } else {
+                            setSelectedFurnitureIds([]);
+                          }
+                        }}
+                        className={`btn-sm h-7 rounded-md border px-2 text-2xs font-medium transition-colors ${
+                          furnitureEditMode
+                            ? 'border-sky-600 bg-sky-700 text-white'
+                            : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {furnitureEditMode ? 'Xong nội thất' : 'Nội thất'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() =>
@@ -2679,6 +3088,55 @@ export default function FloorplanPage() {
                     onUpdateWorkflow={handleUpdateAlertWorkflow}
                     onAcknowledgeRoomAlerts={handleAcknowledgeRoomAlerts}
                     onFlyToAlert={focusAlertOnMap}
+                  />
+                )}
+
+                {/* Interactive Furniture Layer Editor (1:100 Real-World Meters) */}
+                {furnitureEditMode && canEditFurnitureInCurrentView && (
+                  <FurnitureLayerEditor
+                    room={selectedRoom}
+                    roomPolygon={selectedRoomPolygon}
+                    catalog={FURNITURE_CATALOG}
+                    hideSensitive={hideSensitiveFurniture}
+                    items={selectedRoomFurnitureItems}
+                    canUndo={
+                      (selectedRoomFurnitureHistory?.past.length ?? 0) > 0
+                    }
+                    canRedo={
+                      (selectedRoomFurnitureHistory?.future.length ?? 0) > 0
+                    }
+                    selectedIds={selectedFurnitureIds}
+                    onSelectIds={setSelectedFurnitureIds}
+                    onCommitItems={(nextItems) =>
+                      commitRoomFurnitureItems(selectedRoom.id, nextItems)
+                    }
+                    onUndo={() => handleUndoFurniture(selectedRoom.id)}
+                    onRedo={() => handleRedoFurniture(selectedRoom.id)}
+                    validation={selectedRoomFurnitureValidation}
+                    snapEnabled={snapFurnitureGrid}
+                    onSnapEnabledChange={setSnapFurnitureGrid}
+                    showLayer={showFurnitureLayer}
+                    onShowLayerChange={setShowFurnitureLayer}
+                    opacity={furnitureOpacity}
+                    onOpacityChange={setFurnitureOpacity}
+                    version={selectedRoomServerFurniture?.version ?? null}
+                    updatedBy={selectedRoomServerFurniture?.updatedBy}
+                    updatedAt={selectedRoomServerFurniture?.updatedAt}
+                    auditHistory={
+                      selectedRoomServerFurniture?.auditHistory ?? []
+                    }
+                    isSaving={updateFurnitureMutation.isPending}
+                    hasConflict={furnitureConflictRoomId === selectedRoom.id}
+                    errorMessage={furnitureErrorMsg}
+                    isReadOnlyPreset={selectedRoom.id.startsWith('PRESET_')}
+                    onSave={(note) =>
+                      void handleSaveFurniture(selectedRoom.id, note)
+                    }
+                    onReload={() => void handleReloadFurniture(selectedRoom.id)}
+                    onExitEdit={() => {
+                      setFurnitureEditMode(false);
+                      setSelectedFurnitureIds([]);
+                    }}
                   />
                 )}
 

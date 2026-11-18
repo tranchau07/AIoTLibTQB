@@ -56,6 +56,8 @@ public enum ErrorCode {
     ROOM_NAME_REQUIRED(5004, "Room name is required", HttpStatus.BAD_REQUEST),
     FLOOR_REQUIRED(5005, "Floor is required", HttpStatus.BAD_REQUEST),
     ROOM_HAS_DEVICES(5006, "Cannot delete room with associated devices", HttpStatus.BAD_REQUEST),
+    FURNITURE_VERSION_CONFLICT(5007, "Furniture layout was modified by another user", HttpStatus.CONFLICT),
+    FURNITURE_OUT_OF_BOUNDS(5008, "Furniture item lies outside room boundary or overlaps", HttpStatus.BAD_REQUEST),
 
     ALERT_NOT_EXISTED(6001, "Alert does not exist", HttpStatus.NOT_FOUND),
 

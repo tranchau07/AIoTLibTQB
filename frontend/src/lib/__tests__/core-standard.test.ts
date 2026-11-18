@@ -100,7 +100,7 @@ describe('1. HTTP Envelope & ErrorCode Mapper (FE-API-02, FE-API-03)', () => {
       2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
       3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008,
       4029, 4031,
-      5001, 5002, 5003, 5004, 5005, 5006,
+      5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008,
       6001,
       7001, 7002, 7003,
       9001, 9002,
@@ -209,7 +209,7 @@ describe('2. Single-Flight Refresh Queue (FE-AUTH-03)', () => {
 });
 
 describe('3. RBAC Scope Parser & Capability Matrix (FE-RBAC-02, FE-RBAC-03)', () => {
-  it('parses JWT scope and builds exact capabilities for LIBRARIAN, MAINTENANCE, and USER', () => {
+  it('parses JWT scope and builds exact capabilities for LIBRARIAN, MAINTENANCE, ZONE_MANAGER, and USER', () => {
     const libScope = parseScopeString(
       'LIBRARIAN READ_SENSOR_DATA VIEW_ALERTS ACKNOWLEDGE_ALERT MANAGE_ALERT_CONFIG MANAGE_DEVICES',
       'lib01'
@@ -217,6 +217,7 @@ describe('3. RBAC Scope Parser & Capability Matrix (FE-RBAC-02, FE-RBAC-03)', ()
     const libCap = buildCapabilities(libScope);
     expect(libCap.isLibrarian).toBe(true);
     expect(libCap.canManageRooms).toBe(true);
+    expect(libCap.canEditFurniture).toBe(true);
     expect(libCap.canDeleteRoom).toBe(false);
     expect(libCap.canResolveAlert).toBe(true);
     expect(libCap.canManageUsers).toBe(false);
@@ -229,12 +230,18 @@ describe('3. RBAC Scope Parser & Capability Matrix (FE-RBAC-02, FE-RBAC-03)', ()
     expect(mntCap.canViewDashboard).toBe(true);
     expect(mntCap.canViewDevices).toBe(true);
     expect(mntCap.canManageDevices).toBe(false);
+    expect(mntCap.canEditFurniture).toBe(true);
     expect(mntCap.canAcknowledgeAlert).toBe(true);
     expect(mntCap.canResolveAlert).toBe(false);
+
+    const zmScope = parseScopeString('ZONE_MANAGER VIEW_ALERTS READ_SENSOR_DATA', 'zm01');
+    const zmCap = buildCapabilities(zmScope);
+    expect(zmCap.canEditFurniture).toBe(false);
 
     const userScope = parseScopeString('USER', 'student01');
     const userCap = buildCapabilities(userScope);
     expect(userCap.canViewDashboard).toBe(true);
+    expect(userCap.canEditFurniture).toBe(false);
     expect(userCap.canViewAlerts).toBe(false);
     expect(userCap.canViewDevices).toBe(false);
   });

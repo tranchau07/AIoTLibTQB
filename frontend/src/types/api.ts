@@ -211,6 +211,40 @@ export interface RoomUpdateRequest {
   boundaryPolygon?: Point2D[];
 }
 
+export interface FurnitureItem {
+  id: string;
+  typeId: string;
+  label?: string;
+  x: number;
+  y: number;
+  widthM: number;
+  depthM: number;
+  rotationDeg: number;
+  locked: boolean;
+}
+
+export interface FurnitureAuditEntry {
+  timestamp: string;
+  username: string;
+  actionSummary: string;
+  version: number;
+}
+
+export interface RoomFurnitureResponse {
+  roomId: string;
+  version: number | null;
+  items: FurnitureItem[];
+  updatedBy?: string | null;
+  updatedAt?: string | null;
+  auditHistory: FurnitureAuditEntry[];
+}
+
+export interface RoomFurnitureUpdateRequest {
+  expectedVersion: number | null;
+  items: FurnitureItem[];
+  changeNote?: string;
+}
+
 // ----------------------------------------------------------------------------
 // 4. IoT Devices & Auto-Discovery
 // ----------------------------------------------------------------------------

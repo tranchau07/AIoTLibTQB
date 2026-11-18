@@ -36,7 +36,12 @@ import {
   Skeleton,
 } from '@/components/ui/primitives';
 import { useAuthStore } from '@/features/auth/store';
-import { usePublicRoomsQuery, useRoomsQuery } from '@/features/rooms/queries';
+import { roomsApi } from '@/features/rooms/api';
+import {
+  roomKeys,
+  usePublicRoomsQuery,
+  useRoomsQuery,
+} from '@/features/rooms/queries';
 import {
   telemetryKeys,
   useOverviewSummaryQuery,
@@ -44,6 +49,7 @@ import {
 import { telemetryApi } from '@/features/telemetry/api';
 import type {
   ComfortGrade,
+  FurnitureItem,
   RoomResponse,
   TelemetryResponse,
 } from '@/types/api';
@@ -315,6 +321,41 @@ export default function KioskLobbyPage() {
 
     return [...dbOnFloor, ...presetAdditions];
   }, [rooms, kioskMapFloor]);
+
+  const realKioskFloorRooms = useMemo(
+    () => kioskFloorRooms.filter((r) => !r.id.startsWith('PRESET_')),
+    [kioskFloorRooms]
+  );
+
+  const kioskFurnitureQueries = useQueries({
+    queries: realKioskFloorRooms.map((room) => ({
+      queryKey: roomKeys.furniture(room.id, !hasSession),
+      queryFn: () =>
+        hasSession
+          ? roomsApi.getFurniture(room.id)
+          : roomsApi.getPublicFurniture(room.id),
+      retry: false,
+    })),
+  });
+
+  const kioskFurnitureSig = realKioskFloorRooms
+    .map((r, idx) => {
+      const q = kioskFurnitureQueries[idx];
+      return `${r.id}:${q?.data?.version ?? 'none'}:${q?.data?.items?.length ?? 0}:${q?.dataUpdatedAt ?? 0}`;
+    })
+    .join('|');
+
+  const kioskFloorFurnitureItems: FurnitureItem[] = useMemo(() => {
+    const combined: FurnitureItem[] = [];
+    realKioskFloorRooms.forEach((_room, idx) => {
+      const items = kioskFurnitureQueries[idx]?.data?.items;
+      if (Array.isArray(items) && items.length > 0) {
+        combined.push(...items);
+      }
+    });
+    return combined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realKioskFloorRooms, kioskFurnitureSig]);
 
   const kioskFloorTelemetryMap = useMemo(() => {
     const map: Record<string, TelemetryResponse | null | undefined> = {
@@ -692,6 +733,10 @@ export default function KioskLobbyPage() {
           zoomedRoomId={kioskZoomedRoomId}
           onZoomRoomChange={setKioskZoomedRoomId}
           defaultLabelDensity="clean"
+          showFurnitureLayer={true}
+          furnitureItems={kioskFloorFurnitureItems}
+          hideSensitiveFurniture={true}
+          furnitureEditMode={false}
         />
       </section>
 

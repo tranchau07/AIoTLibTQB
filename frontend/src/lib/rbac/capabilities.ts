@@ -17,6 +17,7 @@ export interface CapabilityMatrix {
   canViewRoomDetail: boolean;
   canViewRawTelemetry: boolean;
   canManageRooms: boolean;
+  canEditFurniture: boolean;
   canDeleteRoom: boolean;
   canViewDevices: boolean;
   canManageDevices: boolean;
@@ -79,6 +80,13 @@ export function buildCapabilities(scope: ParsedScope): CapabilityMatrix {
       scope,
       'ADMIN',
       'LIBRARIAN',
+      'MANAGE_ZONES'
+    ),
+    canEditFurniture: hasAnyAuthority(
+      scope,
+      'ADMIN',
+      'LIBRARIAN',
+      'MAINTENANCE',
       'MANAGE_ZONES'
     ),
     canDeleteRoom: isAdmin,

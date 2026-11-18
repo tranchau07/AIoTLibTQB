@@ -1,28 +1,40 @@
 package com.example.AIoTLibTQB.service;
 
+import com.example.AIoTLibTQB.document.FurnitureAuditEntry;
+import com.example.AIoTLibTQB.document.FurnitureItemDoc;
 import com.example.AIoTLibTQB.document.Room;
+import com.example.AIoTLibTQB.document.RoomFurnitureLayout;
 import com.example.AIoTLibTQB.document.RoomThresholdConfig;
 import com.example.AIoTLibTQB.dto.request.RoomCreationRequest;
+import com.example.AIoTLibTQB.dto.request.RoomFurnitureUpdateRequest;
 import com.example.AIoTLibTQB.dto.request.RoomThresholdUpdateRequest;
 import com.example.AIoTLibTQB.dto.request.RoomUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
+import com.example.AIoTLibTQB.dto.response.RoomFurnitureResponse;
 import com.example.AIoTLibTQB.dto.response.RoomResponse;
 import com.example.AIoTLibTQB.enums.ErrorCode;
 import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.exception.AppException;
 import com.example.AIoTLibTQB.repository.DeviceRepository;
+import com.example.AIoTLibTQB.repository.RoomFurnitureLayoutRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
 import lombok.AccessLevel;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -35,29 +47,40 @@ public class RoomService {
     ComfortScoreService comfortScoreService;
     LatestTelemetryCache latestTelemetryCache;
     AlertRuleEngine alertRuleEngine;
+    RoomFurnitureLayoutRepository roomFurnitureLayoutRepository;
 
     @Autowired
     public RoomService(RoomRepository roomRepository,
                        DeviceRepository deviceRepository,
                        @Autowired(required = false) ComfortScoreService comfortScoreService,
                        @Autowired(required = false) LatestTelemetryCache latestTelemetryCache,
-                       @Autowired(required = false) AlertRuleEngine alertRuleEngine) {
+                       @Autowired(required = false) AlertRuleEngine alertRuleEngine,
+                       @Autowired(required = false) RoomFurnitureLayoutRepository roomFurnitureLayoutRepository) {
         this.roomRepository = roomRepository;
         this.deviceRepository = deviceRepository;
         this.comfortScoreService = comfortScoreService;
         this.latestTelemetryCache = latestTelemetryCache;
         this.alertRuleEngine = alertRuleEngine;
+        this.roomFurnitureLayoutRepository = roomFurnitureLayoutRepository;
+    }
+
+    public RoomService(RoomRepository roomRepository,
+                       DeviceRepository deviceRepository,
+                       ComfortScoreService comfortScoreService,
+                       LatestTelemetryCache latestTelemetryCache,
+                       AlertRuleEngine alertRuleEngine) {
+        this(roomRepository, deviceRepository, comfortScoreService, latestTelemetryCache, alertRuleEngine, null);
     }
 
     public RoomService(RoomRepository roomRepository,
                        DeviceRepository deviceRepository,
                        ComfortScoreService comfortScoreService,
                        LatestTelemetryCache latestTelemetryCache) {
-        this(roomRepository, deviceRepository, comfortScoreService, latestTelemetryCache, null);
+        this(roomRepository, deviceRepository, comfortScoreService, latestTelemetryCache, null, null);
     }
 
     public RoomService(RoomRepository roomRepository, DeviceRepository deviceRepository) {
-        this(roomRepository, deviceRepository, null, null, null);
+        this(roomRepository, deviceRepository, null, null, null, null);
     }
 
     @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN')")
@@ -231,6 +254,9 @@ public class RoomService {
             throw new AppException(ErrorCode.ROOM_HAS_DEVICES);
         }
         roomRepository.deleteById(id);
+        if (roomFurnitureLayoutRepository != null) {
+            roomFurnitureLayoutRepository.findByRoomId(id).ifPresent(roomFurnitureLayoutRepository::delete);
+        }
         if (comfortScoreService != null) {
             comfortScoreService.invalidateRoomTypeCache(id);
         }
@@ -243,6 +269,186 @@ public class RoomService {
     @PreAuthorize("hasAuthority('ADMIN')")
     public void deleteRoom(String id) {
         delete(id);
+    }
+
+    public RoomFurnitureResponse getFurnitureLayout(String roomId, boolean includeSensitive) {
+        findRoomById(roomId);
+        if (roomFurnitureLayoutRepository == null) {
+            return RoomFurnitureResponse.builder()
+                    .roomId(roomId)
+                    .version(null)
+                    .items(List.of())
+                    .auditHistory(List.of())
+                    .build();
+        }
+        return roomFurnitureLayoutRepository.findByRoomId(roomId)
+                .map(layout -> toFurnitureResponse(layout, layout.getVersion(), includeSensitive))
+                .orElseGet(() -> RoomFurnitureResponse.builder()
+                        .roomId(roomId)
+                        .version(null)
+                        .items(List.of())
+                        .auditHistory(List.of())
+                        .build());
+    }
+
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'MAINTENANCE', 'MANAGE_ZONES')")
+    public RoomFurnitureResponse updateFurnitureLayout(
+            String roomId,
+            RoomFurnitureUpdateRequest request,
+            String operatorUsername) {
+        if (request == null || request.getItems() == null) {
+            throw new AppException(ErrorCode.INVALID_REQUEST_PAYLOAD);
+        }
+        Room room = findRoomById(roomId);
+        List<FurnitureItemDoc> sanitizedItems = sanitizeAndValidateFurnitureItems(room, request.getItems());
+
+        RoomFurnitureLayout existing = roomFurnitureLayoutRepository != null
+                ? roomFurnitureLayoutRepository.findByRoomId(roomId).orElse(null)
+                : null;
+
+        Long requestedExpectedVersion = request.getExpectedVersion();
+        Long previousVersionObj = existing != null ? existing.getVersion() : null;
+        boolean isUpdate = existing != null;
+
+        if (isUpdate) {
+            if (!Objects.equals(requestedExpectedVersion, previousVersionObj)) {
+                throw new AppException(ErrorCode.FURNITURE_VERSION_CONFLICT);
+            }
+        } else if (requestedExpectedVersion != null && requestedExpectedVersion != 0L) {
+            throw new AppException(ErrorCode.FURNITURE_VERSION_CONFLICT);
+        }
+
+        Instant now = Instant.now();
+        String actor = (operatorUsername != null && !operatorUsername.isBlank())
+                ? operatorUsername.trim()
+                : "system";
+        Long nextAuditVersion = isUpdate
+                ? ((previousVersionObj != null ? previousVersionObj : 0L) + 1L)
+                : 0L;
+
+        String summary = (request.getChangeNote() != null && !request.getChangeNote().isBlank())
+                ? request.getChangeNote().trim()
+                : String.format("Cập nhật bố cục nội thất (%d đối tượng)", sanitizedItems.size());
+
+        RoomFurnitureLayout target = isUpdate
+                ? existing
+                : RoomFurnitureLayout.builder()
+                        .roomId(roomId)
+                        .items(new ArrayList<>())
+                        .auditHistory(new ArrayList<>())
+                        .build();
+
+        target.setItems(new ArrayList<>(sanitizedItems));
+        target.setUpdatedBy(actor);
+        target.setUpdatedAt(now);
+
+        List<FurnitureAuditEntry> history = target.getAuditHistory() != null
+                ? new ArrayList<>(target.getAuditHistory())
+                : new ArrayList<>();
+        history.add(FurnitureAuditEntry.builder()
+                .timestamp(now)
+                .username(actor)
+                .actionSummary(summary)
+                .version(nextAuditVersion)
+                .build());
+        if (history.size() > 50) {
+            history = new ArrayList<>(history.subList(history.size() - 50, history.size()));
+        }
+        target.setAuditHistory(history);
+
+        if (roomFurnitureLayoutRepository == null) {
+            return toFurnitureResponse(target, nextAuditVersion, true);
+        }
+
+        try {
+            RoomFurnitureLayout saved = roomFurnitureLayoutRepository.save(target);
+            RoomFurnitureLayout effective = saved != null ? saved : target;
+            Long resolvedVersion;
+            if (isUpdate) {
+                resolvedVersion = (effective.getVersion() != null && !Objects.equals(effective.getVersion(), previousVersionObj))
+                        ? effective.getVersion()
+                        : nextAuditVersion;
+            } else {
+                resolvedVersion = effective.getVersion() != null ? effective.getVersion() : 0L;
+            }
+            if (!effective.getAuditHistory().isEmpty()) {
+                FurnitureAuditEntry lastEntry = effective.getAuditHistory().get(effective.getAuditHistory().size() - 1);
+                lastEntry.setVersion(resolvedVersion);
+            }
+            log.info("Furniture layout updated for room '{}' ({}): version={}, items={}, by={}",
+                    room.getCode(), roomId, resolvedVersion, sanitizedItems.size(), actor);
+            return toFurnitureResponse(effective, resolvedVersion, true);
+        } catch (OptimisticLockingFailureException | DuplicateKeyException ex) {
+            throw new AppException(ErrorCode.FURNITURE_VERSION_CONFLICT);
+        }
+    }
+
+    private List<FurnitureItemDoc> sanitizeAndValidateFurnitureItems(Room room, List<FurnitureItemDoc> rawItems) {
+        List<FurnitureItemDoc> normalized = new ArrayList<>(rawItems.size());
+        for (FurnitureItemDoc raw : rawItems) {
+            if (raw == null || raw.getId() == null || raw.getId().isBlank()
+                    || raw.getTypeId() == null || raw.getTypeId().isBlank()
+                    || raw.getX() == null || raw.getY() == null
+                    || raw.getWidthM() == null || raw.getDepthM() == null
+                    || !Double.isFinite(raw.getX()) || !Double.isFinite(raw.getY())
+                    || !Double.isFinite(raw.getWidthM()) || !Double.isFinite(raw.getDepthM())
+                    || raw.getWidthM() < 0.1 || raw.getDepthM() < 0.1) {
+                throw new AppException(ErrorCode.INVALID_REQUEST_PAYLOAD);
+            }
+            double rot = (raw.getRotationDeg() != null && Double.isFinite(raw.getRotationDeg()))
+                    ? raw.getRotationDeg()
+                    : 0.0;
+            FurnitureItemDoc item = FurnitureItemDoc.builder()
+                    .id(raw.getId().trim())
+                    .typeId(raw.getTypeId().trim().toUpperCase())
+                    .label(raw.getLabel() != null ? raw.getLabel().trim() : "")
+                    .x(raw.getX())
+                    .y(raw.getY())
+                    .widthM(raw.getWidthM())
+                    .depthM(raw.getDepthM())
+                    .rotationDeg(rot)
+                    .locked(Boolean.TRUE.equals(raw.getLocked()))
+                    .build();
+
+            if (!FurnitureGeometryValidator.isFurnitureInsideRoom(item, room.getBoundaryPolygon())) {
+                throw new AppException(ErrorCode.FURNITURE_OUT_OF_BOUNDS);
+            }
+            normalized.add(item);
+        }
+
+        for (int i = 0; i < normalized.size(); i++) {
+            for (int j = i + 1; j < normalized.size(); j++) {
+                if (FurnitureGeometryValidator.doFurnitureItemsOverlap(normalized.get(i), normalized.get(j))) {
+                    throw new AppException(ErrorCode.FURNITURE_OUT_OF_BOUNDS);
+                }
+            }
+        }
+        return normalized;
+    }
+
+    private RoomFurnitureResponse toFurnitureResponse(
+            RoomFurnitureLayout layout,
+            Long resolvedVersion,
+            boolean includeSensitive) {
+        List<FurnitureItemDoc> rawItems = layout.getItems() != null ? layout.getItems() : List.of();
+        List<FurnitureItemDoc> visibleItems = includeSensitive
+                ? new ArrayList<>(rawItems)
+                : rawItems.stream()
+                        .filter(it -> !"IOT_NODE".equalsIgnoreCase(it.getTypeId()))
+                        .collect(Collectors.toList());
+
+        List<FurnitureAuditEntry> history = includeSensitive && layout.getAuditHistory() != null
+                ? new ArrayList<>(layout.getAuditHistory())
+                : List.of();
+
+        return RoomFurnitureResponse.builder()
+                .roomId(layout.getRoomId())
+                .version(resolvedVersion)
+                .items(visibleItems)
+                .updatedBy(includeSensitive ? layout.getUpdatedBy() : null)
+                .updatedAt(layout.getUpdatedAt())
+                .auditHistory(history)
+                .build();
     }
 
     private Room findRoomById(String id) {

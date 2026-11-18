@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { roomsApi } from './api';
 import type {
   RoomCreationRequest,
+  RoomFurnitureUpdateRequest,
   RoomThresholdConfig,
   RoomUpdateRequest,
 } from '@/types/api';
@@ -11,6 +12,8 @@ export const roomKeys = {
   list: (params: { page?: number; size?: number; floor?: number }) =>
     ['rooms', 'list', params] as const,
   detail: (id: string) => ['rooms', 'detail', id] as const,
+  furniture: (id: string, isPublic = false) =>
+    ['rooms', 'furniture', id, isPublic ? 'public' : 'auth'] as const,
 };
 
 export function useRoomsQuery(
@@ -29,6 +32,21 @@ export function useRoomDetailQuery(id: string | undefined) {
     queryKey: roomKeys.detail(id ?? ''),
     queryFn: () => roomsApi.getById(id!),
     enabled: Boolean(id),
+  });
+}
+
+export function useRoomFurnitureQuery(
+  id: string | undefined,
+  enabled = true,
+  isPublic = false
+) {
+  const isRealRoom = Boolean(id && !id.startsWith('PRESET_'));
+  return useQuery({
+    queryKey: roomKeys.furniture(id ?? '', isPublic),
+    queryFn: () =>
+      isPublic ? roomsApi.getPublicFurniture(id!) : roomsApi.getFurniture(id!),
+    enabled: enabled && isRealRoom,
+    retry: false,
   });
 }
 
@@ -62,6 +80,23 @@ export function useUpdateRoomThresholdsMutation() {
     onSuccess: (_data, vars) => {
       void qc.invalidateQueries({ queryKey: roomKeys.all });
       void qc.invalidateQueries({ queryKey: roomKeys.detail(vars.id) });
+    },
+  });
+}
+
+export function useUpdateRoomFurnitureMutation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: RoomFurnitureUpdateRequest;
+    }) => roomsApi.updateFurniture(id, body),
+    onSuccess: (data, vars) => {
+      qc.setQueryData(roomKeys.furniture(vars.id, false), data);
+      void qc.invalidateQueries({ queryKey: roomKeys.furniture(vars.id, true) });
     },
   });
 }

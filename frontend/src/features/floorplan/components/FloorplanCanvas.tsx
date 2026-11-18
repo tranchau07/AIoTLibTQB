@@ -79,6 +79,16 @@ import {
   evaluateRoomReliability,
   type RoomReliabilitySummary,
 } from '@/lib/floorplan/reliability';
+import {
+  FURNITURE_CATALOG,
+  filterVisibleFurnitureItems,
+  resolveFurnitureCatalogEntry,
+  type FurnitureCatalogEntry,
+} from '@/config/furniture-catalog';
+import {
+  getFurnitureObbCornersNorm,
+  snapNormalizedPointToGrid,
+} from '@/lib/floorplan/furnitureGeometry';
 import type {
   OneHourDeltaResult,
   PlaybackRoomState,
@@ -94,6 +104,7 @@ import { RoomHoverPopover } from '@/features/floorplan/components/RoomHoverPopov
 import type {
   AlertSeverity,
   DeviceResponse,
+  FurnitureItem,
   Point2D,
   RoomResponse,
   TelemetryResponse,
@@ -222,6 +233,25 @@ export interface FloorplanCanvasProps {
   onHoverRoomChange?: (room: RoomResponse | null) => void;
   /** Bật tắt hiển thị nút lớp nội thất (dành cho GĐ8) */
   showFurnitureLayer?: boolean;
+  /** Danh sách đối tượng nội thất (1:100) cần hiển thị / chỉnh sửa trên tầng */
+  furnitureItems?: readonly FurnitureItem[];
+  /** Độ mờ lớp nội thất [0..1] (mặc định 0.65) */
+  furnitureOpacity?: number;
+  /** Chế độ kéo thả/xoay chỉnh sửa nội thất (theo quyền RBAC) */
+  furnitureEditMode?: boolean;
+  /** Các ID nội thất đang được chọn */
+  selectedFurnitureIds?: readonly string[];
+  /** Các ID nội thất vi phạm ranh giới hoặc va chạm (hiển thị viền đỏ) */
+  invalidFurnitureIds?: ReadonlySet<string> | readonly string[];
+  /** Ẩn node phần cứng nhạy cảm (IOT_NODE) ở góc nhìn USER/VIEWER/Kiosk */
+  hideSensitiveFurniture?: boolean;
+  /** Thư viện định nghĩa đối tượng nội thất (mặc định FURNITURE_CATALOG) */
+  furnitureCatalog?: readonly FurnitureCatalogEntry[];
+  /** Bật tắt snap lưới 0.25m khi kéo thả nội thất */
+  snapFurnitureGrid?: boolean;
+  onSelectFurnitureIds?: (ids: string[]) => void;
+  onUpdateFurnitureItems?: (items: FurnitureItem[]) => void;
+  onCommitFurnitureItems?: (items: FurnitureItem[]) => void;
   /** Chỉ hiện vùng vượt ngưỡng (chế độ lọc ISA-101 Deviation) */
   onlyExceedingThreshold?: boolean;
   /** Chuỗi lịch sử gần nhất theo roomId (để vẽ sparkline trên hover popover) */
@@ -234,11 +264,15 @@ export interface FloorplanCanvasProps {
   showHoverPopover?: boolean;
 }
 
+const EMPTY_FURNITURE_ITEMS: readonly FurnitureItem[] = [];
+const EMPTY_STRING_IDS: readonly string[] = [];
+const EMPTY_DEVICE_TELEMETRY_MAP: Record<string, TelemetryResponse | null | undefined> = {};
+
 export function FloorplanCanvas({
   rooms,
   devices,
   roomTelemetryMap,
-  deviceTelemetryMap = {},
+  deviceTelemetryMap = EMPTY_DEVICE_TELEMETRY_MAP,
   layer,
   selectedRoomId,
   onSelectRoom,
@@ -252,9 +286,9 @@ export function FloorplanCanvas({
   roomReliabilityMap,
   showTechOverlay = false,
   highlightedZoneIds,
-  firingRoomIds = [],
+  firingRoomIds = EMPTY_STRING_IDS,
   focusedDeviceId = null,
-  alertingDeviceIds = [],
+  alertingDeviceIds = EMPTY_STRING_IDS,
   defaultLabelDensity,
   roomAlertCounts,
   roomAlertSeverities,
@@ -268,6 +302,18 @@ export function FloorplanCanvas({
   onToggleFullscreen,
   maxViewportHeightPx,
   onHoverRoomChange,
+  showFurnitureLayer = true,
+  furnitureItems = EMPTY_FURNITURE_ITEMS,
+  furnitureOpacity = 0.65,
+  furnitureEditMode = false,
+  selectedFurnitureIds = EMPTY_STRING_IDS,
+  invalidFurnitureIds,
+  hideSensitiveFurniture = false,
+  furnitureCatalog = FURNITURE_CATALOG,
+  snapFurnitureGrid = true,
+  onSelectFurnitureIds,
+  onUpdateFurnitureItems,
+  onCommitFurnitureItems,
   onlyExceedingThreshold = false,
   roomTelemetryHistoryMap,
   roomDeltaMap,
@@ -318,6 +364,38 @@ export function FloorplanCanvas({
   );
   const pinchStartRef = useRef<{ dist: number; scale: number } | null>(null);
   const dragMovedDistRef = useRef<number>(0);
+  const furnitureDragRef = useRef<{
+    itemId: string;
+    startClientX: number;
+    startClientY: number;
+    startNormX: number;
+    startNormY: number;
+    latestItems: FurnitureItem[];
+    moved: boolean;
+  } | null>(null);
+
+  const visibleFurnitureItems = useMemo(
+    () =>
+      filterVisibleFurnitureItems(
+        furnitureItems,
+        furnitureCatalog,
+        hideSensitiveFurniture
+      ),
+    [furnitureItems, furnitureCatalog, hideSensitiveFurniture]
+  );
+
+  const selectedFurnitureSet = useMemo(
+    () => new Set(selectedFurnitureIds),
+    [selectedFurnitureIds]
+  );
+
+  const invalidFurnitureSet = useMemo(
+    () =>
+      invalidFurnitureIds instanceof Set
+        ? invalidFurnitureIds
+        : new Set(invalidFurnitureIds ?? []),
+    [invalidFurnitureIds]
+  );
 
   useEffect(() => {
     if (defaultLabelDensity) {
@@ -966,6 +1044,108 @@ export function FloorplanCanvas({
       }
     }
 
+    // Architectural Furniture Layer (1:100 real-world meters, isolated to Layer 1 StaticBaseCanvas)
+    if (
+      showFurnitureLayer &&
+      (furnitureEditMode || lodConfig.showFurniture) &&
+      visibleFurnitureItems.length > 0
+    ) {
+      const clampedOpacity = Math.max(0, Math.min(1, furnitureOpacity));
+      const detailLevel = furnitureEditMode || lodConfig.showDetailedFurniture;
+
+      for (const item of visibleFurnitureItems) {
+        const entry = resolveFurnitureCatalogEntry(item.typeId, furnitureCatalog);
+        const cornersNorm = getFurnitureObbCornersNorm(item);
+        const cornersPx = cornersNorm.map((pt) =>
+          normalizedToPixel(pt, width, height)
+        );
+        const centerPx = normalizedToPixel({ x: item.x, y: item.y }, width, height);
+        const isSelected = selectedFurnitureSet.has(item.id);
+        const isInvalid = invalidFurnitureSet.has(item.id);
+
+        ctx.save();
+        ctx.globalAlpha = clampedOpacity;
+
+        ctx.beginPath();
+        ctx.moveTo(cornersPx[0].x, cornersPx[0].y);
+        ctx.lineTo(cornersPx[1].x, cornersPx[1].y);
+        ctx.lineTo(cornersPx[2].x, cornersPx[2].y);
+        ctx.lineTo(cornersPx[3].x, cornersPx[3].y);
+        ctx.closePath();
+
+        ctx.fillStyle = isInvalid
+          ? 'rgba(127, 29, 29, 0.72)'
+          : entry.fillColor;
+        ctx.fill();
+
+        ctx.lineWidth = (isSelected || isInvalid ? 2.2 : 1.1) / zoomViewport.scale;
+        ctx.strokeStyle = isInvalid
+          ? '#EF4444'
+          : isSelected
+            ? '#38BDF8'
+            : item.locked
+              ? '#F59E0B'
+              : entry.strokeColor;
+        ctx.stroke();
+
+        // Architectural detail strokes at Detail zoom / Edit mode
+        if (detailLevel) {
+          if (entry.shape === 'bookshelf') {
+            const midLeftX = (cornersPx[0].x + cornersPx[3].x) * 0.5;
+            const midLeftY = (cornersPx[0].y + cornersPx[3].y) * 0.5;
+            const midRightX = (cornersPx[1].x + cornersPx[2].x) * 0.5;
+            const midRightY = (cornersPx[1].y + cornersPx[2].y) * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(midLeftX, midLeftY);
+            ctx.lineTo(midRightX, midRightY);
+            ctx.stroke();
+          } else if (entry.shape === 'desk_cluster') {
+            const topMidX = (cornersPx[0].x + cornersPx[1].x) * 0.5;
+            const topMidY = (cornersPx[0].y + cornersPx[1].y) * 0.5;
+            const botMidX = (cornersPx[3].x + cornersPx[2].x) * 0.5;
+            const botMidY = (cornersPx[3].y + cornersPx[2].y) * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(topMidX, topMidY);
+            ctx.lineTo(botMidX, botMidY);
+            ctx.stroke();
+          } else if (entry.shape === 'door_swing') {
+            ctx.beginPath();
+            ctx.moveTo(cornersPx[0].x, cornersPx[0].y);
+            ctx.lineTo(cornersPx[2].x, cornersPx[2].y);
+            ctx.stroke();
+          } else if (entry.shape === 'sensor_node') {
+            const rPx = Math.max(
+              3,
+              Math.min(
+                10,
+                Math.hypot(
+                  cornersPx[1].x - cornersPx[0].x,
+                  cornersPx[1].y - cornersPx[0].y
+                ) * 0.38
+              )
+            );
+            ctx.beginPath();
+            ctx.arc(centerPx.x, centerPx.y, rPx, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+
+          if (item.label) {
+            const labelFont = Math.max(
+              7,
+              Math.min(11, Math.round(9 / zoomViewport.scale))
+            );
+            ctx.font = `600 ${labelFont}px Inter, system-ui, sans-serif`;
+            ctx.fillStyle = '#F8FAFC';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(item.label, centerPx.x, centerPx.y);
+          }
+        }
+
+        ctx.restore();
+      }
+    }
+
     ctx.restore();
     ctx.restore();
   }, [
@@ -975,7 +1155,16 @@ export function FloorplanCanvas({
     cadImageLoadedFloor,
     zoomViewport,
     lodConfig.showAtriumText,
+    lodConfig.showFurniture,
+    lodConfig.showDetailedFurniture,
     labelDensity,
+    showFurnitureLayer,
+    visibleFurnitureItems,
+    furnitureOpacity,
+    furnitureEditMode,
+    selectedFurnitureSet,
+    invalidFurnitureSet,
+    furnitureCatalog,
   ]);
 
   // ============================================================================
@@ -2413,6 +2602,8 @@ export function FloorplanCanvas({
       data-status-filter={activeStatusFilter}
       data-only-exceeding={onlyExceedingThreshold ? 'true' : 'false'}
       data-reliability-layer={showReliabilityLayer ? 'true' : 'false'}
+      data-furniture-layer={showFurnitureLayer ? 'true' : 'false'}
+      data-furniture-edit={furnitureEditMode ? 'true' : 'false'}
       className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1120] shadow-inner"
     >
       <div
@@ -3106,6 +3297,200 @@ export function FloorplanCanvas({
             );
           })}
         </div>
+
+        {/* Interactive Furniture Edit Overlay (Visible strictly when furnitureEditMode && showFurnitureLayer) */}
+        {furnitureEditMode && showFurnitureLayer && (
+          <div
+            data-testid="furniture-edit-overlay"
+            className="pointer-events-auto absolute inset-0 z-[18] touch-none"
+            onPointerMove={(ev) => {
+              const drag = furnitureDragRef.current;
+              if (!drag) return;
+              const target = furnitureItems.find((i) => i.id === drag.itemId);
+              if (!target || target.locked) return;
+
+              const dxPx = ev.clientX - drag.startClientX;
+              const dyPx = ev.clientY - drag.startClientY;
+              if (Math.hypot(dxPx, dyPx) < 1) return;
+
+              const rawNorm = {
+                x: Math.max(
+                  0.01,
+                  Math.min(
+                    0.99,
+                    drag.startNormX +
+                      dxPx / Math.max(1, canvasSize.width * zoomViewport.scale)
+                  )
+                ),
+                y: Math.max(
+                  0.01,
+                  Math.min(
+                    0.99,
+                    drag.startNormY +
+                      dyPx / Math.max(1, canvasSize.height * zoomViewport.scale)
+                  )
+                ),
+              };
+              const nextPos = snapFurnitureGrid
+                ? snapNormalizedPointToGrid(rawNorm, 0.25)
+                : rawNorm;
+
+              const nextItems = furnitureItems.map((it) =>
+                it.id === drag.itemId
+                  ? {
+                      ...it,
+                      x: Number(nextPos.x.toFixed(4)),
+                      y: Number(nextPos.y.toFixed(4)),
+                    }
+                  : it
+              );
+              drag.moved = true;
+              drag.latestItems = nextItems;
+              onUpdateFurnitureItems?.(nextItems);
+            }}
+            onPointerUp={() => {
+              const drag = furnitureDragRef.current;
+              if (drag?.moved) {
+                onCommitFurnitureItems?.(drag.latestItems);
+              }
+              furnitureDragRef.current = null;
+            }}
+            onPointerCancel={() => {
+              furnitureDragRef.current = null;
+            }}
+          >
+            <svg
+              viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`}
+              width={canvasSize.width}
+              height={canvasSize.height}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0"
+            >
+              {visibleFurnitureItems.map((item) => {
+                const cornersScreen = getFurnitureObbCornersNorm(item).map(toScreenPx);
+                const points = cornersScreen
+                  .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+                  .join(' ');
+                const isSelected = selectedFurnitureSet.has(item.id);
+                const isInvalid = invalidFurnitureSet.has(item.id);
+                return (
+                  <polygon
+                    key={`poly-${item.id}`}
+                    points={points}
+                    fill={
+                      isInvalid
+                        ? 'rgba(239, 68, 68, 0.24)'
+                        : isSelected
+                          ? 'rgba(56, 189, 248, 0.22)'
+                          : 'rgba(148, 163, 184, 0.14)'
+                    }
+                    stroke={
+                      isInvalid
+                        ? '#EF4444'
+                        : isSelected
+                          ? '#38BDF8'
+                          : item.locked
+                            ? '#F59E0B'
+                            : '#CBD5E1'
+                    }
+                    strokeWidth={isSelected || isInvalid ? 2.2 : 1.2}
+                    strokeDasharray={item.locked ? '3 2' : undefined}
+                  />
+                );
+              })}
+            </svg>
+
+            {visibleFurnitureItems.map((item) => {
+              const centerScreen = toScreenPx({ x: item.x, y: item.y });
+              const entry = resolveFurnitureCatalogEntry(
+                item.typeId,
+                furnitureCatalog
+              );
+              const isSelected = selectedFurnitureSet.has(item.id);
+              const isInvalid = invalidFurnitureSet.has(item.id);
+              return (
+                <div
+                  key={item.id}
+                  style={{
+                    left: `${centerScreen.x}px`,
+                    top: `${centerScreen.y}px`,
+                  }}
+                  className="absolute -translate-x-1/2 -translate-y-1/2"
+                >
+                  <button
+                    type="button"
+                    data-testid={`furniture-gizmo-${item.id}`}
+                    data-locked={item.locked ? 'true' : 'false'}
+                    data-selected={isSelected ? 'true' : 'false'}
+                    data-invalid={isInvalid ? 'true' : 'false'}
+                    data-x={item.x}
+                    data-y={item.y}
+                    aria-label={`${item.label || entry.shortLabel}${
+                      item.locked ? ' (Đã khóa)' : ''
+                    }`}
+                    onPointerDown={(ev) => {
+                      ev.stopPropagation();
+                      if (ev.shiftKey) {
+                        const nextSel = isSelected
+                          ? selectedFurnitureIds.filter((id) => id !== item.id)
+                          : [...selectedFurnitureIds, item.id];
+                        onSelectFurnitureIds?.(nextSel);
+                      } else {
+                        onSelectFurnitureIds?.([item.id]);
+                      }
+                      if (item.locked) return;
+                      furnitureDragRef.current = {
+                        itemId: item.id,
+                        startClientX: ev.clientX,
+                        startClientY: ev.clientY,
+                        startNormX: item.x,
+                        startNormY: item.y,
+                        latestItems: [...furnitureItems],
+                        moved: false,
+                      };
+                    }}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                    }}
+                    className={`flex min-h-[28px] min-w-[28px] items-center justify-center rounded border px-1 font-mono text-[10px] font-semibold shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                      isInvalid
+                        ? 'border-red-400 bg-red-950/90 text-red-100'
+                        : isSelected
+                          ? 'border-sky-300 bg-sky-900/95 text-white'
+                          : 'border-slate-500/80 bg-slate-900/80 text-slate-100'
+                    } ${item.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                  >
+                    <span>{item.label || entry.shortLabel}</span>
+                    {item.locked && <span className="ml-1 text-amber-300">🔒</span>}
+                  </button>
+
+                  {isSelected &&
+                    !item.locked &&
+                    selectedFurnitureIds.length === 1 && (
+                      <button
+                        type="button"
+                        data-testid={`furniture-gizmo-rotate-${item.id}`}
+                        aria-label={`Xoay ${item.label || entry.shortLabel} +45 độ`}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          const nextItems = furnitureItems.map((it) =>
+                            it.id === item.id
+                              ? { ...it, rotationDeg: (it.rotationDeg + 45) % 360 }
+                              : it
+                          );
+                          onUpdateFurnitureItems?.(nextItems);
+                          onCommitFurnitureItems?.(nextItems);
+                        }}
+                        className="mt-1 block rounded border border-sky-400 bg-slate-900/95 px-1.5 py-0.5 text-[9px] font-bold text-sky-200 shadow hover:bg-sky-900"
+                      >
+                        ↻ 45°
+                      </button>
+                    )}
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Hover / Click Quick Room Popover (Edge-flipped inside viewport) */}
         {hoveredPopoverData && (
