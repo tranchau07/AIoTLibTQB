@@ -50,12 +50,19 @@ import {
 } from '@/lib/floorplan/polygon';
 import {
   computeLabelPlacements,
+  computeRoomLabelPriority,
   getLodConfig,
   type LabelDensity,
   type LabelRequest,
+  type LabelStyleTier,
   type Obstacle,
   type RoomLabelStyle,
 } from '@/lib/floorplan/labelLayout';
+import {
+  clusterDeviceNodes,
+  type DeviceCluster,
+} from '@/lib/floorplan/clustering';
+import { computePopoverPlacement } from '@/lib/floorplan/popoverPosition';
 import {
   computeRoomBlindspotRatio,
   getContinuousMetricColorCss,
@@ -538,8 +545,8 @@ export function FloorplanCanvas({
   );
 
   const lodConfig = useMemo(
-    () => getLodConfig(labelDensity, zoomViewport.isZoomed),
-    [labelDensity, zoomViewport.isZoomed]
+    () => getLodConfig(labelDensity, zoomViewport.scale),
+    [labelDensity, zoomViewport.scale]
   );
 
   // Devices on this floor (Role ADMIN / LIBRARIAN / MAINTENANCE)
@@ -576,6 +583,91 @@ export function FloorplanCanvas({
         };
       });
   }, [devices, roomById, enrichedRooms]);
+
+  const alertingDeviceSet = useMemo(
+    () => new Set(alertingDeviceIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [alertingDeviceIds.join('|')]
+  );
+
+  // Spatial clustering of dense device pins at low zoom levels (< 1.55x)
+  const deviceClusters = useMemo<Array<DeviceCluster<DeviceResponse>>>(() => {
+    const inputs = positionedDevices.map((device) => {
+      const screenPx = toScreenPx({ x: device.posX!, y: device.posY! });
+      const isAlerting =
+        alertingDeviceSet.has(device.id) ||
+        alertingDeviceSet.has(device.hardwareId);
+      const roomHasAlert = Boolean(
+        device.roomId &&
+          ((roomAlertCounts?.[device.roomId] ?? 0) > 0 ||
+            firingRoomSet.has(device.roomId))
+      );
+      const roomSeverity = device.roomId
+        ? roomAlertSeverities?.[device.roomId]
+        : undefined;
+      const severity =
+        isAlerting || (roomHasAlert && alertingDeviceSet.size === 0)
+          ? (roomSeverity ?? 'HIGH')
+          : null;
+      const isFocused = Boolean(
+        focusedDeviceId &&
+          (device.id === focusedDeviceId ||
+            device.hardwareId === focusedDeviceId)
+      );
+
+      return {
+        device,
+        screenPx,
+        severity,
+        isAlerting: isAlerting || Boolean(severity),
+        isFocused,
+      };
+    });
+
+    return clusterDeviceNodes(inputs, zoomViewport.scale, {
+      clusterRadiusPx: FLOORPLAN_INTERACTION_CONFIG.clusterRadiusPx,
+      maxClusterScale: lodConfig.clusterSensors
+        ? FLOORPLAN_INTERACTION_CONFIG.clusterMaxScale
+        : 0,
+      canvasWidth: canvasSize.width,
+      canvasHeight: canvasSize.height,
+    });
+  }, [
+    positionedDevices,
+    toScreenPx,
+    alertingDeviceSet,
+    roomAlertCounts,
+    roomAlertSeverities,
+    firingRoomSet,
+    focusedDeviceId,
+    zoomViewport.scale,
+    lodConfig.clusterSensors,
+    canvasSize.width,
+    canvasSize.height,
+  ]);
+
+  const handleClusterExpand = useCallback(
+    (centroidNorm: Point2D, targetScale: number) => {
+      const basePx = normalizedToPixel(
+        centroidNorm,
+        canvasSize.width,
+        canvasSize.height
+      );
+      const rawTx = canvasSize.width * 0.5 - basePx.x * targetScale;
+      const rawTy = canvasSize.height * 0.5 - basePx.y * targetScale;
+      commitViewport(
+        clampViewportTransform(
+          targetScale,
+          rawTx,
+          rawTy,
+          canvasSize.width,
+          canvasSize.height,
+          ZOOM_CONFIG.maxScale
+        )
+      );
+    },
+    [canvasSize.width, canvasSize.height, commitViewport]
+  );
 
   // Wayfinding architectural landmarks on this floor (Stairs, Elevators, WC, Gate)
   const floorLandmarks = useMemo(
@@ -1207,7 +1299,6 @@ export function FloorplanCanvas({
         const areaM2 =
           preset?.areaM2 ??
           Math.round(Math.abs(computePolygonSignedArea(polygon)) * 4347.2);
-        const isSmallGroupRoom = areaM2 < 65;
 
         const codeLabel = preset?.code ?? room.code;
         const shortCode = codeLabel.replace(/^TQB_/, 'P.');
@@ -1253,18 +1344,14 @@ export function FloorplanCanvas({
           ? `${codeLabel} · Mô phỏng`
           : codeLabel;
         const subLine =
-          zoomViewport.isZoomed && spreadText
+          zoomViewport.scale >= ZOOM_CONFIG.overviewMaxScale && spreadText
             ? `${stalePrefix}${statusPrefix}${metricLabel} · ${spreadText}`
             : `${stalePrefix}${statusPrefix}${metricLabel}`;
 
         let effectiveStyle: RoomLabelStyle = lodConfig.roomLabel;
-        if (zoomViewport.isZoomed) {
+        if (zoomedRoomId) {
           effectiveStyle = isZoomTarget ? 'rich' : 'code';
-        } else if (
-          effectiveStyle === 'rich' &&
-          isSmallGroupRoom &&
-          !isSelected
-        ) {
+        } else if (isSelected && effectiveStyle === 'code') {
           effectiveStyle = 'pill';
         }
 
@@ -1274,22 +1361,13 @@ export function FloorplanCanvas({
           hasAlert ||
           areaM2 >= lodConfig.hideSmallRoomsUnderM2;
 
-        const severityWeight =
-          alertSeverity === 'CRITICAL'
-            ? 4
-            : alertSeverity === 'HIGH'
-              ? 3
-              : alertSeverity === 'MEDIUM'
-                ? 2
-                : hasAlert
-                  ? 1
-                  : 0;
-
-        const priority =
-          (isZoomTarget ? 2_000_000 : 0) +
-          severityWeight * 200_000 +
-          (isSelected ? 50_000 : 0) +
-          areaM2;
+        const priority = computeRoomLabelPriority({
+          isZoomTarget,
+          alertSeverity,
+          hasAlert,
+          isSelected,
+          areaM2,
+        });
 
         preparedLabels.push({
           roomId: room.id,
@@ -1355,23 +1433,32 @@ export function FloorplanCanvas({
       // Screen-Space Decluttered Room Labels Pass
       const obstacles: Obstacle[] = [];
 
-      for (const dev of positionedDevices) {
-        const px = normToScreen({ x: dev.posX!, y: dev.posY! });
-        if (px.x < -20 || px.x > width + 20 || px.y < -20 || px.y > height + 20)
-          continue;
-        const isInZoomedRoom =
-          zoomViewport.isZoomed && dev.roomId === zoomedRoomId;
-        const isPin = zoomViewport.isZoomed
-          ? isInZoomedRoom
-          : lodConfig.sensorStyle === 'pin';
-        if (isPin) {
-          obstacles.push({ x: px.x, y: px.y + 8, r: 22 });
-        } else {
-          obstacles.push({
-            x: px.x,
-            y: px.y,
-            r: Math.round(lodConfig.sensorDotSizePx * 0.5) + 4,
-          });
+      if (lodConfig.showSensors) {
+        for (const cluster of deviceClusters) {
+          const px = cluster.centroidScreen;
+          if (px.x < -20 || px.x > width + 20 || px.y < -20 || px.y > height + 20)
+            continue;
+          if (cluster.isCluster) {
+            obstacles.push({
+              x: px.x,
+              y: px.y,
+              r: Math.max(16, Math.round(lodConfig.nodeVisualSizePx * 0.5) + 6),
+            });
+          } else {
+            const dev = cluster.devices[0];
+            const isInZoomedRoom =
+              zoomViewport.isZoomed && dev.roomId === zoomedRoomId;
+            const isPin = zoomedRoomId
+              ? isInZoomedRoom
+              : lodConfig.sensorStyle === 'pin';
+            obstacles.push({
+              x: px.x,
+              y: isPin ? px.y + 6 : px.y,
+              r: isPin
+                ? Math.max(18, Math.round(lodConfig.nodeVisualSizePx * 0.5) + 8)
+                : Math.round(lodConfig.nodeVisualSizePx * 0.5) + 4,
+            });
+          }
         }
       }
 
@@ -1399,39 +1486,57 @@ export function FloorplanCanvas({
         });
       }
 
+      const labelFontPx = lodConfig.fontSizePx; // clamped strictly [10px, 14px]
+      const richTitleFontPx = Math.min(14, Number((labelFontPx + 1.5).toFixed(1)));
+      const warnFontPx = Math.max(10, Number((labelFontPx - 0.5).toFixed(1)));
+
       const measureRoomLabelBox = (
         item: PreparedRoomLabel,
         style: RoomLabelStyle
       ): { width: number; height: number } => {
         if (style === 'code') {
-          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          ctx.font = `700 ${labelFontPx}px JetBrains Mono, monospace`;
           return {
-            width: Math.ceil((ctx.measureText?.(item.shortCode)?.width ?? item.shortCode.length * 6.5) + 8),
-            height: 16,
+            width: Math.ceil(
+              (ctx.measureText?.(item.shortCode)?.width ??
+                item.shortCode.length * (labelFontPx * 0.62)) + 8
+            ),
+            height: Math.max(16, Math.round(labelFontPx * 1.45)),
           };
         }
         if (style === 'pill') {
-          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          ctx.font = `700 ${labelFontPx}px JetBrains Mono, monospace`;
           return {
             width: Math.max(
               54,
-              Math.ceil((ctx.measureText?.(item.compactText)?.width ?? item.compactText.length * 6.5) + 14)
+              Math.ceil(
+                (ctx.measureText?.(item.compactText)?.width ??
+                  item.compactText.length * (labelFontPx * 0.62)) + 14
+              )
             ),
-            height: 20,
+            height: Math.max(20, Math.round(labelFontPx * 1.8)),
           };
         }
-        ctx.font = 'bold 12px Inter, system-ui, sans-serif';
-        const titleW = ctx.measureText?.(item.titleLine)?.width ?? item.titleLine.length * 7;
-        ctx.font = '600 10.5px JetBrains Mono, monospace';
-        const subW = ctx.measureText?.(item.subLine)?.width ?? item.subLine.length * 6.5;
+        ctx.font = `bold ${richTitleFontPx}px Inter, system-ui, sans-serif`;
+        const titleW =
+          ctx.measureText?.(item.titleLine)?.width ??
+          item.titleLine.length * (richTitleFontPx * 0.58);
+        ctx.font = `600 ${labelFontPx}px JetBrains Mono, monospace`;
+        const subW =
+          ctx.measureText?.(item.subLine)?.width ??
+          item.subLine.length * (labelFontPx * 0.62);
         let warnW = 0;
         if (item.techWarningText) {
-          ctx.font = 'bold 9.5px Inter, system-ui, sans-serif';
-          warnW = ctx.measureText?.(item.techWarningText)?.width ?? item.techWarningText.length * 6;
+          ctx.font = `bold ${warnFontPx}px Inter, system-ui, sans-serif`;
+          warnW =
+            ctx.measureText?.(item.techWarningText)?.width ??
+            item.techWarningText.length * (warnFontPx * 0.58);
         }
         return {
           width: Math.ceil(Math.max(titleW, subW, warnW) + 18),
-          height: item.techWarningText ? 48 : 36,
+          height: item.techWarningText
+            ? Math.max(48, Math.round(labelFontPx * 4.2))
+            : Math.max(36, Math.round(labelFontPx * 3.2)),
         };
       };
 
@@ -1452,7 +1557,7 @@ export function FloorplanCanvas({
         ctx.textBaseline = 'middle';
 
         if (style === 'code') {
-          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          ctx.font = `700 ${labelFontPx}px JetBrains Mono, monospace`;
           ctx.strokeStyle = 'rgba(2, 6, 23, 0.92)';
           ctx.lineWidth = 3.2;
           ctx.lineJoin = 'round';
@@ -1482,7 +1587,7 @@ export function FloorplanCanvas({
           ctx.fill();
           ctx.stroke();
 
-          ctx.font = '700 10.5px JetBrains Mono, monospace';
+          ctx.font = `700 ${labelFontPx}px JetBrains Mono, monospace`;
           ctx.fillStyle = '#F8FAFC';
           ctx.fillText(item.compactText, cx, cy);
           ctx.restore();
@@ -1517,7 +1622,7 @@ export function FloorplanCanvas({
         ctx.shadowBlur = 0;
         ctx.stroke();
 
-        ctx.font = 'bold 12px Inter, system-ui, sans-serif';
+        ctx.font = `bold ${richTitleFontPx}px Inter, system-ui, sans-serif`;
         ctx.fillStyle = '#F8FAFC';
         ctx.fillText(
           item.titleLine,
@@ -1525,7 +1630,7 @@ export function FloorplanCanvas({
           cy - (item.techWarningText ? 13 : 7)
         );
 
-        ctx.font = '600 10.5px JetBrains Mono, monospace';
+        ctx.font = `600 ${labelFontPx}px JetBrains Mono, monospace`;
         ctx.fillStyle = item.hasOnlineTelemetry ? '#38BDF8' : '#94A3B8';
         ctx.fillText(
           item.subLine,
@@ -1534,7 +1639,7 @@ export function FloorplanCanvas({
         );
 
         if (item.techWarningText) {
-          ctx.font = 'bold 9.5px Inter, system-ui, sans-serif';
+          ctx.font = `bold ${warnFontPx}px Inter, system-ui, sans-serif`;
           ctx.fillStyle = '#FBBF24';
           ctx.fillText(item.techWarningText, cx, cy + 15);
         }
@@ -1546,6 +1651,18 @@ export function FloorplanCanvas({
       );
       const labelRequests: LabelRequest[] = activeCandidates.map((item) => {
         const dims = measureRoomLabelBox(item, item.style);
+        const fallbackTiers: LabelStyleTier[] = [];
+        if (item.style === 'rich') {
+          const pillDims = measureRoomLabelBox(item, 'pill');
+          const codeDims = measureRoomLabelBox(item, 'code');
+          fallbackTiers.push(
+            { style: 'pill', ...pillDims },
+            { style: 'code', ...codeDims }
+          );
+        } else if (item.style === 'pill') {
+          const codeDims = measureRoomLabelBox(item, 'code');
+          fallbackTiers.push({ style: 'code', ...codeDims });
+        }
         return {
           id: item.roomId,
           anchor: item.anchorScreen,
@@ -1553,6 +1670,8 @@ export function FloorplanCanvas({
           height: dims.height,
           polygon: item.screenPolygon,
           priority: item.priority,
+          style: item.style,
+          fallbackTiers,
         };
       });
 
@@ -1583,17 +1702,24 @@ export function FloorplanCanvas({
         const item = activeCandidates[i];
         const placement = placements[i];
         const req = labelRequests[i];
+        const actualStyle = placement?.placedStyle ?? item.style;
+        const actualWidth = placement?.width ?? req.width;
+        const actualHeight = placement?.height ?? req.height;
 
         if (item.hasAlert && item.alertCount > 0) {
-          const bx = placement?.visible ? placement.x + req.width * 0.5 : item.anchorScreen.x + 18;
-          const by = placement?.visible ? placement.y - req.height * 0.5 : item.anchorScreen.y - 14;
+          const bx = placement?.visible
+            ? placement.x + actualWidth * 0.5
+            : item.anchorScreen.x + 18;
+          const by = placement?.visible
+            ? placement.y - actualHeight * 0.5
+            : item.anchorScreen.y - 14;
           computedBadges.push({
             roomId: item.roomId,
             code: item.shortCode,
             count: item.alertCount,
             severity: item.alertSeverity,
-            x: Math.max(16, Math.min(width - 16, bx)),
-            y: Math.max(16, Math.min(height - 16, by)),
+            x: Math.max(22, Math.min(width - 22, bx)),
+            y: Math.max(22, Math.min(height - 22, by)),
           });
         }
 
@@ -1602,17 +1728,17 @@ export function FloorplanCanvas({
           hoveredRoomId === item.roomId &&
           !hoveredDeviceId &&
           !hoveredBayId &&
-          item.style !== 'rich'
+          actualStyle !== 'rich'
         ) {
           continue;
         }
         drawRoomLabelAt(
           item,
-          item.style,
+          actualStyle,
           placement.x,
           placement.y,
-          req.width,
-          req.height,
+          actualWidth,
+          actualHeight,
           false
         );
       }
@@ -1645,10 +1771,12 @@ export function FloorplanCanvas({
           const placedIdx = activeCandidates.findIndex(
             (c) => c.roomId === hoveredRoomId
           );
+          const placedLabel = placedIdx >= 0 ? placements[placedIdx] : undefined;
           const wasRichAndVisible =
             placedIdx >= 0 &&
-            activeCandidates[placedIdx].style === 'rich' &&
-            placements[placedIdx]?.visible;
+            (placedLabel?.placedStyle ?? activeCandidates[placedIdx].style) ===
+              'rich' &&
+            placedLabel?.visible;
           if (!wasRichAndVisible) {
             const richDims = measureRoomLabelBox(hoveredItem, 'rich');
             const clampedX = Math.max(
@@ -1695,7 +1823,7 @@ export function FloorplanCanvas({
     canvasSize,
     enrichedRooms,
     devices,
-    positionedDevices,
+    deviceClusters,
     visibleAnonymousBays,
     floorLandmarks,
     roomTelemetryMap,
@@ -2040,25 +2168,15 @@ export function FloorplanCanvas({
       }
     }
 
-    const popoverW = 288;
-    const popoverH = 240;
-    const margin = 8;
-    const gap = 28;
-    const fitsRight = anchor.x + gap + popoverW <= canvasSize.width - margin;
-    const rawLeft = fitsRight
-      ? anchor.x + gap
-      : Math.max(margin, anchor.x - gap - popoverW);
-    const clampedLeft = Math.max(
-      margin,
-      Math.min(Math.max(margin, canvasSize.width - popoverW - margin), rawLeft)
-    );
-    const preferredTop = anchor.y - popoverH * 0.45;
-    const clampedTop = Math.max(
-      margin,
-      Math.min(
-        Math.max(margin, canvasSize.height - popoverH - margin),
-        preferredTop
-      )
+    const popoverPlacement = computePopoverPlacement(
+      anchor,
+      { width: 288, height: 240 },
+      canvasSize,
+      {
+        margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
+        gap: 20,
+        preferredPlacement: 'top',
+      }
     );
 
     const openAlertsCount =
@@ -2078,8 +2196,10 @@ export function FloorplanCanvas({
       historyValues: roomTelemetryHistoryMap?.[room.id],
       openAlertsCount,
       reliability,
-      left: clampedLeft,
-      top: clampedTop,
+      left: popoverPlacement.left,
+      top: popoverPlacement.top,
+      placement: popoverPlacement.placement,
+      align: popoverPlacement.align,
     };
   }, [
     showHoverPopover,
@@ -2098,6 +2218,79 @@ export function FloorplanCanvas({
     firingRoomSet,
     roomTelemetryHistoryMap,
     roomReliabilityMap,
+  ]);
+
+  const hoveredBayTooltipData = useMemo(() => {
+    if (!hoveredBayId) return null;
+    const found = visibleAnonymousBays.find((b) => b.bay.bayId === hoveredBayId);
+    if (!found) return null;
+    const px = toScreenPx({ x: found.bay.posX, y: found.bay.posY });
+    const pos = computePopoverPlacement(
+      px,
+      { width: 224, height: 152 },
+      canvasSize,
+      {
+        margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
+        gap: 18,
+        preferredPlacement: 'top',
+      }
+    );
+    return { bay: found.bay, ...pos };
+  }, [hoveredBayId, visibleAnonymousBays, toScreenPx, canvasSize]);
+
+  const hoveredDeviceTooltipData = useMemo(() => {
+    const targetCluster = deviceClusters.find((cluster) => {
+      if (cluster.isCluster) return false;
+      const d = cluster.devices[0];
+      return (
+        d.id === hoveredDeviceId ||
+        (focusedDeviceId &&
+          (d.id === focusedDeviceId || d.hardwareId === focusedDeviceId))
+      );
+    });
+    if (!targetCluster) return null;
+    const device = targetCluster.devices[0];
+    const room = device.roomId ? roomById.get(device.roomId) : undefined;
+    const roomDeviceCount = device.roomId
+      ? devices.filter((d) => d.roomId === device.roomId).length
+      : 1;
+    const devTel = resolveDeviceTelemetry(
+      device,
+      deviceTelemetryMap,
+      roomTelemetryMap,
+      roomDeviceCount
+    );
+    const isFocusedDevice = Boolean(
+      focusedDeviceId &&
+        (device.id === focusedDeviceId ||
+          device.hardwareId === focusedDeviceId)
+    );
+    const pos = computePopoverPlacement(
+      targetCluster.centroidScreen,
+      { width: 224, height: 196 },
+      canvasSize,
+      {
+        margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
+        gap: 20,
+        preferredPlacement: 'top',
+      }
+    );
+    return {
+      device,
+      room,
+      devTel,
+      isFocusedDevice,
+      ...pos,
+    };
+  }, [
+    deviceClusters,
+    hoveredDeviceId,
+    focusedDeviceId,
+    roomById,
+    devices,
+    deviceTelemetryMap,
+    roomTelemetryMap,
+    canvasSize,
   ]);
 
   return (
@@ -2345,8 +2538,11 @@ export function FloorplanCanvas({
           })}
         </div>
 
-        {/* Layer 2B: Anonymous Reading Bay Micro-zones (FE-VIZ-09) */}
-        <div className="pointer-events-none absolute inset-0 z-[6]">
+        {/* Layer 2B: Anonymous Reading Bay Micro-zones (FE-VIZ-09, >= 44x44px hit-box) */}
+        <div
+          data-testid="reading-bays-layer"
+          className="pointer-events-none absolute inset-0 z-[6]"
+        >
           {visibleAnonymousBays.map(({ bay, room }) => {
             const isSelectedBay = bay.bayId === selectedBayId;
             const isHoveredBay = bay.bayId === hoveredBayId;
@@ -2374,94 +2570,145 @@ export function FloorplanCanvas({
                 style={{ left: `${px.x}px`, top: `${px.y}px` }}
                 className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
               >
-                {showFullPill ? (
-                  <button
-                    type="button"
-                    onMouseEnter={() => setHoveredBayId(bay.bayId)}
-                    onMouseLeave={() => setHoveredBayId(null)}
-                    onFocus={() => setHoveredBayId(bay.bayId)}
-                    onBlur={() => setHoveredBayId(null)}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      onSelectRoom(room);
-                      onSelectBay?.(bay, room);
-                    }}
-                    aria-label={`Phân khu bàn đọc ${bay.nameVi} (${room.name})`}
-                    className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-semibold shadow-md transition-transform hover:scale-110 ${
-                      isSelectedBay
-                        ? 'scale-110 border-sky-300 bg-sky-950/95 text-sky-100 ring-2 ring-sky-400'
-                        : 'border-white/40 bg-slate-900/90 text-slate-100'
-                    }`}
-                    style={{
-                      boxShadow: `0 0 10px ${colorCss}`,
-                    }}
-                  >
+                <button
+                  type="button"
+                  data-testid={`reading-bay-btn-${bay.bayId}`}
+                  onMouseEnter={() => setHoveredBayId(bay.bayId)}
+                  onMouseLeave={() => setHoveredBayId(null)}
+                  onFocus={() => setHoveredBayId(bay.bayId)}
+                  onBlur={() => setHoveredBayId(null)}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onSelectRoom(room);
+                    onSelectBay?.(bay, room);
+                  }}
+                  aria-label={`Phân khu bàn đọc ${bay.nameVi} (${room.name})`}
+                  className="group flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                >
+                  {showFullPill ? (
                     <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ backgroundColor: colorCss }}
-                    />
-                    <span>{bay.shortLabel}</span>
-                    <span className="font-mono text-sky-300">
-                      {formatLayerMetricValue(bayVal, layer)}
+                      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-semibold shadow-md transition-transform group-hover:scale-110 ${
+                        isSelectedBay
+                          ? 'scale-110 border-sky-300 bg-sky-950/95 text-sky-100 ring-2 ring-sky-400'
+                          : 'border-white/40 bg-slate-900/90 text-slate-100'
+                      }`}
+                      style={{
+                        boxShadow: `0 0 10px ${colorCss}`,
+                      }}
+                    >
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: colorCss }}
+                      />
+                      <span>{bay.shortLabel}</span>
+                      <span className="font-mono text-sky-300">
+                        {formatLayerMetricValue(bayVal, layer)}
+                      </span>
                     </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onMouseEnter={() => setHoveredBayId(bay.bayId)}
-                    onMouseLeave={() => setHoveredBayId(null)}
-                    onFocus={() => setHoveredBayId(bay.bayId)}
-                    onBlur={() => setHoveredBayId(null)}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      onSelectRoom(room);
-                      onSelectBay?.(bay, room);
-                    }}
-                    aria-label={`Phân khu bàn đọc ${bay.nameVi} (${room.name})`}
-                    className="flex h-3 w-3 items-center justify-center rounded-full border border-white/85 shadow transition-transform hover:scale-125"
-                    style={{
-                      backgroundColor: colorCss,
-                      boxShadow: `0 0 8px ${colorCss}`,
-                    }}
-                  />
-                )}
-
-                {isHoveredBay && (
-                  <div
-                    role="tooltip"
-                    className="pointer-events-none absolute bottom-8 left-1/2 z-30 w-56 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800 shadow-xl"
-                  >
-                    <p className="font-semibold text-slate-900">{bay.nameVi}</p>
-                    <p className="mt-0.5 text-2xs text-slate-500">
-                      {bay.descriptionVi}
-                    </p>
-                    <div className="mt-1.5 grid grid-cols-2 gap-1 border-t border-slate-100 pt-1.5 font-mono text-2xs text-slate-700">
-                      <span>Tiện nghi: {bay.metrics.comfortScore}</span>
-                      <span>Sức chứa: {bay.seatCapacity} chỗ</span>
-                      <span>Nhiệt: {bay.metrics.temperature}°C</span>
-                      <span>Ồn: {bay.metrics.noiseAvg} dBA</span>
-                      <span>Sáng: {bay.metrics.lux} lx</span>
-                      <span>Ẩm: {bay.metrics.humidity}%RH</span>
-                    </div>
-                  </div>
-                )}
+                  ) : (
+                    <span
+                      className="flex h-3 w-3 items-center justify-center rounded-full border border-white/85 shadow transition-transform group-hover:scale-125"
+                      style={{
+                        backgroundColor: colorCss,
+                        boxShadow: `0 0 8px ${colorCss}`,
+                      }}
+                    />
+                  )}
+                </button>
               </div>
             );
           })}
         </div>
 
-        {/* Layer 2C: Interactive Hardware Device Pins Overlay */}
-        <div className="pointer-events-none absolute inset-0 z-[8]">
-          {positionedDevices.map((device) => {
-            const px = toScreenPx({ x: device.posX!, y: device.posY! });
+        {/* Layer 2C: Clustered & Individual Hardware Device Pins Overlay (>= 44x44px hit-box) */}
+        <div
+          data-testid="device-pins-layer"
+          className="pointer-events-none absolute inset-0 z-[8]"
+        >
+          {deviceClusters.map((cluster) => {
+            const px = cluster.centroidScreen;
             if (
-              px.x < -10 ||
-              px.x > canvasSize.width + 10 ||
-              px.y < -10 ||
-              px.y > canvasSize.height + 10
+              px.x < -20 ||
+              px.x > canvasSize.width + 20 ||
+              px.y < -20 ||
+              px.y > canvasSize.height + 20
             ) {
               return null;
             }
+
+            if (cluster.isCluster) {
+              const isSevereCluster =
+                cluster.highestSeverity === 'CRITICAL' ||
+                cluster.highestSeverity === 'HIGH';
+              const isWarningCluster =
+                !isSevereCluster &&
+                (cluster.highestSeverity === 'MEDIUM' ||
+                  cluster.highestSeverity === 'LOW' ||
+                  cluster.hasAlert);
+              const clusterVisualPx = Math.max(
+                24,
+                Math.min(32, lodConfig.nodeVisualSizePx + 8)
+              );
+
+              return (
+                <div
+                  key={cluster.id}
+                  style={{
+                    left: `${px.x}px`,
+                    top: `${px.y}px`,
+                    zIndex: isSevereCluster ? 28 : isWarningCluster ? 24 : 18,
+                  }}
+                  className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
+                >
+                  {cluster.hasAlert && (
+                    <span
+                      aria-hidden="true"
+                      className={`pointer-events-none absolute inset-1 rounded-full motion-safe:animate-ping ${
+                        isSevereCluster
+                          ? 'bg-red-500 opacity-55'
+                          : 'bg-amber-400 opacity-45'
+                      }`}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    data-testid={`device-cluster-${cluster.id}`}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      handleClusterExpand(
+                        cluster.centroidNorm,
+                        cluster.targetZoomScale
+                      );
+                    }}
+                    aria-label={`Cụm ${cluster.count} trạm cảm biến — bấm để phóng to và tách cụm`}
+                    title={`Cụm ${cluster.count} trạm cảm biến (${cluster.onlineCount}/${cluster.count} trực tuyến) — Bấm để phóng to`}
+                    className="group relative flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-transparent focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  >
+                    <span
+                      data-testid={`device-visual-${cluster.id}`}
+                      data-visual-size={clusterVisualPx}
+                      style={{
+                        width: `${clusterVisualPx}px`,
+                        height: `${clusterVisualPx}px`,
+                      }}
+                      className={`flex items-center justify-center rounded-full border-2 font-mono text-xs font-bold shadow-lg transition-transform group-hover:scale-110 ${
+                        isSevereCluster
+                          ? 'border-red-300 bg-red-900/95 text-white ring-2 ring-red-500/80'
+                          : isWarningCluster
+                            ? 'border-amber-300 bg-amber-900/95 text-amber-50 ring-2 ring-amber-400/75'
+                            : 'border-sky-300 bg-slate-900/95 text-sky-100 ring-1 ring-sky-400/50'
+                      }`}
+                    >
+                      <span data-testid="device-cluster-count">
+                        {cluster.count}
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              );
+            }
+
+            const device = cluster.devices[0];
             const room = device.roomId ? roomById.get(device.roomId) : undefined;
             const roomDeviceCount = device.roomId
               ? devices.filter((d) => d.roomId === device.roomId).length
@@ -2480,7 +2727,6 @@ export function FloorplanCanvas({
             const colorHex = device.online
               ? getContinuousMetricColorCss(layer, activeVal)
               : '#64748B';
-            const isHovered = hoveredDeviceId === device.id;
 
             const isAbnormal =
               device.online &&
@@ -2508,25 +2754,31 @@ export function FloorplanCanvas({
                   device.hardwareId === focusedDeviceId)
             );
             const isAlertingDevice =
-              alertingDeviceIds.includes(device.id) ||
-              alertingDeviceIds.includes(device.hardwareId);
+              alertingDeviceSet.has(device.id) ||
+              alertingDeviceSet.has(device.hardwareId);
 
             const usePinStyle =
               isFocusedDevice ||
               isAlertingDevice ||
-              (zoomViewport.isZoomed
+              (zoomedRoomId
                 ? isInZoomedRoom
                 : lodConfig.sensorStyle === 'pin');
             const showBadge =
               isFocusedDevice ||
               isAlertingDevice ||
-              (zoomViewport.isZoomed
+              (zoomedRoomId
                 ? isInZoomedRoom
                 : lodConfig.showSensorBadge);
-            const dotSizeClass =
-              labelDensity === 'clean' && !zoomViewport.isZoomed
-                ? 'h-2.5 w-2.5'
-                : 'h-3 w-3';
+
+            const nodeVisualPx = Math.max(
+              10,
+              Math.min(
+                32,
+                usePinStyle
+                  ? Math.max(20, lodConfig.nodeVisualSizePx)
+                  : lodConfig.nodeVisualSizePx
+              )
+            );
 
             return (
               <div
@@ -2542,10 +2794,10 @@ export function FloorplanCanvas({
                   <span
                     className={`pointer-events-none absolute rounded-full ${
                       isFocusedDevice
-                        ? '-inset-3.5 motion-safe:animate-ping bg-rose-500 opacity-80'
+                        ? 'inset-0 motion-safe:animate-ping bg-rose-500 opacity-75'
                         : isAlertingDevice
-                          ? '-inset-2.5 motion-safe:animate-ping bg-rose-500 opacity-65'
-                          : '-inset-2 motion-safe:animate-ping opacity-60'
+                          ? 'inset-1 motion-safe:animate-ping bg-rose-500 opacity-60'
+                          : 'inset-2 motion-safe:animate-ping opacity-55'
                     }`}
                     style={
                       !isFocusedDevice && !isAlertingDevice
@@ -2557,81 +2809,84 @@ export function FloorplanCanvas({
                 {isFocusedDevice && (
                   <span
                     aria-hidden="true"
-                    className="pointer-events-none absolute -inset-2 rounded-full border-2 border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.9)]"
-                  />
-                )}
-                {usePinStyle ? (
-                  <button
-                    type="button"
-                    onMouseEnter={() => setHoveredDeviceId(device.id)}
-                    onMouseLeave={() => setHoveredDeviceId(null)}
-                    onFocus={() => setHoveredDeviceId(device.id)}
-                    onBlur={() => setHoveredDeviceId(null)}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      if (room) onSelectRoom(room);
-                      onSelectDevice?.(device, room);
-                    }}
-                    aria-label={`Trạm cảm biến ${device.name} (${device.hardwareId}) - ${
-                      device.online ? 'Trực tuyến' : 'Mất kết nối'
-                    }`}
-                    className={`relative group flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all hover:scale-125 focus:scale-125 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
-                      isFocusedDevice
-                        ? 'scale-125 border-2 border-rose-300 ring-2 ring-rose-500 shadow-xl'
-                        : device.online
-                          ? 'border-2 border-white shadow-lg'
-                          : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
-                    }`}
-                    style={
-                      device.online
-                        ? {
-                            backgroundColor: isFocusedDevice ? '#F43F5E' : colorHex,
-                            color: isFocusedDevice ? '#FFFFFF' : '#0F172A',
-                            boxShadow: isFocusedDevice
-                              ? '0 0 18px #F43F5E, 0 2px 6px rgba(0,0,0,0.75)'
-                              : `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
-                            transition: pinTransitionCss,
-                          }
-                        : undefined
-                    }
-                  >
-                    <span aria-hidden="true">{device.online ? '●' : '✕'}</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onMouseEnter={() => setHoveredDeviceId(device.id)}
-                    onMouseLeave={() => setHoveredDeviceId(null)}
-                    onFocus={() => setHoveredDeviceId(device.id)}
-                    onBlur={() => setHoveredDeviceId(null)}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      if (room) onSelectRoom(room);
-                      onSelectDevice?.(device, room);
-                    }}
-                    aria-label={`Trạm cảm biến ${device.name} (${device.hardwareId}) - ${
-                      device.online ? 'Trực tuyến' : 'Mất kết nối'
-                    }`}
-                    className={`relative group flex ${dotSizeClass} items-center justify-center rounded-full transition-all hover:scale-150 focus:scale-150 focus:outline-none focus:ring-2 focus:ring-sky-400 ${
-                      device.online
-                        ? 'border border-white/95 shadow'
-                        : 'border border-dashed border-slate-400 bg-slate-800/90 opacity-85'
-                    }`}
-                    style={
-                      device.online
-                        ? {
-                            backgroundColor: colorHex,
-                            boxShadow: `0 0 10px ${colorHex}, 0 1px 3px rgba(0,0,0,0.65)`,
-                            transition: pinTransitionCss,
-                          }
-                        : undefined
-                    }
+                    className="pointer-events-none absolute inset-1 rounded-full border-2 border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.9)]"
                   />
                 )}
 
+                <button
+                  type="button"
+                  data-testid={`device-pin-${device.id}`}
+                  onMouseEnter={() => setHoveredDeviceId(device.id)}
+                  onMouseLeave={() => setHoveredDeviceId(null)}
+                  onFocus={() => setHoveredDeviceId(device.id)}
+                  onBlur={() => setHoveredDeviceId(null)}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    if (room) onSelectRoom(room);
+                    onSelectDevice?.(device, room);
+                  }}
+                  aria-label={`Trạm cảm biến ${device.name} (${device.hardwareId}) - ${
+                    device.online ? 'Trực tuyến' : 'Mất kết nối'
+                  }`}
+                  className="group relative flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-transparent focus:outline-none focus:ring-2 focus:ring-sky-400"
+                >
+                  {usePinStyle ? (
+                    <span
+                      data-testid={`device-visual-${device.id}`}
+                      data-visual-size={nodeVisualPx}
+                      className={`flex items-center justify-center rounded-full text-xs font-bold transition-transform group-hover:scale-125 group-focus:scale-125 ${
+                        isFocusedDevice
+                          ? 'scale-110 border-2 border-rose-300 ring-2 ring-rose-500 shadow-xl'
+                          : device.online
+                            ? 'border-2 border-white shadow-lg'
+                            : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
+                      }`}
+                      style={{
+                        width: `${nodeVisualPx}px`,
+                        height: `${nodeVisualPx}px`,
+                        ...(device.online
+                          ? {
+                              backgroundColor: isFocusedDevice
+                                ? '#F43F5E'
+                                : colorHex,
+                              color: isFocusedDevice ? '#FFFFFF' : '#0F172A',
+                              boxShadow: isFocusedDevice
+                                ? '0 0 18px #F43F5E, 0 2px 6px rgba(0,0,0,0.75)'
+                                : `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
+                              transition: pinTransitionCss,
+                            }
+                          : undefined),
+                      }}
+                    >
+                      <span aria-hidden="true">{device.online ? '●' : '✕'}</span>
+                    </span>
+                  ) : (
+                    <span
+                      data-testid={`device-visual-${device.id}`}
+                      data-visual-size={nodeVisualPx}
+                      className={`flex items-center justify-center rounded-full transition-transform group-hover:scale-150 group-focus:scale-150 ${
+                        device.online
+                          ? 'border border-white/95 shadow'
+                          : 'border border-dashed border-slate-400 bg-slate-800/90 opacity-85'
+                      }`}
+                      style={{
+                        width: `${nodeVisualPx}px`,
+                        height: `${nodeVisualPx}px`,
+                        ...(device.online
+                          ? {
+                              backgroundColor: colorHex,
+                              boxShadow: `0 0 10px ${colorHex}, 0 1px 3px rgba(0,0,0,0.65)`,
+                              transition: pinTransitionCss,
+                            }
+                          : undefined),
+                      }}
+                    />
+                  )}
+                </button>
+
                 {(showBadge && activeVal !== null) || isFocusedDevice ? (
                   <div
-                    className="pointer-events-none mt-1 rounded border px-1.5 py-0.5 text-center font-mono text-2xs font-bold shadow-md"
+                    className="pointer-events-none absolute left-1/2 top-full -mt-1 -translate-x-1/2 rounded border px-1.5 py-0.5 text-center font-mono text-2xs font-bold shadow-md"
                     style={{
                       backgroundColor: isFocusedDevice
                         ? 'rgba(136, 19, 55, 0.95)'
@@ -2653,73 +2908,6 @@ export function FloorplanCanvas({
                       : formatLayerMetricValue(activeVal, layer)}
                   </div>
                 ) : null}
-
-                {(isHovered || isFocusedDevice) && (
-                  <div
-                    role="tooltip"
-                    className={`pointer-events-none absolute bottom-10 left-1/2 z-30 w-56 -translate-x-1/2 rounded-lg border bg-white p-2.5 text-xs text-slate-800 shadow-lg ${
-                      isFocusedDevice
-                        ? 'border-rose-400 ring-2 ring-rose-500/30'
-                        : 'border-slate-200'
-                    }`}
-                  >
-                    {isFocusedDevice && (
-                      <div className="mb-1.5 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
-                        Node cảnh báo đang định vị
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-semibold text-slate-900">
-                        {device.name}
-                      </span>
-                      <span
-                        className={`badge ${
-                          device.online ? 'badge-success' : 'badge-neutral'
-                        }`}
-                      >
-                        {device.online ? 'Trực tuyến' : 'Mất kết nối'}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 font-mono text-2xs text-slate-400">
-                      {device.hardwareId}
-                    </p>
-                    {room && (
-                      <p className="mt-0.5 truncate text-2xs text-slate-500">
-                        {room.code} — {room.name}
-                      </p>
-                    )}
-                    <div className="mt-2 grid grid-cols-2 gap-1 border-t border-slate-100 pt-1.5 font-mono text-2xs text-slate-600">
-                      <span>
-                        Điểm:{' '}
-                        {formatMetrics.comfortScore(
-                          devTel?.comfortScore?.overall
-                        )}
-                      </span>
-                      <span>
-                        Ồn: {formatMetrics.noise(devTel?.acoustics?.noiseAvg)}
-                      </span>
-                      <span>
-                        PM2.5: {formatMetrics.pm(devTel?.airQuality?.pm2_5)}
-                      </span>
-                      <span>
-                        Nhiệt:{' '}
-                        {formatMetrics.temperature(
-                          devTel?.environment?.temperature
-                        )}
-                      </span>
-                      <span>
-                        Ẩm:{' '}
-                        {formatMetrics.humidity(devTel?.environment?.humidity)}
-                      </span>
-                      <span>
-                        Sáng: {formatMetrics.lux(devTel?.environment?.lux)}
-                      </span>
-                      <span className="col-span-2">
-                        Wi-Fi RSSI: {formatMetrics.rssi(devTel?.wifiRssi)}
-                      </span>
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -2751,7 +2939,7 @@ export function FloorplanCanvas({
           </svg>
         )}
 
-        {/* Layer 3 (Topmost DOM Alert Badges !N — never occluded by furniture or labels) */}
+        {/* Layer 3 (Topmost DOM Alert Badges !N — >= 44x44px touch target) */}
         <div
           data-testid="room-alert-badges-layer"
           className="pointer-events-none absolute inset-0 z-[15]"
@@ -2773,19 +2961,26 @@ export function FloorplanCanvas({
                   if (roomObj) onSelectRoom(roomObj);
                 }}
                 aria-label={`${badge.code}: ${badge.count} cảnh báo đang mở`}
-                className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 inline-flex items-center gap-0.5 rounded-full border border-white px-1.5 py-0.5 font-mono text-[10px] font-bold text-white shadow-md motion-safe:animate-pulse ${
-                  isSevere ? 'bg-red-600' : 'bg-amber-600'
-                }`}
+                className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
-                <span>!{badge.count}</span>
+                <span
+                  className={`inline-flex items-center gap-0.5 rounded-full border border-white px-1.5 py-0.5 font-mono text-[10px] font-bold text-white shadow-md motion-safe:animate-pulse ${
+                    isSevere ? 'bg-red-600' : 'bg-amber-600'
+                  }`}
+                >
+                  <span>!{badge.count}</span>
+                </span>
               </button>
             );
           })}
         </div>
 
-        {/* Hover / Click Quick Room Popover (Value, Threshold Status, Sparkline & SOP) */}
+        {/* Hover / Click Quick Room Popover (Edge-flipped inside viewport) */}
         {hoveredPopoverData && (
           <div
+            data-testid="room-hover-popover-wrapper"
+            data-placement={hoveredPopoverData.placement}
+            data-align={hoveredPopoverData.align}
             style={{
               left: `${hoveredPopoverData.left}px`,
               top: `${hoveredPopoverData.top}px`,
@@ -2805,6 +3000,126 @@ export function FloorplanCanvas({
                 setZoomedRoomId(room.id);
               }}
             />
+          </div>
+        )}
+
+        {/* Edge-flipped Reading Bay Tooltip */}
+        {hoveredBayTooltipData && (
+          <div
+            role="tooltip"
+            data-testid="bay-hover-tooltip"
+            data-placement={hoveredBayTooltipData.placement}
+            data-align={hoveredBayTooltipData.align}
+            style={{
+              left: `${hoveredBayTooltipData.left}px`,
+              top: `${hoveredBayTooltipData.top}px`,
+            }}
+            className="pointer-events-none absolute z-30 w-56 rounded-lg border border-slate-200 bg-white p-2.5 text-xs text-slate-800 shadow-xl"
+          >
+            <p className="font-semibold text-slate-900">
+              {hoveredBayTooltipData.bay.nameVi}
+            </p>
+            <p className="mt-0.5 text-2xs text-slate-500">
+              {hoveredBayTooltipData.bay.descriptionVi}
+            </p>
+            <div className="mt-1.5 grid grid-cols-2 gap-1 border-t border-slate-100 pt-1.5 font-mono text-2xs text-slate-700">
+              <span>Tiện nghi: {hoveredBayTooltipData.bay.metrics.comfortScore}</span>
+              <span>Sức chứa: {hoveredBayTooltipData.bay.seatCapacity} chỗ</span>
+              <span>Nhiệt: {hoveredBayTooltipData.bay.metrics.temperature}°C</span>
+              <span>Ồn: {hoveredBayTooltipData.bay.metrics.noiseAvg} dBA</span>
+              <span>Sáng: {hoveredBayTooltipData.bay.metrics.lux} lx</span>
+              <span>Ẩm: {hoveredBayTooltipData.bay.metrics.humidity}%RH</span>
+            </div>
+          </div>
+        )}
+
+        {/* Edge-flipped Device Tooltip */}
+        {hoveredDeviceTooltipData && (
+          <div
+            role="tooltip"
+            data-testid="device-hover-tooltip"
+            data-placement={hoveredDeviceTooltipData.placement}
+            data-align={hoveredDeviceTooltipData.align}
+            style={{
+              left: `${hoveredDeviceTooltipData.left}px`,
+              top: `${hoveredDeviceTooltipData.top}px`,
+            }}
+            className={`pointer-events-none absolute z-30 w-56 rounded-lg border bg-white p-2.5 text-xs text-slate-800 shadow-lg ${
+              hoveredDeviceTooltipData.isFocusedDevice
+                ? 'border-rose-400 ring-2 ring-rose-500/30'
+                : 'border-slate-200'
+            }`}
+          >
+            {hoveredDeviceTooltipData.isFocusedDevice && (
+              <div className="mb-1.5 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                Node cảnh báo đang định vị
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate font-semibold text-slate-900">
+                {hoveredDeviceTooltipData.device.name}
+              </span>
+              <span
+                className={`badge ${
+                  hoveredDeviceTooltipData.device.online
+                    ? 'badge-success'
+                    : 'badge-neutral'
+                }`}
+              >
+                {hoveredDeviceTooltipData.device.online
+                  ? 'Trực tuyến'
+                  : 'Mất kết nối'}
+              </span>
+            </div>
+            <p className="mt-0.5 font-mono text-2xs text-slate-400">
+              {hoveredDeviceTooltipData.device.hardwareId}
+            </p>
+            {hoveredDeviceTooltipData.room && (
+              <p className="mt-0.5 truncate text-2xs text-slate-500">
+                {hoveredDeviceTooltipData.room.code} —{' '}
+                {hoveredDeviceTooltipData.room.name}
+              </p>
+            )}
+            <div className="mt-2 grid grid-cols-2 gap-1 border-t border-slate-100 pt-1.5 font-mono text-2xs text-slate-600">
+              <span>
+                Điểm:{' '}
+                {formatMetrics.comfortScore(
+                  hoveredDeviceTooltipData.devTel?.comfortScore?.overall
+                )}
+              </span>
+              <span>
+                Ồn:{' '}
+                {formatMetrics.noise(
+                  hoveredDeviceTooltipData.devTel?.acoustics?.noiseAvg
+                )}
+              </span>
+              <span>
+                PM2.5:{' '}
+                {formatMetrics.pm(
+                  hoveredDeviceTooltipData.devTel?.airQuality?.pm2_5
+                )}
+              </span>
+              <span>
+                Nhiệt:{' '}
+                {formatMetrics.temperature(
+                  hoveredDeviceTooltipData.devTel?.environment?.temperature
+                )}
+              </span>
+              <span>
+                Ẩm:{' '}
+                {formatMetrics.humidity(
+                  hoveredDeviceTooltipData.devTel?.environment?.humidity
+                )}
+              </span>
+              <span>
+                Sáng:{' '}
+                {formatMetrics.lux(hoveredDeviceTooltipData.devTel?.environment?.lux)}
+              </span>
+              <span className="col-span-2">
+                Wi-Fi RSSI:{' '}
+                {formatMetrics.rssi(hoveredDeviceTooltipData.devTel?.wifiRssi)}
+              </span>
+            </div>
           </div>
         )}
 
