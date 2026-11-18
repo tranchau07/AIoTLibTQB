@@ -3,6 +3,7 @@ package com.example.AIoTLibTQB.document;
 import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
+import com.example.AIoTLibTQB.enums.AlertWorkflowStatus;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
 import org.springframework.data.annotation.CreatedDate;
@@ -56,6 +57,14 @@ public class Alert {
     Integer severityRank;
 
     AlertStatus status;
+
+    AlertWorkflowStatus workflowStatus;
+
+    String assignedTo;
+
+    String handlingNote;
+
+    Instant inProgressAt;
 
     Double currentValue;
 

@@ -1,8 +1,10 @@
 package com.example.AIoTLibTQB.controller;
 
+import com.example.AIoTLibTQB.dto.request.AlertWorkflowUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
 import com.example.AIoTLibTQB.enums.AlertStatus;
+import com.example.AIoTLibTQB.enums.AlertWorkflowStatus;
 import com.example.AIoTLibTQB.service.AlertService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,12 +13,17 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.PatchMapping;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -62,5 +69,46 @@ class AlertControllerTest {
 
         alertController.resolveAlert("a-1", 600);
         verify(alertService).resolveAlert("a-1", "librarian_tqb", 240);
+    }
+
+    @Test
+    @DisplayName("TC-G6-04 (Controller): PATCH /api/v1/alerts/{id}/workflow bảo vệ quyền ACKNOWLEDGE_ALERT/MANAGE_ALERT_CONFIG và truyền đúng operator")
+    void updateAlertWorkflow_delegatesWithOperatorAndSecuresEndpoint() throws NoSuchMethodException {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("manager.tqb", "n/a", List.of())
+        );
+
+        AlertWorkflowUpdateRequest req = AlertWorkflowUpdateRequest.builder()
+                .workflowStatus(AlertWorkflowStatus.IN_PROGRESS)
+                .assignedTo("ktv.nam")
+                .handlingNote("Đang chỉnh AHU")
+                .build();
+        AlertResponse updated = AlertResponse.builder()
+                .id("alert-99")
+                .status(AlertStatus.ACKNOWLEDGED)
+                .workflowStatus(AlertWorkflowStatus.IN_PROGRESS)
+                .assignedTo("ktv.nam")
+                .handlingNote("Đang chỉnh AHU")
+                .build();
+        when(alertService.updateAlertWorkflow("alert-99", req, "manager.tqb")).thenReturn(updated);
+
+        ApiResponse<AlertResponse> response = alertController.updateAlertWorkflow("alert-99", req);
+        assertThat(response.getResult().getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.IN_PROGRESS);
+        assertThat(response.getResult().getAssignedTo()).isEqualTo("ktv.nam");
+        assertThat(response.getResult().getHandlingNote()).isEqualTo("Đang chỉnh AHU");
+        verify(alertService).updateAlertWorkflow("alert-99", req, "manager.tqb");
+
+        // Null payload falls back safely to empty AlertWorkflowUpdateRequest
+        when(alertService.updateAlertWorkflow(eq("alert-99"), any(AlertWorkflowUpdateRequest.class), eq("manager.tqb")))
+                .thenReturn(updated);
+        alertController.updateAlertWorkflow("alert-99", null);
+
+        Method m = AlertController.class.getMethod("updateAlertWorkflow", String.class, AlertWorkflowUpdateRequest.class);
+        PatchMapping patchMapping = m.getAnnotation(PatchMapping.class);
+        PreAuthorize preAuthorize = m.getAnnotation(PreAuthorize.class);
+        assertThat(patchMapping).isNotNull();
+        assertThat(patchMapping.value()).containsExactly("/{id}/workflow");
+        assertThat(preAuthorize).isNotNull();
+        assertThat(preAuthorize.value()).isEqualTo("hasAnyAuthority('ACKNOWLEDGE_ALERT', 'MANAGE_ALERT_CONFIG')");
     }
 }

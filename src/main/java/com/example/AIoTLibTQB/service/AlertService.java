@@ -1,6 +1,7 @@
 package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
+import com.example.AIoTLibTQB.dto.request.AlertWorkflowUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.enums.AlertStatus;
@@ -19,6 +20,10 @@ public interface AlertService {
 
     default AlertResponse resolveAlert(String id, String username, Integer snoozeMinutes) {
         return resolveAlert(id, username);
+    }
+
+    default AlertResponse updateAlertWorkflow(String id, AlertWorkflowUpdateRequest request, String operatorUsername) {
+        throw new UnsupportedOperationException("updateAlertWorkflow not implemented");
     }
 
     void evaluateTelemetry(String deviceId, String hardwareId, String roomId, TelemetryPayload.TelemetryData data);

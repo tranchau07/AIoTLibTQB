@@ -2,12 +2,11 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowUpRight,
   ChevronRight,
   MapPin,
-  ShieldAlert,
   X,
 } from 'lucide-react';
 import {
@@ -21,6 +20,9 @@ import {
 } from '@/config/tqb-floorplan-presets';
 import {
   DEFAULT_FLOORPLAN_CONFIG,
+  TIMING_CONFIG,
+  isAlertOpen,
+  isAlertOverdue,
   resolveRoomHealthMatchesFilter,
   type ManagerStatusFilter,
 } from '@/config/floorplan-hmi.config';
@@ -29,6 +31,11 @@ import { FLOORPLAN_I18N_VI, UI_TEXT_VI } from '@/messages/vi';
 import { formatMetrics } from '@/lib/format/metrics';
 import { isTelemetryStale } from '@/lib/format/datetime';
 import {
+  stompManager,
+  upsertRealtimeAlertList,
+} from '@/lib/realtime/stomp-client';
+import {
+  isAlertInUserZones,
   useRoomTelemetryStream,
   useStompConnectionState,
 } from '@/lib/realtime/use-room-stream';
@@ -41,9 +48,8 @@ import {
   Skeleton,
 } from '@/components/ui/primitives';
 import {
-  useAcknowledgeAlertMutation,
   useAlertsQuery,
-  useResolveAlertMutation,
+  useUpdateAlertWorkflowMutation,
 } from '@/features/alerts/queries';
 import { resolveAlertFloorplanTarget } from '@/features/alerts/navigation';
 import { useAuthStore } from '@/features/auth/store';
@@ -56,12 +62,17 @@ import {
   extractLayerMetricValue,
   formatLayerMetricValue,
 } from '@/features/floorplan/components/FloorplanCanvas';
+import {
+  AlertInspectorDrawer,
+  MapAlertQueuePanel,
+} from '@/features/floorplan/components/AlertInspectorDrawer';
 import { FloorRoomTree } from '@/features/floorplan/components/FloorRoomTree';
 import { FloorplanLegend } from '@/features/floorplan/components/FloorplanLegend';
 import {
   ManagerSummaryStrip,
   computeBuildingSummaryMetrics,
 } from '@/features/floorplan/components/ManagerSummaryStrip';
+import { formatRealtimeAlertAnnouncementVi } from '@/lib/floorplan/alertWorkflow';
 import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
 import { computeVisualPolygonCenter } from '@/lib/floorplan/polygon';
 import {
@@ -72,6 +83,7 @@ import { computeRoomBlindspotRatio } from '@/lib/floorplan/weatherPalette';
 import type {
   AlertResponse,
   AlertSeverity,
+  AlertWorkflowUpdateRequest,
   DeviceResponse,
   RoleName,
   RoomResponse,
@@ -181,14 +193,23 @@ export default function FloorplanPage() {
     useState<EffectiveRoleView | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [isTreeCollapsed, setIsTreeCollapsed] = useState<boolean>(false);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [liveAlertAnnouncement, setLiveAlertAnnouncement] =
+    useState<string>('');
   const [maxViewportHeightPx, setMaxViewportHeightPx] = useState<
     number | undefined
   >(undefined);
   const workspaceFullscreenRef = useRef<HTMLDivElement>(null);
 
+  const queryClient = useQueryClient();
   const capabilities = useAuthStore((s) => s.capabilities);
   const currentUser = useAuthStore((s) => s.user);
   const stompConnected = useStompConnectionState();
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -274,8 +295,7 @@ export default function FloorplanPage() {
     { page: 0, size: 50 },
     capabilities.canViewAlerts && !isStudentView
   );
-  const ackAlertMutation = useAcknowledgeAlertMutation();
-  const resolveAlertMutation = useResolveAlertMutation();
+  const updateAlertWorkflowMutation = useUpdateAlertWorkflowMutation();
 
   const allBackendRooms = useMemo(
     () => allRoomsQuery.data?.content ?? [],
@@ -390,12 +410,10 @@ export default function FloorplanPage() {
     [floorRooms]
   );
 
-  // Active Backend Alerts (FIRING / ACKNOWLEDGED) across the building
+  // Active Backend Alerts (NEW / ACKNOWLEDGED / IN_PROGRESS) across the building
   const activeAlerts = useMemo(() => {
     const all = alertsQuery.data?.content ?? [];
-    return all.filter(
-      (a) => a.status === 'FIRING' || a.status === 'ACKNOWLEDGED'
-    );
+    return all.filter(isAlertOpen);
   }, [alertsQuery.data]);
 
   const realFloorDevices = useMemo(
@@ -569,9 +587,11 @@ export default function FloorplanPage() {
       computeBuildingSummaryMetrics(
         allBuildingRooms,
         buildingTelemetryMap,
-        activeAlerts
+        activeAlerts,
+        nowMs,
+        TIMING_CONFIG.overdueAlertMs
       ),
-    [allBuildingRooms, buildingTelemetryMap, activeAlerts]
+    [allBuildingRooms, buildingTelemetryMap, activeAlerts, nowMs]
   );
 
   const buildingFloorTree = useMemo(
@@ -584,33 +604,43 @@ export default function FloorplanPage() {
     [allBuildingRooms, buildingTelemetryMap, isStudentView, activeAlerts]
   );
 
-  const { roomOpenAlertsMap, roomAlertCounts, roomAlertSeverities } =
-    useMemo(() => {
-      const grouped: Record<string, AlertResponse[]> = {};
-      const counts: Record<string, number> = {};
-      const severities: Record<string, AlertSeverity | undefined> = {};
+  const {
+    roomOpenAlertsMap,
+    roomAlertCounts,
+    roomAlertSeverities,
+    overdueRoomIds,
+  } = useMemo(() => {
+    const grouped: Record<string, AlertResponse[]> = {};
+    const counts: Record<string, number> = {};
+    const severities: Record<string, AlertSeverity | undefined> = {};
+    const overdueIds = new Set<string>();
 
-      for (const alert of activeAlerts) {
-        if (!alert.roomId) continue;
-        if (!grouped[alert.roomId]) grouped[alert.roomId] = [];
-        grouped[alert.roomId].push(alert);
-        counts[alert.roomId] = (counts[alert.roomId] ?? 0) + 1;
+    for (const alert of activeAlerts) {
+      if (!alert.roomId) continue;
+      if (!grouped[alert.roomId]) grouped[alert.roomId] = [];
+      grouped[alert.roomId].push(alert);
+      counts[alert.roomId] = (counts[alert.roomId] ?? 0) + 1;
 
-        const currSev = severities[alert.roomId];
-        const nextSev = alert.severity;
-        if (
-          nextSev &&
-          (!currSev || SEVERITY_RANK[nextSev] > SEVERITY_RANK[currSev])
-        ) {
-          severities[alert.roomId] = nextSev;
-        }
+      if (isAlertOverdue(alert, nowMs, TIMING_CONFIG.overdueAlertMs)) {
+        overdueIds.add(alert.roomId);
       }
-      return {
-        roomOpenAlertsMap: grouped,
-        roomAlertCounts: counts,
-        roomAlertSeverities: severities,
-      };
-    }, [activeAlerts]);
+
+      const currSev = severities[alert.roomId];
+      const nextSev = alert.severity;
+      if (
+        nextSev &&
+        (!currSev || SEVERITY_RANK[nextSev] > SEVERITY_RANK[currSev])
+      ) {
+        severities[alert.roomId] = nextSev;
+      }
+    }
+    return {
+      roomOpenAlertsMap: grouped,
+      roomAlertCounts: counts,
+      roomAlertSeverities: severities,
+      overdueRoomIds: overdueIds,
+    };
+  }, [activeAlerts, nowMs]);
 
   const roomMatchesFilterMap = useMemo(() => {
     const map: Record<string, boolean> = {};
@@ -619,11 +649,19 @@ export default function FloorplanPage() {
         room,
         roomTelemetryMap[room.id],
         roomOpenAlertsMap[room.id] ?? [],
-        statusFilter
+        statusFilter,
+        nowMs,
+        TIMING_CONFIG.overdueAlertMs
       );
     }
     return map;
-  }, [visibleFloorRooms, roomTelemetryMap, roomOpenAlertsMap, statusFilter]);
+  }, [
+    visibleFloorRooms,
+    roomTelemetryMap,
+    roomOpenAlertsMap,
+    statusFilter,
+    nowMs,
+  ]);
 
   const realDeviceTelemetrySignature = realFloorDevices
     .map((device, index) => {
@@ -810,9 +848,15 @@ export default function FloorplanPage() {
   // Hàm định vị trực tiếp tới đúng tầng, đúng phòng, đúng lớp bản đồ nhiệt và đúng node cảnh báo
   const focusAlertOnMap = useCallback(
     (alert: AlertResponse) => {
+      const candidateRooms =
+        allBuildingRooms.length > 0
+          ? allBuildingRooms
+          : allBackendRooms.length > 0
+            ? allBackendRooms
+            : floorRooms;
       const target = resolveAlertFloorplanTarget(
         alert,
-        allBackendRooms.length > 0 ? allBackendRooms : floorRooms,
+        candidateRooms,
         allDevices.length > 0 ? allDevices : floorDevices
       );
       if (target.floor && target.floor !== selectedFloor) {
@@ -828,8 +872,115 @@ export default function FloorplanPage() {
         setFocusedDeviceId(targetNode);
       }
     },
-    [allBackendRooms, floorRooms, allDevices, floorDevices, selectedFloor]
+    [
+      allBuildingRooms,
+      allBackendRooms,
+      floorRooms,
+      allDevices,
+      floorDevices,
+      selectedFloor,
+    ]
   );
+
+  const handleUpdateAlertWorkflow = useCallback(
+    async (alertId: string, body: AlertWorkflowUpdateRequest) => {
+      try {
+        await updateAlertWorkflowMutation.mutateAsync({ id: alertId, body });
+      } catch {
+        // Error banner / mutation state surfaces failure without crashing view
+      }
+    },
+    [updateAlertWorkflowMutation]
+  );
+
+  const handleAcknowledgeRoomAlerts = useCallback(
+    async (alerts: readonly AlertResponse[]) => {
+      for (const a of alerts) {
+        try {
+          await updateAlertWorkflowMutation.mutateAsync({
+            id: a.id,
+            body: { workflowStatus: 'ACKNOWLEDGED' },
+          });
+        } catch {
+          // Continue remaining alerts in group gracefully
+        }
+      }
+    },
+    [updateAlertWorkflowMutation]
+  );
+
+  // STOMP /topic/alerts -> fail-closed zone filter + aria-live="assertive" announcement & instant cache sync
+  const allBuildingRoomsRef = useRef(allBuildingRooms);
+  useEffect(() => {
+    allBuildingRoomsRef.current = allBuildingRooms;
+  }, [allBuildingRooms]);
+
+  const alertZoneContextRef = useRef({
+    isAdmin: false,
+    assignedZones: undefined as readonly string[] | undefined,
+    allowedRoomIds: new Set<string>(),
+    allowedDeviceIds: new Set<string>(),
+  });
+
+  useEffect(() => {
+    const userZones = currentUser?.assignedZones;
+    const assignedSet = new Set(userZones ?? []);
+    const roomIds = new Set<string>();
+    const devIds = new Set<string>();
+    for (const d of allDevices) {
+      if (d.zoneId && assignedSet.has(d.zoneId)) {
+        devIds.add(d.id);
+        if (d.hardwareId) devIds.add(d.hardwareId);
+        if (d.roomId) roomIds.add(d.roomId);
+      }
+    }
+    alertZoneContextRef.current = {
+      isAdmin: capabilities.isAdmin,
+      assignedZones: userZones,
+      allowedRoomIds: roomIds,
+      allowedDeviceIds: devIds,
+    };
+  }, [capabilities.isAdmin, currentUser?.assignedZones, allDevices]);
+
+  useEffect(() => {
+    if (isStudentView || !capabilities.canViewAlerts) return;
+    return stompManager.onAlert((incoming) => {
+      const ctx = alertZoneContextRef.current;
+      if (
+        !isAlertInUserZones(
+          incoming,
+          ctx.isAdmin,
+          ctx.assignedZones,
+          ctx.allowedRoomIds,
+          ctx.allowedDeviceIds
+        )
+      ) {
+        return;
+      }
+
+      const listQueries = queryClient.getQueriesData<
+        import('@/types/api').PageResponse<AlertResponse>
+      >({
+        queryKey: ['alerts', 'list'],
+      });
+      for (const [queryKey, prev] of listQueries) {
+        if (!prev) continue;
+        queryClient.setQueryData(queryKey, {
+          ...prev,
+          content: upsertRealtimeAlertList(prev.content, incoming),
+        });
+      }
+
+      if (incoming.status === 'FIRING') {
+        setLiveAlertAnnouncement(
+          formatRealtimeAlertAnnouncementVi(
+            incoming,
+            allBuildingRoomsRef.current
+          )
+        );
+      }
+    });
+  }, [isStudentView, capabilities.canViewAlerts, queryClient]);
 
   // Đồng bộ tham số URL (?floor=...&roomId=...&deviceId=...&hardwareId=...&layer=...&alertId=...)
   // khi điều hướng từ nút "Tiếp nhận" ở trang Cảnh báo (/alerts) hoặc Tổng quan (/dashboard)
@@ -1176,6 +1327,18 @@ export default function FloorplanPage() {
           : 'w-full max-w-none space-y-2'
       }
     >
+      {/* Screen Reader live alert announcement region (aria-live="assertive") */}
+      {!isStudentView && capabilities.canViewAlerts && (
+        <div
+          data-testid="alert-live-region"
+          role="alert"
+          aria-live="assertive"
+          className="sr-only"
+        >
+          {liveAlertAnnouncement}
+        </div>
+      )}
+
       {/* Background STOMP Subscribers across all real building rooms */}
       {realBuildingRooms.map((r) => (
         <RoomStreamSubscriber key={r.id} roomId={r.id} />
@@ -1762,6 +1925,7 @@ export default function FloorplanPage() {
                     .filter((id): id is string => Boolean(id))}
                   roomAlertCounts={roomAlertCounts}
                   roomAlertSeverities={roomAlertSeverities}
+                  overdueRoomIds={overdueRoomIds}
                   activeStatusFilter={statusFilter}
                   roomMatchesFilterMap={roomMatchesFilterMap}
                   onlyExceedingThreshold={onlyExceedingThreshold}
@@ -1797,7 +1961,7 @@ export default function FloorplanPage() {
                       )}
                       {isTelemetryStale(
                         selectedRoomTelemetry?.timestamp,
-                        Date.now(),
+                        nowMs,
                         selectedRoomTelemetry?.isSynthetic ||
                           selectedRoom.id.startsWith('PRESET_')
                       ) && (
@@ -1993,75 +2157,20 @@ export default function FloorplanPage() {
                     </div>
                   )}
 
-                {/* Active Room Alerts (only when present) */}
+                {/* Active Room Alerts Workflow Inspector (4-state FSM, SOP, Assignee, Note, Overdue) */}
                 {!isStudentView && selectedRoomAlerts.length > 0 && (
-                  <div className="space-y-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2.5">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-900">
-                      <ShieldAlert className="h-3.5 w-3.5 text-rose-600" />
-                      <span>Cảnh báo ({selectedRoomAlerts.length})</span>
-                    </div>
-                    {selectedRoomAlerts.map((alert) => (
-                      <div
-                        key={alert.id}
-                        className="rounded border border-rose-200 bg-white p-2 text-xs"
-                      >
-                        <div className="flex items-center justify-between gap-2 font-mono text-2xs">
-                          <span className="font-semibold text-rose-700">
-                            {alert.type}
-                          </span>
-                          <span className="text-slate-400">
-                            {alert.hardwareId}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-2xs text-slate-600">
-                          {alert.message}
-                        </p>
-                        {alert.recommendedAction && (
-                          <p className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-[10px] font-medium text-amber-900">
-                            SOP: {alert.recommendedAction}
-                          </p>
-                        )}
-                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                          {alert.status === 'FIRING' &&
-                            capabilities.canAcknowledgeAlert && (
-                              <button
-                                type="button"
-                                disabled={ackAlertMutation.isPending}
-                                onClick={() => {
-                                  focusAlertOnMap(alert);
-                                  ackAlertMutation.mutate(alert.id);
-                                }}
-                                className="rounded bg-slate-900 px-2 py-0.5 text-2xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                              >
-                                Tiếp nhận & Định vị node
-                              </button>
-                            )}
-                          <button
-                            type="button"
-                            onClick={() => focusAlertOnMap(alert)}
-                            className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-2xs font-medium text-rose-800 hover:bg-rose-100"
-                          >
-                            <MapPin className="h-3 w-3" />
-                            <span>Định vị node</span>
-                          </button>
-                          {(alert.status === 'FIRING' ||
-                            alert.status === 'ACKNOWLEDGED') &&
-                            capabilities.canResolveAlert && (
-                              <button
-                                type="button"
-                                disabled={resolveAlertMutation.isPending}
-                                onClick={() =>
-                                  resolveAlertMutation.mutate(alert.id)
-                                }
-                                className="rounded border border-slate-200 bg-white px-2 py-0.5 text-2xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                              >
-                                Đóng sự cố
-                              </button>
-                            )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <AlertInspectorDrawer
+                    alerts={selectedRoomAlerts}
+                    room={selectedRoom}
+                    nowMs={nowMs}
+                    overdueAlertMs={TIMING_CONFIG.overdueAlertMs}
+                    canAcknowledge={capabilities.canAcknowledgeAlert}
+                    canResolve={capabilities.canResolveAlert}
+                    isSubmitting={updateAlertWorkflowMutation.isPending}
+                    onUpdateWorkflow={handleUpdateAlertWorkflow}
+                    onAcknowledgeRoomAlerts={handleAcknowledgeRoomAlerts}
+                    onFlyToAlert={focusAlertOnMap}
+                  />
                 )}
 
                 {/* Collapsible 1: Reading Bays Breakdown (Default collapsed) */}
@@ -2212,6 +2321,20 @@ export default function FloorplanPage() {
             )}
             </div>
           </div>
+
+          {/* Grouped & Prioritized Map Alert Queue */}
+          {!isStudentView && activeAlerts.length > 0 && (
+            <MapAlertQueuePanel
+              alerts={activeAlerts}
+              rooms={allBuildingRooms}
+              nowMs={nowMs}
+              overdueAlertMs={TIMING_CONFIG.overdueAlertMs}
+              canAcknowledge={capabilities.canAcknowledgeAlert}
+              isSubmitting={updateAlertWorkflowMutation.isPending}
+              onFlyToAlert={focusAlertOnMap}
+              onAcknowledgeRoomAlerts={handleAcknowledgeRoomAlerts}
+            />
+          )}
 
           {/* ISA-101 Color Scale & Geometric Status Legend */}
           <FloorplanLegend

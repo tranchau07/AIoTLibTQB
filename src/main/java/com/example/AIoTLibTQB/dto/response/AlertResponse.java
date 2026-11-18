@@ -3,6 +3,7 @@ package com.example.AIoTLibTQB.dto.response;
 import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
+import com.example.AIoTLibTQB.enums.AlertWorkflowStatus;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
 
@@ -26,6 +27,10 @@ public class AlertResponse {
     AlertSeverity severity;
     Integer severityRank;
     AlertStatus status;
+    AlertWorkflowStatus workflowStatus;
+    String assignedTo;
+    String handlingNote;
+    Instant inProgressAt;
     Double currentValue;
     Double threshold;
     String message;

@@ -9,6 +9,7 @@ import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
+import com.example.AIoTLibTQB.enums.AlertWorkflowStatus;
 import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.repository.AlertRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
@@ -1181,6 +1182,7 @@ public class AlertRuleEngine {
 
             // M4: Chỉ chuyển RESOLVED khi chưa phải RESOLVED; giữ nguyên acknowledgedAt và acknowledgedBy
             current.setStatus(AlertStatus.RESOLVED);
+            current.setWorkflowStatus(AlertWorkflowStatus.RESOLVED);
             current.setResolvedAt(now);
             current.setResolvedBy("SYSTEM");
 
@@ -1407,6 +1409,16 @@ public class AlertRuleEngine {
                     alert.getType(),
                     RoomType.STUDY_ROOM);
         }
+        AlertWorkflowStatus workflowStatus;
+        if (alert.getStatus() == AlertStatus.RESOLVED) {
+            workflowStatus = AlertWorkflowStatus.RESOLVED;
+        } else if (alert.getWorkflowStatus() != null) {
+            workflowStatus = alert.getWorkflowStatus();
+        } else if (alert.getStatus() == AlertStatus.ACKNOWLEDGED) {
+            workflowStatus = AlertWorkflowStatus.ACKNOWLEDGED;
+        } else {
+            workflowStatus = AlertWorkflowStatus.NEW;
+        }
         return AlertResponse.builder()
                 .id(alert.getId())
                 .deviceId(alert.getDeviceId())
@@ -1419,6 +1431,10 @@ public class AlertRuleEngine {
                 .severity(sev)
                 .severityRank(rank)
                 .status(alert.getStatus())
+                .workflowStatus(workflowStatus)
+                .assignedTo(alert.getAssignedTo())
+                .handlingNote(alert.getHandlingNote())
+                .inProgressAt(alert.getInProgressAt())
                 .currentValue(alert.getCurrentValue())
                 .threshold(alert.getThreshold())
                 .message(alert.getMessage())

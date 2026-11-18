@@ -3,6 +3,7 @@ import type {
   AlertResponse,
   AlertStatus,
   AlertType,
+  AlertWorkflowUpdateRequest,
   PageResponse,
 } from '@/types/api';
 
@@ -38,4 +39,7 @@ export const alertsApi = {
 
   resolve: (id: string) =>
     httpClient.patch<AlertResponse>(`/alerts/${id}/resolve`),
+
+  updateWorkflow: (id: string, body: AlertWorkflowUpdateRequest) =>
+    httpClient.patch<AlertResponse>(`/alerts/${id}/workflow`, body),
 };

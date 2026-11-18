@@ -1,4 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { upsertRealtimeAlertList } from '@/lib/realtime/stomp-client';
+import type {
+  AlertResponse,
+  AlertWorkflowUpdateRequest,
+  PageResponse,
+} from '@/types/api';
 import { alertsApi, type AlertFilterParams } from './api';
 
 export const alertKeys = {
@@ -38,6 +44,34 @@ export function useResolveAlertMutation() {
   return useMutation({
     mutationFn: (id: string) => alertsApi.resolve(id),
     onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: alertKeys.all });
+    },
+  });
+}
+
+export function useUpdateAlertWorkflowMutation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: AlertWorkflowUpdateRequest;
+    }) => alertsApi.updateWorkflow(id, body),
+    onSuccess: (updated) => {
+      if (updated) {
+        const listQueries = qc.getQueriesData<PageResponse<AlertResponse>>({
+          queryKey: ['alerts', 'list'],
+        });
+        for (const [queryKey, prev] of listQueries) {
+          if (!prev) continue;
+          qc.setQueryData<PageResponse<AlertResponse>>(queryKey, {
+            ...prev,
+            content: upsertRealtimeAlertList(prev.content, updated),
+          });
+        }
+      }
       void qc.invalidateQueries({ queryKey: alertKeys.all });
     },
   });

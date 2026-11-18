@@ -198,6 +198,8 @@ export interface FloorplanCanvasProps {
   roomAlertCounts?: Record<string, number>;
   /** Mức cảnh báo cao nhất theo roomId */
   roomAlertSeverities?: Record<string, AlertSeverity | undefined>;
+  /** Danh sách roomId có cảnh báo tồn đọng lâu chưa xử lý (> overdueAlertMs) */
+  overdueRoomIds?: ReadonlySet<string> | readonly string[];
   /** Trạng thái lọc đang kích hoạt từ Dải tóm tắt Quản lý */
   activeStatusFilter?: ManagerStatusFilter;
   /** Bản đồ đánh dấu phòng nào khớp với bộ lọc (phòng không khớp bị làm mờ) */
@@ -246,6 +248,7 @@ export function FloorplanCanvas({
   defaultLabelDensity,
   roomAlertCounts,
   roomAlertSeverities,
+  overdueRoomIds,
   activeStatusFilter = 'ALL',
   roomMatchesFilterMap,
   viewport: controlledViewport,
@@ -588,6 +591,14 @@ export function FloorplanCanvas({
     () => new Set(alertingDeviceIds),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [alertingDeviceIds.join('|')]
+  );
+
+  const overdueRoomSet = useMemo(
+    () =>
+      overdueRoomIds instanceof Set
+        ? overdueRoomIds
+        : new Set(overdueRoomIds ?? []),
+    [overdueRoomIds]
   );
 
   // Spatial clustering of dense device pins at low zoom levels (< 1.55x)
@@ -2923,19 +2934,29 @@ export function FloorplanCanvas({
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 z-[12]"
           >
-            {alertingScreenOutlines.map((outline) => (
-              <polygon
-                key={outline.roomId}
-                points={outline.points}
-                fill="none"
-                stroke={outline.isSevere ? '#F87171' : '#FBBF24'}
-                strokeWidth={2.5}
-                className="motion-safe:animate-pulse"
-                style={{
-                  animationDuration: `${TIMING_CONFIG.alertPulsePeriodMs}ms`,
-                }}
-              />
-            ))}
+            {alertingScreenOutlines.map((outline) => {
+              const isOverdue = overdueRoomSet.has(outline.roomId);
+              return (
+                <polygon
+                  key={outline.roomId}
+                  points={outline.points}
+                  fill="none"
+                  stroke={
+                    isOverdue
+                      ? '#EF4444'
+                      : outline.isSevere
+                        ? '#F87171'
+                        : '#FBBF24'
+                  }
+                  strokeWidth={isOverdue ? 3.5 : 2.5}
+                  strokeDasharray={isOverdue ? '6 3' : undefined}
+                  className="motion-safe:animate-pulse"
+                  style={{
+                    animationDuration: `${TIMING_CONFIG.alertPulsePeriodMs}ms`,
+                  }}
+                />
+              );
+            })}
           </svg>
         )}
 
@@ -2946,7 +2967,9 @@ export function FloorplanCanvas({
         >
           {roomBadgeAnchors.map((badge) => {
             const roomObj = roomById.get(badge.roomId);
+            const isOverdue = overdueRoomSet.has(badge.roomId);
             const isSevere =
+              isOverdue ||
               badge.severity === 'CRITICAL' ||
               badge.severity === 'HIGH' ||
               !badge.severity;
@@ -2955,20 +2978,32 @@ export function FloorplanCanvas({
                 key={badge.roomId}
                 type="button"
                 data-testid={`room-alert-badge-${badge.roomId}`}
+                data-overdue={isOverdue ? 'true' : undefined}
                 style={{ left: `${badge.x}px`, top: `${badge.y}px` }}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   if (roomObj) onSelectRoom(roomObj);
                 }}
-                aria-label={`${badge.code}: ${badge.count} cảnh báo đang mở`}
+                aria-label={`${badge.code}: ${badge.count} cảnh báo đang mở${
+                  isOverdue ? ' (có cảnh báo tồn đọng lâu)' : ''
+                }`}
                 className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <span
-                  className={`inline-flex items-center gap-0.5 rounded-full border border-white px-1.5 py-0.5 font-mono text-[10px] font-bold text-white shadow-md motion-safe:animate-pulse ${
-                    isSevere ? 'bg-red-600' : 'bg-amber-600'
+                  className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-bold text-white shadow-md motion-safe:animate-pulse ${
+                    isOverdue
+                      ? 'border-amber-200 bg-red-700 ring-2 ring-amber-400'
+                      : isSevere
+                        ? 'border-white bg-red-600'
+                        : 'border-white bg-amber-600'
                   }`}
                 >
                   <span>!{badge.count}</span>
+                  {isOverdue && (
+                    <span className="font-sans text-[9px] uppercase tracking-tight text-amber-100">
+                      Tồn đọng
+                    </span>
+                  )}
                 </span>
               </button>
             );

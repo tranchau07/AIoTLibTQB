@@ -1,11 +1,13 @@
 package com.example.AIoTLibTQB.controller;
 
+import com.example.AIoTLibTQB.dto.request.AlertWorkflowUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.ApiResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
 import com.example.AIoTLibTQB.service.AlertService;
+import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -80,6 +82,21 @@ public class AlertController {
                 : 15;
         return ApiResponse.<AlertResponse>builder()
                 .result(alertService.resolveAlert(id, username, safeSnoozeMinutes))
+                .build();
+    }
+
+    @PatchMapping("/{id}/workflow")
+    @PreAuthorize("hasAnyAuthority('ACKNOWLEDGE_ALERT', 'MANAGE_ALERT_CONFIG')")
+    public ApiResponse<AlertResponse> updateAlertWorkflow(
+            @PathVariable String id,
+            @RequestBody(required = false) @Valid AlertWorkflowUpdateRequest request
+    ) {
+        String username = extractUsername();
+        AlertWorkflowUpdateRequest safeRequest = request != null
+                ? request
+                : AlertWorkflowUpdateRequest.builder().build();
+        return ApiResponse.<AlertResponse>builder()
+                .result(alertService.updateAlertWorkflow(id, safeRequest, username))
                 .build();
     }
 

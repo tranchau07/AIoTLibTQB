@@ -8,11 +8,13 @@ import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.document.RoomThresholdConfig;
 import com.example.AIoTLibTQB.document.User;
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
+import com.example.AIoTLibTQB.dto.request.AlertWorkflowUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
+import com.example.AIoTLibTQB.enums.AlertWorkflowStatus;
 import com.example.AIoTLibTQB.enums.ErrorCode;
 import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.exception.AppException;
@@ -2628,6 +2630,254 @@ class AlertServiceTest {
             assertThat(res.getMetricType()).isEqualTo("SENSOR_MALFUNCTION");
             assertThat(res.getUnit()).isNull();
             assertThat(res.getRecommendedAction()).isEqualTo(expectedSop);
+        }
+    }
+
+    @Nested
+    @DisplayName("Hạng mục 6 (Giai đoạn 6): Alert Workflow 4 Trạng Thái, Giao Việc, Ghi Chú & Optimistic Locking")
+    class AlertWorkflowPhase6Tests {
+
+        @Mock
+        UserRepository userRepository;
+
+        @Mock
+        DeviceRepository deviceRepository;
+
+        @AfterEach
+        void cleanSecurity() {
+            SecurityContextHolder.clearContext();
+        }
+
+        @Test
+        @DisplayName("TC-G6-01: Chuyển trạng thái tuần tự NEW -> ACKNOWLEDGED -> IN_PROGRESS (assignedTo, handlingNote) -> RESOLVED & phát STOMP")
+        void updateAlertWorkflow_sequentialTransitions_persistsFieldsAndPublishesStomp() {
+            Alert stored = Alert.builder()
+                    .id("wf-alert-1")
+                    .deviceId("dev-1")
+                    .hardwareId("HW-1")
+                    .roomId("room-1")
+                    .zoneId("ZONE_A")
+                    .type(AlertType.NOISE_EXCEEDED)
+                    .metricType("NOISE_AVG")
+                    .severity(AlertSeverity.HIGH)
+                    .status(AlertStatus.FIRING)
+                    .workflowStatus(null)
+                    .currentValue(78.0)
+                    .threshold(65.0)
+                    .startedAt(mutableClock.instant())
+                    .build();
+
+            when(alertRepository.findById("wf-alert-1")).thenAnswer(inv -> Optional.of(stored));
+            when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // 1. NEW -> ACKNOWLEDGED
+            mutableClock.advance(Duration.ofSeconds(15));
+            AlertResponse step1 = alertService.updateAlertWorkflow(
+                    "wf-alert-1",
+                    AlertWorkflowUpdateRequest.builder()
+                            .workflowStatus(AlertWorkflowStatus.ACKNOWLEDGED)
+                            .build(),
+                    "manager.lan"
+            );
+            assertThat(step1.getStatus()).isEqualTo(AlertStatus.ACKNOWLEDGED);
+            assertThat(step1.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.ACKNOWLEDGED);
+            assertThat(step1.getAcknowledgedBy()).isEqualTo("manager.lan");
+            assertThat(step1.getAcknowledgedAt()).isNotNull();
+
+            // 2. ACKNOWLEDGED -> IN_PROGRESS với assignedTo và handlingNote
+            mutableClock.advance(Duration.ofSeconds(20));
+            AlertResponse step2 = alertService.updateAlertWorkflow(
+                    "wf-alert-1",
+                    AlertWorkflowUpdateRequest.builder()
+                            .workflowStatus(AlertWorkflowStatus.IN_PROGRESS)
+                            .assignedTo("ktv.nam")
+                            .handlingNote("Đang chỉnh AHU")
+                            .build(),
+                    "manager.lan"
+            );
+            assertThat(step2.getStatus()).isEqualTo(AlertStatus.ACKNOWLEDGED);
+            assertThat(step2.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.IN_PROGRESS);
+            assertThat(step2.getAssignedTo()).isEqualTo("ktv.nam");
+            assertThat(step2.getHandlingNote()).isEqualTo("Đang chỉnh AHU");
+            assertThat(step2.getInProgressAt()).isNotNull();
+
+            // 3. IN_PROGRESS -> RESOLVED
+            mutableClock.advance(Duration.ofSeconds(30));
+            AlertResponse step3 = alertService.updateAlertWorkflow(
+                    "wf-alert-1",
+                    AlertWorkflowUpdateRequest.builder()
+                            .workflowStatus(AlertWorkflowStatus.RESOLVED)
+                            .handlingNote("Đã xử lý xong")
+                            .snoozeMinutes(20)
+                            .build(),
+                    "ktv.nam"
+            );
+            assertThat(step3.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+            assertThat(step3.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.RESOLVED);
+            assertThat(step3.getResolvedBy()).isEqualTo("ktv.nam");
+            assertThat(step3.getResolvedAt()).isNotNull();
+            assertThat(step3.getHandlingNote()).isEqualTo("Đã xử lý xong");
+
+            verify(alertRepository, times(3)).save(any(Alert.class));
+            verify(realtimePublisher, times(3)).publishAlert(any(AlertResponse.class));
+        }
+
+        @Test
+        @DisplayName("TC-G6-02: Tương thích ngược endpoint cũ acknowledgeAlert ánh xạ đúng workflowStatus=ACKNOWLEDGED")
+        void acknowledgeAlert_backwardCompatibleMapsWorkflowStatus() {
+            Alert firing = Alert.builder()
+                    .id("wf-legacy-ack")
+                    .deviceId("dev-1")
+                    .roomId("room-1")
+                    .type(AlertType.NOISE_EXCEEDED)
+                    .status(AlertStatus.FIRING)
+                    .workflowStatus(null)
+                    .startedAt(mutableClock.instant())
+                    .build();
+            when(alertRepository.findById("wf-legacy-ack")).thenReturn(Optional.of(firing));
+            when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            AlertResponse res = alertService.acknowledgeAlert("wf-legacy-ack", "thuthu.lan");
+            assertThat(res.getStatus()).isEqualTo(AlertStatus.ACKNOWLEDGED);
+            assertThat(res.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.ACKNOWLEDGED);
+            assertThat(res.getAcknowledgedBy()).isEqualTo("thuthu.lan");
+            assertThat(AlertRuleEngine.toAlertResponse(firing).getWorkflowStatus())
+                    .isEqualTo(AlertWorkflowStatus.ACKNOWLEDGED);
+        }
+
+        @Test
+        @DisplayName("TC-G6-03: Bất biến M4 — Cảnh báo đã RESOLVED không bị ghi đè ngược về IN_PROGRESS")
+        void updateAlertWorkflow_alreadyResolved_blocksBackwardMutationM4() {
+            Alert resolved = Alert.builder()
+                    .id("wf-resolved-1")
+                    .deviceId("dev-1")
+                    .roomId("room-1")
+                    .type(AlertType.AIR_UNHEALTHY)
+                    .status(AlertStatus.RESOLVED)
+                    .workflowStatus(AlertWorkflowStatus.RESOLVED)
+                    .resolvedBy("SYSTEM")
+                    .resolvedAt(mutableClock.instant())
+                    .assignedTo("ktv.nam")
+                    .build();
+            when(alertRepository.findById("wf-resolved-1")).thenReturn(Optional.of(resolved));
+
+            AlertResponse result = alertService.updateAlertWorkflow(
+                    "wf-resolved-1",
+                    AlertWorkflowUpdateRequest.builder()
+                            .workflowStatus(AlertWorkflowStatus.IN_PROGRESS)
+                            .assignedTo("someone.else")
+                            .handlingNote("Thử ghi đè ngược")
+                            .build(),
+                    "manager.lan"
+            );
+
+            assertThat(result.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+            assertThat(result.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.RESOLVED);
+            assertThat(result.getAssignedTo()).isEqualTo("ktv.nam");
+            verify(alertRepository, never()).save(any());
+            verify(realtimePublisher, never()).publishAlert(any());
+        }
+
+        @Test
+        @DisplayName("TC-G6-04: Cô lập phân khu — ZONE_MANAGER ZONE_A không thể cập nhật workflow cảnh báo thuộc ZONE_B (HTTP 403 / 4031)")
+        void updateAlertWorkflow_outsideAssignedZone_throwsZoneAccessDenied() {
+            AlertServiceImpl scoped = new AlertServiceImpl(
+                    alertRepository, realtimePublisher, alertRuleEngine, mongoTemplate,
+                    mutableClock, userRepository, deviceRepository);
+
+            Alert zoneBAlert = Alert.builder()
+                    .id("wf-zone-b")
+                    .deviceId("dev-b")
+                    .roomId("room-b")
+                    .zoneId("ZONE_B")
+                    .status(AlertStatus.FIRING)
+                    .type(AlertType.NOISE_EXCEEDED)
+                    .build();
+            when(alertRepository.findById("wf-zone-b")).thenReturn(Optional.of(zoneBAlert));
+
+            User zoneAUser = User.builder().username("zm_zone_a").assignedZones(Set.of("ZONE_A")).build();
+            when(userRepository.findByUsername("zm_zone_a")).thenReturn(Optional.of(zoneAUser));
+            when(deviceRepository.findByZoneIdIn(Set.of("ZONE_A")))
+                    .thenReturn(List.of(Device.builder().id("dev-a").roomId("room-a").zoneId("ZONE_A").build()));
+
+            Authentication auth = mock(Authentication.class);
+            doReturn(List.of(new SimpleGrantedAuthority("ZONE_MANAGER"))).when(auth).getAuthorities();
+            when(auth.getName()).thenReturn("zm_zone_a");
+            SecurityContext ctx = mock(SecurityContext.class);
+            when(ctx.getAuthentication()).thenReturn(auth);
+
+            try (MockedStatic<SecurityContextHolder> holder = mockStatic(SecurityContextHolder.class)) {
+                holder.when(SecurityContextHolder::getContext).thenReturn(ctx);
+                assertThatThrownBy(() -> scoped.updateAlertWorkflow(
+                        "wf-zone-b",
+                        AlertWorkflowUpdateRequest.builder()
+                                .workflowStatus(AlertWorkflowStatus.IN_PROGRESS)
+                                .assignedTo("ktv.a")
+                                .build(),
+                        "zm_zone_a"
+                ))
+                        .isInstanceOf(AppException.class)
+                        .satisfies(ex -> {
+                            ErrorCode code = ((AppException) ex).getErrorCode();
+                            assertThat(code).isEqualTo(ErrorCode.ZONE_ACCESS_DENIED);
+                            assertThat(code.getCode()).isEqualTo(4031);
+                            assertThat(code.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                        });
+            }
+            verify(alertRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("TC-G6-05: Xử lý xung đột @Version Optimistic Locking — retry tự động thành công trong giới hạn 3 lần")
+        void updateAlertWorkflow_optimisticLockConflict_retriesAndSucceeds() {
+            Alert attempt1Copy = Alert.builder()
+                    .id("wf-opt-1")
+                    .deviceId("dev-1")
+                    .roomId("room-1")
+                    .type(AlertType.NOISE_EXCEEDED)
+                    .status(AlertStatus.FIRING)
+                    .version(1L)
+                    .startedAt(mutableClock.instant())
+                    .build();
+            Alert attempt2Copy = Alert.builder()
+                    .id("wf-opt-1")
+                    .deviceId("dev-1")
+                    .roomId("room-1")
+                    .type(AlertType.NOISE_EXCEEDED)
+                    .status(AlertStatus.FIRING)
+                    .version(2L)
+                    .startedAt(mutableClock.instant())
+                    .build();
+
+            AtomicInteger findCount = new AtomicInteger(0);
+            when(alertRepository.findById("wf-opt-1")).thenAnswer(inv -> {
+                int c = findCount.incrementAndGet();
+                return Optional.of(c <= 2 ? attempt1Copy : attempt2Copy);
+            });
+
+            AtomicInteger saveCount = new AtomicInteger(0);
+            when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
+                if (saveCount.incrementAndGet() == 1) {
+                    throw new OptimisticLockingFailureException("Concurrent modification on version 1");
+                }
+                return inv.getArgument(0);
+            });
+
+            AlertResponse res = alertService.updateAlertWorkflow(
+                    "wf-opt-1",
+                    AlertWorkflowUpdateRequest.builder()
+                            .workflowStatus(AlertWorkflowStatus.IN_PROGRESS)
+                            .assignedTo("ktv.minh")
+                            .handlingNote("Phối hợp xử lý")
+                            .build(),
+                    "manager.tqb"
+            );
+
+            assertThat(saveCount.get()).isEqualTo(2);
+            assertThat(res.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.IN_PROGRESS);
+            assertThat(res.getAssignedTo()).isEqualTo("ktv.minh");
+            assertThat(res.getHandlingNote()).isEqualTo("Phối hợp xử lý");
+            verify(realtimePublisher, times(1)).publishAlert(any(AlertResponse.class));
         }
     }
 }

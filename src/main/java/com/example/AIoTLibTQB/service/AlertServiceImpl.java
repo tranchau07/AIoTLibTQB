@@ -4,10 +4,12 @@ import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.document.Device;
 import com.example.AIoTLibTQB.document.User;
 import com.example.AIoTLibTQB.dto.mqtt.TelemetryPayload;
+import com.example.AIoTLibTQB.dto.request.AlertWorkflowUpdateRequest;
 import com.example.AIoTLibTQB.dto.response.AlertResponse;
 import com.example.AIoTLibTQB.dto.response.PageResponse;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
+import com.example.AIoTLibTQB.enums.AlertWorkflowStatus;
 import com.example.AIoTLibTQB.enums.ErrorCode;
 import com.example.AIoTLibTQB.exception.AppException;
 import com.example.AIoTLibTQB.repository.AlertRepository;
@@ -268,6 +270,9 @@ public class AlertServiceImpl implements AlertService {
             }
 
             current.setStatus(AlertStatus.ACKNOWLEDGED);
+            if (current.getWorkflowStatus() == null || current.getWorkflowStatus() == AlertWorkflowStatus.NEW) {
+                current.setWorkflowStatus(AlertWorkflowStatus.ACKNOWLEDGED);
+            }
             current.setAcknowledgedAt(clock.instant());
             current.setAcknowledgedBy(username);
 
@@ -322,6 +327,7 @@ public class AlertServiceImpl implements AlertService {
             }
 
             current.setStatus(AlertStatus.RESOLVED);
+            current.setWorkflowStatus(AlertWorkflowStatus.RESOLVED);
             current.setResolvedAt(clock.instant());
             current.setResolvedBy(username);
 
@@ -357,6 +363,132 @@ public class AlertServiceImpl implements AlertService {
         Alert latest = alertRepository.findById(id)
                 .orElseThrow(() -> new AppException(ErrorCode.ALERT_NOT_EXISTED));
         return AlertRuleEngine.toAlertResponse(latest);
+    }
+
+    @Override
+    public AlertResponse updateAlertWorkflow(String id, AlertWorkflowUpdateRequest request, String operatorUsername) {
+        Alert initial = alertRepository.findById(id)
+                .orElseThrow(() -> new AppException(ErrorCode.ALERT_NOT_EXISTED));
+        assertAlertZoneAccess(initial);
+
+        AlertWorkflowUpdateRequest safeRequest = request != null
+                ? request
+                : AlertWorkflowUpdateRequest.builder().build();
+        int effectiveSnoozeMinutes = safeRequest.getSnoozeMinutes() != null
+                ? Math.max(0, Math.min(240, safeRequest.getSnoozeMinutes()))
+                : 15;
+
+        for (int attempt = 0; attempt < OPTIMISTIC_LOCK_MAX_RETRIES; attempt++) {
+            Alert current = alertRepository.findById(id)
+                    .orElseThrow(() -> new AppException(ErrorCode.ALERT_NOT_EXISTED));
+
+            // M4: Cảnh báo đã RESOLVED tuyệt đối không bị ghi đè ngược
+            if (current.getStatus() == AlertStatus.RESOLVED
+                    || current.getWorkflowStatus() == AlertWorkflowStatus.RESOLVED) {
+                return AlertRuleEngine.toAlertResponse(current);
+            }
+
+            AlertWorkflowStatus currentWf = current.getWorkflowStatus() != null
+                    ? current.getWorkflowStatus()
+                    : (current.getStatus() == AlertStatus.ACKNOWLEDGED
+                            ? AlertWorkflowStatus.ACKNOWLEDGED
+                            : AlertWorkflowStatus.NEW);
+            AlertWorkflowStatus requestedWf = safeRequest.getWorkflowStatus();
+            AlertWorkflowStatus targetWf = requestedWf != null
+                    ? (workflowOrder(requestedWf) >= workflowOrder(currentWf) ? requestedWf : currentWf)
+                    : currentWf;
+
+            if (safeRequest.getAssignedTo() != null) {
+                String trimmedAssignee = safeRequest.getAssignedTo().trim();
+                current.setAssignedTo(trimmedAssignee.isEmpty() ? null : trimmedAssignee);
+            }
+            if (safeRequest.getHandlingNote() != null) {
+                String trimmedNote = safeRequest.getHandlingNote().trim();
+                current.setHandlingNote(trimmedNote.isEmpty() ? null : trimmedNote);
+            }
+
+            java.time.Instant now = clock.instant();
+            boolean wasFiring = current.getStatus() == AlertStatus.FIRING;
+            boolean becameAcknowledged = false;
+            boolean transitionedToResolved = false;
+
+            current.setWorkflowStatus(targetWf);
+            if (targetWf == AlertWorkflowStatus.ACKNOWLEDGED) {
+                if (wasFiring) {
+                    current.setStatus(AlertStatus.ACKNOWLEDGED);
+                    current.setAcknowledgedAt(now);
+                    current.setAcknowledgedBy(operatorUsername);
+                    becameAcknowledged = true;
+                }
+            } else if (targetWf == AlertWorkflowStatus.IN_PROGRESS) {
+                if (wasFiring) {
+                    current.setStatus(AlertStatus.ACKNOWLEDGED);
+                    current.setAcknowledgedAt(now);
+                    current.setAcknowledgedBy(operatorUsername);
+                    becameAcknowledged = true;
+                }
+                if (current.getInProgressAt() == null) {
+                    current.setInProgressAt(now);
+                }
+            } else if (targetWf == AlertWorkflowStatus.RESOLVED) {
+                current.setStatus(AlertStatus.RESOLVED);
+                current.setResolvedAt(now);
+                current.setResolvedBy(operatorUsername);
+                transitionedToResolved = true;
+            }
+
+            try {
+                Alert saved = alertRepository.save(current);
+                Alert effectiveSaved = saved != null ? saved : current;
+
+                if (transitionedToResolved) {
+                    alertRuleEngine.onResolve(effectiveSaved, Duration.ofMinutes(effectiveSnoozeMinutes));
+                } else if (becameAcknowledged) {
+                    alertRuleEngine.onAcknowledge(id);
+                }
+
+                AlertResponse response = AlertRuleEngine.toAlertResponse(effectiveSaved);
+                realtimePublisher.publishAlert(response);
+
+                if (transitionedToResolved && alertEmailNotificationService != null) {
+                    try {
+                        alertEmailNotificationService.onAlertResolved(effectiveSaved);
+                    } catch (Exception ex) {
+                        log.warn("Error sending resolved email notification for alertId={}: {}", effectiveSaved.getId(), ex.getMessage());
+                    }
+                }
+
+                log.info("Alert workflow updated: id={}, workflowStatus={}, assignedTo={}, operator={}",
+                        id, effectiveSaved.getWorkflowStatus(), effectiveSaved.getAssignedTo(), operatorUsername);
+                return response;
+            } catch (OptimisticLockingFailureException ex) {
+                log.debug("Optimistic locking conflict on updateAlertWorkflow id={}, attempt={}", id, attempt + 1);
+                if (attempt == OPTIMISTIC_LOCK_MAX_RETRIES - 1) {
+                    Alert latest = alertRepository.findById(id)
+                            .orElseThrow(() -> new AppException(ErrorCode.ALERT_NOT_EXISTED));
+                    if (latest.getStatus() == AlertStatus.RESOLVED) {
+                        return AlertRuleEngine.toAlertResponse(latest);
+                    }
+                    throw ex;
+                }
+            }
+        }
+
+        Alert latest = alertRepository.findById(id)
+                .orElseThrow(() -> new AppException(ErrorCode.ALERT_NOT_EXISTED));
+        return AlertRuleEngine.toAlertResponse(latest);
+    }
+
+    private static int workflowOrder(AlertWorkflowStatus status) {
+        if (status == null) {
+            return 0;
+        }
+        return switch (status) {
+            case NEW -> 0;
+            case ACKNOWLEDGED -> 1;
+            case IN_PROGRESS -> 2;
+            case RESOLVED -> 3;
+        };
     }
 
     @Override
