@@ -25,7 +25,7 @@ import {
   type ManagerStatusFilter,
 } from '@/config/floorplan-hmi.config';
 import { type HeatmapLayerMetric } from '@/config/thresholds';
-import { UI_TEXT_VI } from '@/messages/vi';
+import { FLOORPLAN_I18N_VI, UI_TEXT_VI } from '@/messages/vi';
 import { formatMetrics } from '@/lib/format/metrics';
 import { isTelemetryStale } from '@/lib/format/datetime';
 import {
@@ -56,10 +56,12 @@ import {
   extractLayerMetricValue,
   formatLayerMetricValue,
 } from '@/features/floorplan/components/FloorplanCanvas';
+import { FloorRoomTree } from '@/features/floorplan/components/FloorRoomTree';
 import {
   ManagerSummaryStrip,
   computeBuildingSummaryMetrics,
 } from '@/features/floorplan/components/ManagerSummaryStrip';
+import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
 import {
   WEATHER_PALETTES,
   computeRoomBlindspotRatio,
@@ -168,6 +170,7 @@ export default function FloorplanPage() {
   const [adminRoleOverride, setAdminRoleOverride] =
     useState<EffectiveRoleView | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isTreeCollapsed, setIsTreeCollapsed] = useState<boolean>(false);
   const [maxViewportHeightPx, setMaxViewportHeightPx] = useState<
     number | undefined
   >(undefined);
@@ -194,7 +197,7 @@ export default function FloorplanPage() {
       const vh = window.innerHeight;
       if (!vh || vh <= 0) return;
       setMaxViewportHeightPx(
-        Math.max(360, vh - (isFullscreen ? 115 : 245))
+        Math.max(360, vh - (isFullscreen ? 125 : 275))
       );
     };
     updateMaxH();
@@ -503,6 +506,16 @@ export default function FloorplanPage() {
     [allBuildingRooms, buildingTelemetryMap, activeAlerts]
   );
 
+  const buildingFloorTree = useMemo(
+    () =>
+      buildBuildingFloorTree(
+        allBuildingRooms,
+        buildingTelemetryMap,
+        isStudentView ? [] : activeAlerts
+      ),
+    [allBuildingRooms, buildingTelemetryMap, isStudentView, activeAlerts]
+  );
+
   const { roomOpenAlertsMap, roomAlertCounts, roomAlertSeverities } =
     useMemo(() => {
       const grouped: Record<string, AlertResponse[]> = {};
@@ -698,14 +711,13 @@ export default function FloorplanPage() {
       ? allBackendRooms.find((r) => r.id === effectiveRoomId)
       : undefined;
     const targetFloor =
-      Number.isFinite(qFloor) && qFloor >= 1 && qFloor <= 5
+      Number.isFinite(qFloor) && floorOptions.includes(qFloor)
         ? qFloor
         : matchedRoomAcrossBuilding?.floor;
 
     if (
       typeof targetFloor === 'number' &&
-      targetFloor >= 1 &&
-      targetFloor <= 5 &&
+      floorOptions.includes(targetFloor) &&
       targetFloor !== selectedFloor
     ) {
       setSelectedFloor(targetFloor);
@@ -743,6 +755,7 @@ export default function FloorplanPage() {
     activeAlerts.length,
     alertsQuery.data,
     focusAlertOnMap,
+    floorOptions,
     selectedFloor,
     selectedLayer,
   ]);
@@ -1401,53 +1414,122 @@ export default function FloorplanPage() {
         />
       ) : (
         <div className="space-y-2">
-          <div className="relative w-full" data-testid="floorplan-main-stage">
-            <div className="card overflow-hidden">
-              <FloorplanCanvas
-                rooms={visibleFloorRooms}
-                devices={floorDevices}
-                roomTelemetryMap={roomTelemetryMap}
-                deviceTelemetryMap={deviceTelemetryMap}
-                layer={selectedLayer}
-                selectedRoomId={selectedRoomId}
-                onSelectRoom={(room) => {
-                  setSelectedRoomId(room.id);
+          {/* Dynamic Navigation Breadcrumb: Tầng X › Phòng Y */}
+          <nav
+            aria-label="Đường dẫn vị trí bản đồ"
+            data-testid="floorplan-breadcrumb"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white px-3 py-1.5 text-xs text-slate-600"
+          >
+            <div className="flex min-w-0 items-center gap-1.5">
+              <button
+                type="button"
+                data-testid="breadcrumb-floor-btn"
+                onClick={() => {
+                  setSelectedRoomId(null);
+                  setZoomedRoomId(null);
                   setFocusedDeviceId(null);
+                  setSelectedBayId(null);
                 }}
-                onSelectDevice={(device, room) => {
-                  if (room) setSelectedRoomId(room.id);
-                  setFocusedDeviceId(device.id);
-                }}
-                focusedDeviceId={focusedDeviceId}
-                alertingDeviceIds={alertingDeviceIds}
-                zoomedRoomId={zoomedRoomId}
-                onZoomRoomChange={setZoomedRoomId}
-                selectedBayId={selectedBayId}
-                onSelectBay={(bay, room) => {
-                  setSelectedRoomId(room.id);
-                  setSelectedBayId(bay.bayId);
-                }}
-                showBlindspots={showBlindspots}
-                showTechOverlay={isMaintenanceView}
-                defaultLabelDensity={
-                  isMaintenanceView ? 'detailed' : 'balanced'
-                }
-                highlightedZoneIds={
-                  onlyAssignedZones ? assignedZones : undefined
-                }
-                firingRoomIds={activeAlerts
-                  .filter((a) => a.status === 'FIRING')
-                  .map((a) => a.roomId)
-                  .filter((id): id is string => Boolean(id))}
-                roomAlertCounts={roomAlertCounts}
-                roomAlertSeverities={roomAlertSeverities}
-                activeStatusFilter={statusFilter}
-                roomMatchesFilterMap={roomMatchesFilterMap}
-                isFullscreen={isFullscreen}
-                onToggleFullscreen={handleToggleFullscreen}
-                maxViewportHeightPx={maxViewportHeightPx}
-              />
+                className={`font-semibold transition-colors hover:text-sky-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded ${
+                  !selectedRoom
+                    ? 'text-slate-900'
+                    : 'text-sky-700 underline-offset-2 hover:underline'
+                }`}
+              >
+                {FLOORPLAN_I18N_VI.tree.floorPrefix} {selectedFloor}
+              </button>
+              <span aria-hidden="true" className="text-slate-400">
+                ›
+              </span>
+              {selectedRoom ? (
+                <span
+                  data-testid="breadcrumb-room-label"
+                  className="truncate font-semibold text-slate-900"
+                >
+                  {selectedRoom.code} — {selectedRoom.name}
+                </span>
+              ) : (
+                <span className="text-slate-600">
+                  {FLOORPLAN_I18N_VI.tree.allFloorSummary} (
+                  {visibleFloorRooms.length} phòng)
+                </span>
+              )}
             </div>
+          </nav>
+
+          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-start">
+            <FloorRoomTree
+              treeNodes={buildingFloorTree}
+              selectedFloor={selectedFloor}
+              selectedRoomId={selectedRoomId}
+              isCollapsed={isTreeCollapsed}
+              onCollapsedChange={setIsTreeCollapsed}
+              onSelectFloor={(floor) => {
+                setSelectedFloor(floor);
+                setSelectedRoomId(null);
+                setZoomedRoomId(null);
+                setFocusedDeviceId(null);
+                setSelectedBayId(null);
+              }}
+              onSelectRoom={(room) => {
+                const targetFloor = room.floor === 0 ? 1 : room.floor;
+                if (targetFloor !== selectedFloor) {
+                  setSelectedFloor(targetFloor);
+                }
+                setSelectedRoomId(room.id);
+                setZoomedRoomId(room.id);
+                setFocusedDeviceId(null);
+                setSelectedBayId(null);
+              }}
+            />
+
+            <div className="relative min-w-0 flex-1" data-testid="floorplan-main-stage">
+              <div className="card overflow-hidden">
+                <FloorplanCanvas
+                  rooms={visibleFloorRooms}
+                  devices={floorDevices}
+                  roomTelemetryMap={roomTelemetryMap}
+                  deviceTelemetryMap={deviceTelemetryMap}
+                  layer={selectedLayer}
+                  selectedRoomId={selectedRoomId}
+                  onSelectRoom={(room) => {
+                    setSelectedRoomId(room.id);
+                    setFocusedDeviceId(null);
+                  }}
+                  onSelectDevice={(device, room) => {
+                    if (room) setSelectedRoomId(room.id);
+                    setFocusedDeviceId(device.id);
+                  }}
+                  focusedDeviceId={focusedDeviceId}
+                  alertingDeviceIds={alertingDeviceIds}
+                  zoomedRoomId={zoomedRoomId}
+                  onZoomRoomChange={setZoomedRoomId}
+                  selectedBayId={selectedBayId}
+                  onSelectBay={(bay, room) => {
+                    setSelectedRoomId(room.id);
+                    setSelectedBayId(bay.bayId);
+                  }}
+                  showBlindspots={showBlindspots}
+                  showTechOverlay={isMaintenanceView}
+                  defaultLabelDensity={
+                    isMaintenanceView ? 'detailed' : 'balanced'
+                  }
+                  highlightedZoneIds={
+                    onlyAssignedZones ? assignedZones : undefined
+                  }
+                  firingRoomIds={activeAlerts
+                    .filter((a) => a.status === 'FIRING')
+                    .map((a) => a.roomId)
+                    .filter((id): id is string => Boolean(id))}
+                  roomAlertCounts={roomAlertCounts}
+                  roomAlertSeverities={roomAlertSeverities}
+                  activeStatusFilter={statusFilter}
+                  roomMatchesFilterMap={roomMatchesFilterMap}
+                  isFullscreen={isFullscreen}
+                  onToggleFullscreen={handleToggleFullscreen}
+                  maxViewportHeightPx={maxViewportHeightPx}
+                />
+              </div>
 
             {/* Streamlined Right Floating Drawer (Does not shrink canvas width) */}
             {selectedRoom && (
@@ -1849,6 +1931,7 @@ export default function FloorplanPage() {
                 )}
               </aside>
             )}
+            </div>
           </div>
 
           {/* Compact Color Scale Legend */}
