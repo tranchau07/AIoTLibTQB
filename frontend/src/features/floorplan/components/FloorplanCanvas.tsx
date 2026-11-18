@@ -59,14 +59,22 @@ import {
 import {
   computeRoomBlindspotRatio,
   getContinuousMetricColorCss,
+  getMetricStatusSymbol,
   renderWeatherDiffusionHeatmap,
 } from '@/lib/floorplan/weatherPalette';
+import {
+  evaluateAnimatedMetricState,
+  isReducedMotionPreferred,
+  updateAnimatedMetricState,
+  type AnimatedMetricState,
+} from '@/lib/floorplan/metricTransition';
 import { formatMetrics } from '@/lib/format/metrics';
 import { FLOORPLAN_I18N_VI } from '@/messages/vi';
 import {
   FloorplanMinimap,
   type MinimapRoomShape,
 } from '@/features/floorplan/components/FloorplanMinimap';
+import { RoomHoverPopover } from '@/features/floorplan/components/RoomHoverPopover';
 import type {
   AlertSeverity,
   DeviceResponse,
@@ -190,6 +198,12 @@ export interface FloorplanCanvasProps {
   onHoverRoomChange?: (room: RoomResponse | null) => void;
   /** Bật tắt hiển thị nút lớp nội thất (dành cho GĐ8) */
   showFurnitureLayer?: boolean;
+  /** Chỉ hiện vùng vượt ngưỡng (chế độ lọc ISA-101 Deviation) */
+  onlyExceedingThreshold?: boolean;
+  /** Chuỗi lịch sử gần nhất theo roomId (để vẽ sparkline trên hover popover) */
+  roomTelemetryHistoryMap?: Record<string, readonly number[]>;
+  /** Bật/tắt popover chi tiết khi di chuột qua phòng */
+  showHoverPopover?: boolean;
 }
 
 export function FloorplanCanvas({
@@ -222,6 +236,9 @@ export function FloorplanCanvas({
   onToggleFullscreen,
   maxViewportHeightPx,
   onHoverRoomChange,
+  onlyExceedingThreshold = false,
+  roomTelemetryHistoryMap,
+  showHoverPopover = true,
 }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -239,9 +256,6 @@ export function FloorplanCanvas({
   const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
   const [labelDensity, setLabelDensity] = useState<LabelDensity>(
     defaultLabelDensity ?? (showTechOverlay ? 'detailed' : 'balanced')
-  );
-  const [displayValues, setDisplayValues] = useState<Record<string, number>>(
-    {}
   );
   const [internalZoomedRoomId, setInternalZoomedRoomId] = useState<
     string | null
@@ -578,22 +592,15 @@ export function FloorplanCanvas({
     return items;
   }, [enrichedRooms, positionedDevices, zoomedRoomId, selectedRoomId]);
 
-  // Animated smooth values map
-  interface AnimDeviceState {
-    current: number;
-    from: number;
-    target: number;
-    startTime: number;
-    duration: number;
-  }
-  const animValuesRef = useRef<Map<string, AnimDeviceState>>(new Map());
+  // Animated smooth values map (TIMING_CONFIG.transitionDurationMs = 450ms, reduced-motion aware)
+  const animValuesRef = useRef<Map<string, AnimatedMetricState>>(new Map());
   const prevLayerRef = useRef(layer);
-  const lastDisplayUpdateRef = useRef<number>(0);
 
   useEffect(() => {
     const layerChanged = prevLayerRef.current !== layer;
     prevLayerRef.current = layer;
 
+    const prefersReducedMotion = isReducedMotionPreferred();
     const now = performance.now();
     const roomCounts = new Map<string, number>();
     for (const d of devices) {
@@ -610,21 +617,15 @@ export function FloorplanCanvas({
       );
       const targetVal = extractLayerMetricValue(devTel, layer);
       if (targetVal !== null && Number.isFinite(targetVal)) {
-        const existing = animValuesRef.current.get(dev.id);
-        if (!existing || layerChanged) {
-          animValuesRef.current.set(dev.id, {
-            current: targetVal,
-            from: targetVal,
-            target: targetVal,
-            startTime: now,
-            duration: 2600,
-          });
-        } else if (Math.abs(existing.target - targetVal) > 0.005) {
-          existing.from = existing.current;
-          existing.target = targetVal;
-          existing.startTime = now;
-          existing.duration = 2600;
-        }
+        const nextState = updateAnimatedMetricState(
+          animValuesRef.current.get(dev.id),
+          targetVal,
+          now,
+          prefersReducedMotion,
+          TIMING_CONFIG.transitionDurationMs,
+          layerChanged
+        );
+        animValuesRef.current.set(dev.id, nextState);
       }
     }
   }, [devices, deviceTelemetryMap, roomTelemetryMap, layer]);
@@ -849,33 +850,9 @@ export function FloorplanCanvas({
       const now = performance.now();
       let isTransitioning = false;
       for (const state of animValuesRef.current.values()) {
-        const elapsed = now - state.startTime;
-        if (elapsed < state.duration) {
-          const p = Math.max(0, Math.min(1, elapsed / state.duration));
-          const s = p * p * (3 - 2 * p);
-          state.current = state.from + (state.target - state.from) * s;
+        if (evaluateAnimatedMetricState(state, now).transitioning) {
           isTransitioning = true;
-        } else {
-          state.current = state.target;
         }
-      }
-
-      if (isTransitioning) {
-        if (now - lastDisplayUpdateRef.current >= 80) {
-          lastDisplayUpdateRef.current = now;
-          const newDisplays: Record<string, number> = {};
-          for (const [id, state] of animValuesRef.current.entries()) {
-            newDisplays[id] = Math.round(state.current * 10) / 10;
-          }
-          setDisplayValues(newDisplays);
-        }
-      } else if (lastDisplayUpdateRef.current !== 0) {
-        lastDisplayUpdateRef.current = 0;
-        const newDisplays: Record<string, number> = {};
-        for (const [id, state] of animValuesRef.current.entries()) {
-          newDisplays[id] = Math.round(state.target * 10) / 10;
-        }
-        setDisplayValues(newDisplays);
       }
 
       const dpr =
@@ -1002,16 +979,43 @@ export function FloorplanCanvas({
             (idwSamples.length > 0 || roomMetricValue !== null)) ||
           roomMetricValue !== null;
 
+        const openAlertCount =
+          roomAlertCounts?.[room.id] ?? (firingRoomSet.has(room.id) ? 1 : 0);
+        const hasAlert = openAlertCount > 0 || firingRoomSet.has(room.id);
+        const alertSeverity = roomAlertSeverities?.[room.id];
+
+        const primaryValue =
+          idwSamples.length > 0
+            ? idwSamples.reduce((sum, s) => sum + s.value, 0) /
+              idwSamples.length
+            : roomMetricValue;
+
+        const effectiveRoomType =
+          preset?.roomType ?? room.type ?? 'STUDY_ROOM';
+        const metricStatus = getMetricStatusSymbol(
+          layer,
+          primaryValue,
+          effectiveRoomType,
+          room.thresholds
+        );
+        const roomExceedsThreshold =
+          metricStatus.isExceedingThreshold || hasAlert;
+        const isSuppressedNormalRoom =
+          onlyExceedingThreshold && !roomExceedsThreshold;
+
         const isDimmed = Boolean(
-          activeStatusFilter &&
+          (activeStatusFilter &&
             activeStatusFilter !== 'ALL' &&
             roomMatchesFilterMap &&
-            roomMatchesFilterMap[room.id] === false
+            roomMatchesFilterMap[room.id] === false) ||
+            isSuppressedNormalRoom
         );
 
         ctx.save();
         if (isDimmed) {
-          ctx.globalAlpha = FLOORPLAN_INTERACTION_CONFIG.dimmedRoomOpacity;
+          ctx.globalAlpha = isSuppressedNormalRoom
+            ? 0.35
+            : FLOORPLAN_INTERACTION_CONFIG.dimmedRoomOpacity;
         }
 
         renderWeatherDiffusionHeatmap(
@@ -1027,6 +1031,8 @@ export function FloorplanCanvas({
             normalizedPolygon: polygon,
             showBlindspots,
             skipDarkBase: true,
+            onlyExceedingThreshold,
+            roomExceedsThreshold,
           }
         );
 
@@ -1039,19 +1045,11 @@ export function FloorplanCanvas({
           preset &&
           highlightedZoneIds.includes(preset.zoneCode);
 
-        const openAlertCount =
-          roomAlertCounts?.[room.id] ?? (firingRoomSet.has(room.id) ? 1 : 0);
-        const hasAlert = openAlertCount > 0 || firingRoomSet.has(room.id);
-        const alertSeverity = roomAlertSeverities?.[room.id];
-
-        const primaryValue =
-          idwSamples.length > 0
-            ? idwSamples.reduce((sum, s) => sum + s.value, 0) /
-              idwSamples.length
-            : roomMetricValue;
         const wallColor = !hasOnlineTelemetry
           ? '#64748B'
-          : getContinuousMetricColorCss(layer, primaryValue);
+          : isSuppressedNormalRoom
+            ? 'rgba(100, 116, 139, 0.55)'
+            : getContinuousMetricColorCss(layer, primaryValue);
 
         ctx.beginPath();
         pixelVertices.forEach((p, vIdx) => {
@@ -1148,9 +1146,13 @@ export function FloorplanCanvas({
         const metricLabel = hasOnlineTelemetry
           ? formatLayerMetricValue(primaryValue, layer)
           : 'Offline';
+        const statusPrefix =
+          metricStatus.level !== 'NO_DATA' && metricStatus.level !== 'NORMAL'
+            ? `${metricStatus.symbol} `
+            : '';
         const compactText = isSyntheticRoom
-          ? `${shortCode} · ${metricLabel} (MP)`
-          : `${shortCode} · ${metricLabel}`;
+          ? `${statusPrefix}${shortCode} · ${metricLabel} (MP)`
+          : `${statusPrefix}${shortCode} · ${metricLabel}`;
 
         const values = idwSamples.map((s) => s.value);
         const minVal = values.length > 1 ? Math.min(...values) : null;
@@ -1182,8 +1184,8 @@ export function FloorplanCanvas({
           : codeLabel;
         const subLine =
           zoomViewport.isZoomed && spreadText
-            ? `${metricLabel} · ${spreadText}`
-            : metricLabel;
+            ? `${statusPrefix}${metricLabel} · ${spreadText}`
+            : `${statusPrefix}${metricLabel}`;
 
         let effectiveStyle: RoomLabelStyle = lodConfig.roomLabel;
         if (zoomViewport.isZoomed) {
@@ -1564,8 +1566,8 @@ export function FloorplanCanvas({
         return computedBadges;
       });
 
-      // Hovered Room Rich Card
-      if (hoveredRoomId && !hoveredDeviceId && !hoveredBayId) {
+      // Hovered Room Rich Card (fallback only when RoomHoverPopover overlay is disabled)
+      if (!showHoverPopover && hoveredRoomId && !hoveredDeviceId && !hoveredBayId) {
         const hoveredItem = preparedLabels.find(
           (item) => item.roomId === hoveredRoomId
         );
@@ -1646,6 +1648,8 @@ export function FloorplanCanvas({
     roomAlertSeverities,
     activeStatusFilter,
     roomMatchesFilterMap,
+    onlyExceedingThreshold,
+    showHoverPopover,
   ]);
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1925,6 +1929,96 @@ export function FloorplanCanvas({
     toScreenPx,
   ]);
 
+  const hoveredPopoverData = useMemo(() => {
+    if (
+      !showHoverPopover ||
+      !hoveredRoomId ||
+      hoveredDeviceId ||
+      hoveredBayId
+    ) {
+      return null;
+    }
+    const found = enrichedRooms.find((er) => er.room.id === hoveredRoomId);
+    if (!found) return null;
+    const { room, preset, polygon } = found;
+    const centroid = computePolygonCentroid(polygon);
+    const anchor = toScreenPx(centroid);
+
+    const roomDevices = positionedDevices.filter((d) => d.roomId === room.id);
+    const onlineDevs = roomDevices.filter(
+      (d) => d.online || d.connectionState === 'ONLINE'
+    );
+    let primaryVal = extractLayerMetricValue(roomTelemetryMap[room.id], layer);
+    if (onlineDevs.length > 0) {
+      const vals = onlineDevs
+        .map((dev) =>
+          extractLayerMetricValue(
+            resolveDeviceTelemetry(
+              dev,
+              deviceTelemetryMap,
+              roomTelemetryMap,
+              roomDevices.length
+            ),
+            layer
+          )
+        )
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+      if (vals.length > 0) {
+        primaryVal = vals.reduce((s, v) => s + v, 0) / vals.length;
+      }
+    }
+
+    const popoverW = 288;
+    const popoverH = 240;
+    const margin = 8;
+    const gap = 28;
+    const fitsRight = anchor.x + gap + popoverW <= canvasSize.width - margin;
+    const rawLeft = fitsRight
+      ? anchor.x + gap
+      : Math.max(margin, anchor.x - gap - popoverW);
+    const clampedLeft = Math.max(
+      margin,
+      Math.min(Math.max(margin, canvasSize.width - popoverW - margin), rawLeft)
+    );
+    const preferredTop = anchor.y - popoverH * 0.45;
+    const clampedTop = Math.max(
+      margin,
+      Math.min(
+        Math.max(margin, canvasSize.height - popoverH - margin),
+        preferredTop
+      )
+    );
+
+    const openAlertsCount =
+      roomAlertCounts?.[room.id] ?? (firingRoomSet.has(room.id) ? 1 : 0);
+
+    return {
+      room,
+      preset,
+      value: primaryVal,
+      historyValues: roomTelemetryHistoryMap?.[room.id],
+      openAlertsCount,
+      left: clampedLeft,
+      top: clampedTop,
+    };
+  }, [
+    showHoverPopover,
+    hoveredRoomId,
+    hoveredDeviceId,
+    hoveredBayId,
+    enrichedRooms,
+    toScreenPx,
+    positionedDevices,
+    roomTelemetryMap,
+    deviceTelemetryMap,
+    layer,
+    canvasSize.width,
+    canvasSize.height,
+    roomAlertCounts,
+    firingRoomSet,
+    roomTelemetryHistoryMap,
+  ]);
+
   return (
     <div
       ref={containerRef}
@@ -1935,9 +2029,11 @@ export function FloorplanCanvas({
       data-canvas-width={canvasSize.width}
       data-canvas-height={canvasSize.height}
       data-status-filter={activeStatusFilter}
+      data-only-exceeding={onlyExceedingThreshold ? 'true' : 'false'}
       className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1120] shadow-inner"
     >
       <div
+        onMouseLeave={handleCanvasMouseLeave}
         className="relative overflow-hidden"
         style={{ width: canvasSize.width, height: canvasSize.height }}
       >
@@ -2126,7 +2222,6 @@ export function FloorplanCanvas({
           ref={dynamicCanvasRef}
           data-testid="dynamic-heatmap-canvas"
           onMouseMove={handleCanvasMouseMove}
-          onMouseLeave={handleCanvasMouseLeave}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUpOrCancel}
@@ -2296,7 +2391,10 @@ export function FloorplanCanvas({
               roomDeviceCount
             );
             const rawMetricVal = extractLayerMetricValue(devTel, layer);
-            const activeVal = displayValues[device.id] ?? rawMetricVal;
+            const activeVal = rawMetricVal;
+            const pinTransitionCss = isReducedMotionPreferred()
+              ? 'none'
+              : `background-color ${TIMING_CONFIG.transitionDurationMs}ms ease-out, box-shadow ${TIMING_CONFIG.transitionDurationMs}ms ease-out`;
             const colorHex = device.online
               ? getContinuousMetricColorCss(layer, activeVal)
               : '#64748B';
@@ -2410,8 +2508,7 @@ export function FloorplanCanvas({
                             boxShadow: isFocusedDevice
                               ? '0 0 18px #F43F5E, 0 2px 6px rgba(0,0,0,0.75)'
                               : `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
-                            transition:
-                              'background-color 0.4s ease-out, box-shadow 0.4s ease-out',
+                            transition: pinTransitionCss,
                           }
                         : undefined
                     }
@@ -2443,8 +2540,7 @@ export function FloorplanCanvas({
                         ? {
                             backgroundColor: colorHex,
                             boxShadow: `0 0 10px ${colorHex}, 0 1px 3px rgba(0,0,0,0.65)`,
-                            transition:
-                              'background-color 0.4s ease-out, box-shadow 0.4s ease-out',
+                            transition: pinTransitionCss,
                           }
                         : undefined
                     }
@@ -2465,7 +2561,9 @@ export function FloorplanCanvas({
                           : '#64748B',
                       color: '#F8FAFC',
                       whiteSpace: 'nowrap',
-                      transition: 'border-color 0.4s ease-out',
+                      transition: isReducedMotionPreferred()
+                        ? 'none'
+                        : `border-color ${TIMING_CONFIG.transitionDurationMs}ms ease-out`,
                     }}
                   >
                     {isFocusedDevice
@@ -2602,6 +2700,30 @@ export function FloorplanCanvas({
             );
           })}
         </div>
+
+        {/* Hover / Click Quick Room Popover (Value, Threshold Status, Sparkline & SOP) */}
+        {hoveredPopoverData && (
+          <div
+            style={{
+              left: `${hoveredPopoverData.left}px`,
+              top: `${hoveredPopoverData.top}px`,
+            }}
+            className="pointer-events-auto absolute z-20"
+          >
+            <RoomHoverPopover
+              room={hoveredPopoverData.room}
+              layer={layer}
+              value={hoveredPopoverData.value}
+              historyValues={hoveredPopoverData.historyValues}
+              openAlertsCount={hoveredPopoverData.openAlertsCount}
+              preset={hoveredPopoverData.preset}
+              onInspectRoom={(room) => {
+                onSelectRoom(room);
+                setZoomedRoomId(room.id);
+              }}
+            />
+          </div>
+        )}
 
         {/* Minimap Navigation Overlay (Visible when scale > 1.15) */}
         <FloorplanMinimap

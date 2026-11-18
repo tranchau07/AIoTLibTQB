@@ -57,16 +57,13 @@ import {
   formatLayerMetricValue,
 } from '@/features/floorplan/components/FloorplanCanvas';
 import { FloorRoomTree } from '@/features/floorplan/components/FloorRoomTree';
+import { FloorplanLegend } from '@/features/floorplan/components/FloorplanLegend';
 import {
   ManagerSummaryStrip,
   computeBuildingSummaryMetrics,
 } from '@/features/floorplan/components/ManagerSummaryStrip';
 import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
-import {
-  WEATHER_PALETTES,
-  computeRoomBlindspotRatio,
-  getPaletteCssGradient,
-} from '@/lib/floorplan/weatherPalette';
+import { computeRoomBlindspotRatio } from '@/lib/floorplan/weatherPalette';
 import type {
   AlertResponse,
   AlertSeverity,
@@ -93,8 +90,8 @@ const LAYER_OPTIONS: Array<{
 }> = [
   {
     key: 'comfortScore',
-    label: 'Điểm tiện nghi',
-    shortLabel: 'Tiện nghi',
+    label: 'Điểm tiện nghi (LCS)',
+    shortLabel: 'Điểm tiện nghi (LCS)',
     unitLabel: '0–100',
   },
   {
@@ -163,6 +160,12 @@ export default function FloorplanPage() {
   const [selectedBayId, setSelectedBayId] = useState<string | null>(null);
   const [studyFilter, setStudyFilter] = useState<StudyFilterMode>('quiet');
   const [statusFilter, setStatusFilter] = useState<ManagerStatusFilter>('ALL');
+  const [onlyExceedingThreshold, setOnlyExceedingThreshold] =
+    useState<boolean>(false);
+  const [telemetryHistoryState, setTelemetryHistoryState] = useState<
+    Record<string, number[]>
+  >({});
+  const lastHistorySigRef = useRef<Map<string, string>>(new Map());
   const [showBlindspots, setShowBlindspots] = useState<boolean>(false);
   const [onlyAssignedZones, setOnlyAssignedZones] = useState<boolean>(false);
   const [includeTqbArchitecturePresets, setIncludeTqbArchitecturePresets] =
@@ -457,6 +460,16 @@ export default function FloorplanPage() {
     })),
   });
 
+  const realRoomTelemetrySignature = realBuildingRooms
+    .map((room, index) => {
+      const q = roomLatestQueries[index];
+      const d = q?.data;
+      return d
+        ? `${room.id}:${q?.dataUpdatedAt ?? 0}:${d.id}:${d.timestamp}:${d.comfortScore?.overall ?? ''}:${d.environment?.temperature ?? ''}:${d.environment?.humidity ?? ''}:${d.acoustics?.noiseAvg ?? ''}:${d.airQuality?.pm2_5 ?? ''}:${d.environment?.lux ?? ''}:${d.wifiRssi ?? ''}`
+        : `${room.id}:null`;
+    })
+    .join('|');
+
   const buildingTelemetryMap = useMemo(() => {
     const map: Record<string, TelemetryResponse | null | undefined> = {};
     const realMap = new Map<string, TelemetryResponse | null>();
@@ -480,7 +493,8 @@ export default function FloorplanPage() {
       }
     });
     return map;
-  }, [allBuildingRooms, realBuildingRooms, roomLatestQueries]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allBuildingRooms, realBuildingRooms, realRoomTelemetrySignature]);
 
   const roomTelemetryMap = useMemo(() => {
     const map: Record<string, TelemetryResponse | null | undefined> = {};
@@ -495,6 +509,53 @@ export default function FloorplanPage() {
     });
     return map;
   }, [floorRooms, buildingTelemetryMap]);
+
+  useEffect(() => {
+    const updates: Array<{ key: string; val: number }> = [];
+    for (const room of floorRooms) {
+      const tel = roomTelemetryMap[room.id];
+      const val = extractLayerMetricValue(tel, selectedLayer);
+      if (typeof val !== 'number' || !Number.isFinite(val)) continue;
+      const key = `${room.id}:${selectedLayer}`;
+      const isSynthetic =
+        room.id.startsWith('PRESET_') || Boolean(tel?.isSynthetic);
+      const sig = isSynthetic
+        ? `SYNTH|${val.toFixed(2)}`
+        : `${tel?.timestamp ?? ''}|${val.toFixed(2)}`;
+      if (lastHistorySigRef.current.get(key) !== sig) {
+        lastHistorySigRef.current.set(key, sig);
+        updates.push({ key, val });
+      }
+    }
+    if (updates.length === 0) return;
+
+    setTelemetryHistoryState((prev) => {
+      const next = { ...prev };
+      for (const { key, val } of updates) {
+        const series = next[key] ? [...next[key], val] : [val];
+        next[key] = series.slice(-8);
+      }
+      return next;
+    });
+  }, [floorRooms, roomTelemetryMap, selectedLayer]);
+
+  const roomTelemetryHistoryMap = useMemo(() => {
+    const map: Record<string, readonly number[]> = {};
+    for (const room of floorRooms) {
+      const key = `${room.id}:${selectedLayer}`;
+      const stored = telemetryHistoryState[key];
+      const latestVal = extractLayerMetricValue(
+        roomTelemetryMap[room.id],
+        selectedLayer
+      );
+      if (stored && stored.length > 0) {
+        map[room.id] = stored;
+      } else if (typeof latestVal === 'number' && Number.isFinite(latestVal)) {
+        map[room.id] = [latestVal];
+      }
+    }
+    return map;
+  }, [floorRooms, roomTelemetryMap, selectedLayer, telemetryHistoryState]);
 
   const buildingSummaryMetrics = useMemo(
     () =>
@@ -557,6 +618,16 @@ export default function FloorplanPage() {
     return map;
   }, [visibleFloorRooms, roomTelemetryMap, roomOpenAlertsMap, statusFilter]);
 
+  const realDeviceTelemetrySignature = realFloorDevices
+    .map((device, index) => {
+      const q = deviceLatestQueries[index];
+      const d = q?.data;
+      return d
+        ? `${device.id}:${q?.dataUpdatedAt ?? 0}:${d.id}:${d.timestamp}`
+        : `${device.id}:null`;
+    })
+    .join('|');
+
   const deviceTelemetryMap = useMemo(() => {
     const map: Record<string, TelemetryResponse | null | undefined> = {};
     realFloorDevices.forEach((device, index) => {
@@ -569,7 +640,8 @@ export default function FloorplanPage() {
       }
     });
     return map;
-  }, [realFloorDevices, floorDevices, deviceLatestQueries, roomTelemetryMap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [realFloorDevices, floorDevices, realDeviceTelemetrySignature, roomTelemetryMap]);
 
   const unconfiguredRooms = useMemo(
     () =>
@@ -1072,11 +1144,13 @@ export default function FloorplanPage() {
               <button
                 key={opt.key}
                 type="button"
+                data-testid={`layer-btn-${opt.key}`}
+                aria-pressed={selectedLayer === opt.key}
                 onClick={() => setSelectedLayer(opt.key)}
                 className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                   selectedLayer === opt.key
                     ? 'bg-slate-900 text-white'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
                 {opt.shortLabel}
@@ -1086,6 +1160,24 @@ export default function FloorplanPage() {
 
           <span className="hidden h-4 w-px bg-slate-200 sm:inline-block" aria-hidden="true" />
 
+          {/* ISA-101 Deviation Mode: Only Exceeding Threshold */}
+          {!isStudentView && (
+            <button
+              type="button"
+              data-testid="only-exceeding-toggle"
+              aria-pressed={onlyExceedingThreshold}
+              onClick={() => setOnlyExceedingThreshold((v) => !v)}
+              className={`rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${
+                onlyExceedingThreshold
+                  ? 'border-amber-700 bg-amber-950 text-amber-50'
+                  : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+              }`}
+              title="Làm dịu các phòng đạt chuẩn (ISA-101), chỉ làm nổi bật vùng vượt ngưỡng"
+            >
+              {FLOORPLAN_I18N_VI.controls.onlyExceedingThreshold}
+            </button>
+          )}
+
           {/* Toggle Full TQB Architectural Rooms */}
           <button
             type="button"
@@ -1093,7 +1185,7 @@ export default function FloorplanPage() {
             className={`rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${
               includeTqbArchitecturePresets
                 ? 'border-slate-900 bg-slate-900 text-white'
-                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
             }`}
             title="Hiển thị đầy đủ các phòng từ bản vẽ CAD Thư viện Tạ Quang Bửu"
           >
@@ -1525,6 +1617,8 @@ export default function FloorplanPage() {
                   roomAlertSeverities={roomAlertSeverities}
                   activeStatusFilter={statusFilter}
                   roomMatchesFilterMap={roomMatchesFilterMap}
+                  onlyExceedingThreshold={onlyExceedingThreshold}
+                  roomTelemetryHistoryMap={roomTelemetryHistoryMap}
                   isFullscreen={isFullscreen}
                   onToggleFullscreen={handleToggleFullscreen}
                   maxViewportHeightPx={maxViewportHeightPx}
@@ -1934,27 +2028,12 @@ export default function FloorplanPage() {
             </div>
           </div>
 
-          {/* Compact Color Scale Legend */}
-          <div className="card flex flex-wrap items-center gap-3 px-3.5 py-2 text-xs">
-            <span className="shrink-0 font-medium text-slate-700">
-              {LAYER_OPTIONS.find((l) => l.key === selectedLayer)?.shortLabel}{' '}
-              ({LAYER_OPTIONS.find((l) => l.key === selectedLayer)?.unitLabel})
-            </span>
-            <div className="min-w-[200px] flex-1">
-              <div
-                className="h-2.5 w-full rounded-full border border-slate-200"
-                style={{
-                  background: getPaletteCssGradient(selectedLayer),
-                }}
-                aria-hidden="true"
-              />
-              <div className="mt-1 flex justify-between font-mono text-[10px] text-slate-500">
-                {WEATHER_PALETTES[selectedLayer]?.map((stop, idx) => (
-                  <span key={idx}>{stop.label}</span>
-                ))}
-              </div>
-            </div>
-          </div>
+          {/* ISA-101 Color Scale & Geometric Status Legend */}
+          <FloorplanLegend
+            layer={selectedLayer}
+            onlyExceedingThreshold={onlyExceedingThreshold}
+            activeRoomTypes={visibleFloorRooms.map((r) => r.type ?? 'STUDY_ROOM')}
+          />
 
           {/* Unconfigured Rooms Callout (Collapsed by default) */}
           {unconfiguredRooms.length > 0 && !isStudentView && (
