@@ -249,6 +249,7 @@ export function computeRoomBlindspotRatio(
 export interface RenderHeatmapOptions {
   readonly normalizedPolygon?: readonly Point2D[];
   readonly showBlindspots?: boolean;
+  readonly skipDarkBase?: boolean;
 }
 
 let sharedOffscreenCanvas: HTMLCanvasElement | null = null;
@@ -305,31 +306,33 @@ export function renderWeatherDiffusionHeatmap(
   ctx.closePath();
   ctx.clip();
 
-  // Semi-translucent dark background within room so the CAD architectural underlay remains visible
-  ctx.fillStyle = 'rgba(11, 17, 32, 0.72)';
-  ctx.fillRect(minX, minY, roomW, roomH);
+  if (!options?.skipDarkBase) {
+    // Semi-translucent dark background within room so the CAD architectural underlay remains visible
+    ctx.fillStyle = 'rgba(11, 17, 32, 0.72)';
+    ctx.fillRect(minX, minY, roomW, roomH);
 
-  // Subtle architectural desk tile grid inside room
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
-  ctx.lineWidth = 1;
-  const tileStep = 24;
-  for (let tx = minX; tx <= maxX; tx += tileStep) {
-    ctx.beginPath();
-    ctx.moveTo(tx, minY);
-    ctx.lineTo(tx, maxY);
-    ctx.stroke();
-  }
-  for (let ty = minY; ty <= maxY; ty += tileStep) {
-    ctx.beginPath();
-    ctx.moveTo(minX, ty);
-    ctx.lineTo(maxX, ty);
-    ctx.stroke();
+    // Subtle architectural desk tile grid inside room
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+    ctx.lineWidth = 1;
+    const tileStep = 24;
+    for (let tx = minX; tx <= maxX; tx += tileStep) {
+      ctx.beginPath();
+      ctx.moveTo(tx, minY);
+      ctx.lineTo(tx, maxY);
+      ctx.stroke();
+    }
+    for (let ty = minY; ty <= maxY; ty += tileStep) {
+      ctx.beginPath();
+      ctx.moveTo(minX, ty);
+      ctx.lineTo(maxX, ty);
+      ctx.stroke();
+    }
   }
 
   // Case A: No online devices and no telemetry -> neutral dark slate
   if (idwSamples.length === 0 && fallbackValue === null) {
     ctx.fillStyle = options?.showBlindspots ? 'rgba(245, 158, 11, 0.28)' : '#64748B';
-    ctx.globalAlpha = options?.showBlindspots ? 0.55 : 0.25;
+    ctx.globalAlpha = options?.showBlindspots ? 0.55 : 0.22;
     ctx.fillRect(minX, minY, roomW, roomH);
     ctx.restore();
     return;

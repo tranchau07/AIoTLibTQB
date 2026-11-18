@@ -401,6 +401,19 @@ export type AlertType =
 
 export type AlertStatus = 'PENDING' | 'FIRING' | 'ACKNOWLEDGED' | 'RESOLVED';
 
+export type AlertWorkflowStatus =
+  | 'NEW'
+  | 'ACKNOWLEDGED'
+  | 'IN_PROGRESS'
+  | 'RESOLVED';
+
+export interface AlertWorkflowUpdateRequest {
+  workflowStatus?: AlertWorkflowStatus | null;
+  assignedTo?: string | null;
+  handlingNote?: string | null;
+  snoozeMinutes?: number | null;
+}
+
 export type AlertSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface AlertResponse {
@@ -415,6 +428,10 @@ export interface AlertResponse {
   severity?: AlertSeverity;
   severityRank?: number;
   status: AlertStatus;
+  workflowStatus?: AlertWorkflowStatus | null;
+  assignedTo?: string | null;
+  handlingNote?: string | null;
+  inProgressAt?: string | null;
   currentValue: number | null;
   threshold: number | null;
   message: string;
