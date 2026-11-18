@@ -68,7 +68,12 @@ import {
   updateAnimatedMetricState,
   type AnimatedMetricState,
 } from '@/lib/floorplan/metricTransition';
+import {
+  evaluateRoomReliability,
+  type RoomReliabilitySummary,
+} from '@/lib/floorplan/reliability';
 import { formatMetrics } from '@/lib/format/metrics';
+import { isTelemetryStale } from '@/lib/format/datetime';
 import { FLOORPLAN_I18N_VI } from '@/messages/vi';
 import {
   FloorplanMinimap,
@@ -166,6 +171,10 @@ export interface FloorplanCanvasProps {
   onSelectBay?: (bay: AnonymousMicroZone, room: RoomResponse) => void;
   /** Hiển thị vùng mù cảm biến (fieldPresence < 0.25) */
   showBlindspots?: boolean;
+  /** Lớp Độ tin cậy dữ liệu cho Quản lý (Đo trực tiếp / Nội suy / Vùng mù / Dữ liệu trễ) */
+  showReliabilityLayer?: boolean;
+  /** Tóm tắt độ tin cậy dữ liệu theo roomId */
+  roomReliabilityMap?: Record<string, RoomReliabilitySummary>;
   /** Hiển thị lớp chẩn đoán kỹ thuật (chênh nhiệt cục bộ ΔT, RSSI, % vùng mù) */
   showTechOverlay?: boolean;
   /** Danh sách mã Zone phụ trách của ZONE_MANAGER để làm nổi bật */
@@ -220,6 +229,8 @@ export function FloorplanCanvas({
   selectedBayId,
   onSelectBay,
   showBlindspots = false,
+  showReliabilityLayer = false,
+  roomReliabilityMap,
   showTechOverlay = false,
   highlightedZoneIds,
   firingRoomIds = [],
@@ -929,6 +940,17 @@ export function FloorplanCanvas({
         );
         const roomLatest = roomTelemetryMap[room.id];
         const roomMetricValue = extractLayerMetricValue(roomLatest, layer);
+        const roomReliability = roomReliabilityMap?.[room.id];
+        const isSyntheticRoom =
+          room.id.startsWith('PRESET_') || Boolean(roomLatest?.isSynthetic);
+        const roomIsStale = Boolean(
+          roomReliability
+            ? roomReliability.state === 'STALE'
+            : isTelemetryStale(roomLatest?.timestamp, Date.now(), isSyntheticRoom)
+        );
+        const roomIsBlindspot =
+          roomReliability?.state === 'BLINDSPOT' ||
+          (roomDevices.length > 0 && onlineDevices.length === 0);
 
         const idwSamples: IdwSamplePoint[] = [];
         for (const dev of onlineDevices) {
@@ -958,7 +980,8 @@ export function FloorplanCanvas({
           idwSamples.length === 0 &&
           roomMetricValue !== null &&
           roomDevices.length === 0 &&
-          microZones.length > 0
+          microZones.length > 0 &&
+          !(showReliabilityLayer && isSyntheticRoom)
         ) {
           for (const bay of microZones) {
             const bayVal = bay.metrics[layer];
@@ -1030,11 +1053,45 @@ export function FloorplanCanvas({
           {
             normalizedPolygon: polygon,
             showBlindspots,
+            reliabilityMode: showReliabilityLayer,
+            roomIsStale,
+            roomIsReferencePreset: isSyntheticRoom,
+            roomIsBlindspot,
             skipDarkBase: true,
             onlyExceedingThreshold,
             roomExceedsThreshold,
           }
         );
+
+        // Draw Measured Direct-Coverage Concentric Rings around ONLINE devices when Reliability Layer is active
+        if (showReliabilityLayer && !roomIsStale && onlineDevices.length > 0) {
+          ctx.save();
+          const scaleFactor = Math.sqrt(zoomViewport.scale);
+          for (const dev of onlineDevices) {
+            if (typeof dev.posX !== 'number' || typeof dev.posY !== 'number') {
+              continue;
+            }
+            const devPx = normalizedToPixel(
+              { x: dev.posX, y: dev.posY },
+              width,
+              height
+            );
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1.2 / scaleFactor;
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.72)';
+            ctx.beginPath();
+            ctx.arc(devPx.x, devPx.y, 11 / scaleFactor, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.setLineDash([2, 2]);
+            ctx.strokeStyle = 'rgba(186, 230, 253, 0.45)';
+            ctx.beginPath();
+            ctx.arc(devPx.x, devPx.y, 18 / scaleFactor, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
 
         // Draw Architectural Wall Stroke, BTCT Columns & Door
         const isSelected = room.id === selectedRoomId;
@@ -1047,9 +1104,11 @@ export function FloorplanCanvas({
 
         const wallColor = !hasOnlineTelemetry
           ? '#64748B'
-          : isSuppressedNormalRoom
-            ? 'rgba(100, 116, 139, 0.55)'
-            : getContinuousMetricColorCss(layer, primaryValue);
+          : roomIsStale
+            ? '#94A3B8'
+            : isSuppressedNormalRoom
+              ? 'rgba(100, 116, 139, 0.55)'
+              : getContinuousMetricColorCss(layer, primaryValue);
 
         ctx.beginPath();
         pixelVertices.forEach((p, vIdx) => {
@@ -1058,17 +1117,28 @@ export function FloorplanCanvas({
         });
         ctx.closePath();
 
+        const useDashedReliabilityBorder =
+          roomIsStale ||
+          (showReliabilityLayer &&
+            (roomReliability?.state === 'BLINDSPOT' ||
+              roomReliability?.state === 'INTERPOLATED' ||
+              roomIsBlindspot));
+
         if (isSelected || isZoomTarget) {
+          ctx.setLineDash([]);
           ctx.lineWidth = 3.2 / Math.sqrt(zoomViewport.scale);
           ctx.strokeStyle = '#38BDF8';
         } else if (isZoneHighlighted) {
+          ctx.setLineDash([]);
           ctx.lineWidth = 2.6 / Math.sqrt(zoomViewport.scale);
           ctx.strokeStyle = '#F59E0B';
         } else {
+          ctx.setLineDash(useDashedReliabilityBorder ? [5, 4] : []);
           ctx.lineWidth = 1.8 / Math.sqrt(zoomViewport.scale);
           ctx.strokeStyle = wallColor;
         }
         ctx.stroke();
+        ctx.setLineDash([]);
 
         if (hasAlert) {
           alertingRoomOutlines.push({
@@ -1139,8 +1209,6 @@ export function FloorplanCanvas({
           Math.round(Math.abs(computePolygonSignedArea(polygon)) * 4347.2);
         const isSmallGroupRoom = areaM2 < 65;
 
-        const isSyntheticRoom =
-          room.id.startsWith('PRESET_') || Boolean(roomLatest?.isSynthetic);
         const codeLabel = preset?.code ?? room.code;
         const shortCode = codeLabel.replace(/^TQB_/, 'P.');
         const metricLabel = hasOnlineTelemetry
@@ -1150,9 +1218,11 @@ export function FloorplanCanvas({
           metricStatus.level !== 'NO_DATA' && metricStatus.level !== 'NORMAL'
             ? `${metricStatus.symbol} `
             : '';
+        const stalePrefix =
+          roomIsStale && (showReliabilityLayer || !isSyntheticRoom) ? '⌛ ' : '';
         const compactText = isSyntheticRoom
-          ? `${statusPrefix}${shortCode} · ${metricLabel} (MP)`
-          : `${statusPrefix}${shortCode} · ${metricLabel}`;
+          ? `${stalePrefix}${statusPrefix}${shortCode} · ${metricLabel} (MP)`
+          : `${stalePrefix}${statusPrefix}${shortCode} · ${metricLabel}`;
 
         const values = idwSamples.map((s) => s.value);
         const minVal = values.length > 1 ? Math.min(...values) : null;
@@ -1184,8 +1254,8 @@ export function FloorplanCanvas({
           : codeLabel;
         const subLine =
           zoomViewport.isZoomed && spreadText
-            ? `${statusPrefix}${metricLabel} · ${spreadText}`
-            : `${statusPrefix}${metricLabel}`;
+            ? `${stalePrefix}${statusPrefix}${metricLabel} · ${spreadText}`
+            : `${stalePrefix}${statusPrefix}${metricLabel}`;
 
         let effectiveStyle: RoomLabelStyle = lodConfig.roomLabel;
         if (zoomViewport.isZoomed) {
@@ -1640,6 +1710,8 @@ export function FloorplanCanvas({
     labelDensity,
     lodConfig,
     showBlindspots,
+    showReliabilityLayer,
+    roomReliabilityMap,
     showTechOverlay,
     zoomViewport,
     highlightedZoneIds,
@@ -1991,6 +2063,13 @@ export function FloorplanCanvas({
 
     const openAlertsCount =
       roomAlertCounts?.[room.id] ?? (firingRoomSet.has(room.id) ? 1 : 0);
+    const reliability =
+      roomReliabilityMap?.[room.id] ??
+      evaluateRoomReliability({
+        room,
+        telemetry: roomTelemetryMap[room.id],
+        devices: roomDevices,
+      });
 
     return {
       room,
@@ -1998,6 +2077,7 @@ export function FloorplanCanvas({
       value: primaryVal,
       historyValues: roomTelemetryHistoryMap?.[room.id],
       openAlertsCount,
+      reliability,
       left: clampedLeft,
       top: clampedTop,
     };
@@ -2017,6 +2097,7 @@ export function FloorplanCanvas({
     roomAlertCounts,
     firingRoomSet,
     roomTelemetryHistoryMap,
+    roomReliabilityMap,
   ]);
 
   return (
@@ -2030,6 +2111,7 @@ export function FloorplanCanvas({
       data-canvas-height={canvasSize.height}
       data-status-filter={activeStatusFilter}
       data-only-exceeding={onlyExceedingThreshold ? 'true' : 'false'}
+      data-reliability-layer={showReliabilityLayer ? 'true' : 'false'}
       className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1120] shadow-inner"
     >
       <div
@@ -2717,6 +2799,7 @@ export function FloorplanCanvas({
               historyValues={hoveredPopoverData.historyValues}
               openAlertsCount={hoveredPopoverData.openAlertsCount}
               preset={hoveredPopoverData.preset}
+              reliability={hoveredPopoverData.reliability}
               onInspectRoom={(room) => {
                 onSelectRoom(room);
                 setZoomedRoomId(room.id);

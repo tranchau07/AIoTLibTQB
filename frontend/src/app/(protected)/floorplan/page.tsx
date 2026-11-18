@@ -63,6 +63,11 @@ import {
   computeBuildingSummaryMetrics,
 } from '@/features/floorplan/components/ManagerSummaryStrip';
 import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
+import { computeVisualPolygonCenter } from '@/lib/floorplan/polygon';
+import {
+  evaluateRoomReliability,
+  type RoomReliabilitySummary,
+} from '@/lib/floorplan/reliability';
 import { computeRoomBlindspotRatio } from '@/lib/floorplan/weatherPalette';
 import type {
   AlertResponse,
@@ -167,6 +172,8 @@ export default function FloorplanPage() {
   >({});
   const lastHistorySigRef = useRef<Map<string, string>>(new Map());
   const [showBlindspots, setShowBlindspots] = useState<boolean>(false);
+  const [showReliabilityLayer, setShowReliabilityLayer] =
+    useState<boolean>(false);
   const [onlyAssignedZones, setOnlyAssignedZones] = useState<boolean>(false);
   const [includeTqbArchitecturePresets, setIncludeTqbArchitecturePresets] =
     useState<boolean>(true);
@@ -651,6 +658,83 @@ export default function FloorplanPage() {
     [backendFloorRooms]
   );
 
+  const roomReliabilityMap = useMemo(() => {
+    const nowMs = Date.now();
+    const map: Record<string, RoomReliabilitySummary> = {};
+    allBuildingRooms.forEach((room, idx) => {
+      const tel = buildingTelemetryMap[room.id];
+      const devsFromApi = allDevices.filter((d) => d.roomId === room.id);
+      const roomDevs =
+        devsFromApi.length > 0
+          ? devsFromApi
+          : floorDevices.filter((d) => d.roomId === room.id);
+      const onlineDevs = roomDevs.filter(
+        (d) => d.online || d.connectionState === 'ONLINE'
+      );
+      const polygon = resolveRoomPolygon(room, idx);
+      let blindspotRatio: number | undefined;
+      if (roomDevs.length > 0 && onlineDevs.length === 0) {
+        blindspotRatio = 1;
+      } else if (onlineDevs.length > 0 && polygon && polygon.length >= 3) {
+        const centroid = computeVisualPolygonCenter(polygon);
+        const samples = onlineDevs.map((d, dIdx) => ({
+          x:
+            typeof d.posX === 'number'
+              ? d.posX
+              : Math.max(
+                  0.02,
+                  Math.min(
+                    0.98,
+                    centroid.x +
+                      (dIdx === 0 ? 0 : Math.cos(dIdx * 1.25) * 0.022)
+                  )
+                ),
+          y:
+            typeof d.posY === 'number'
+              ? d.posY
+              : Math.max(
+                  0.02,
+                  Math.min(
+                    0.98,
+                    centroid.y +
+                      (dIdx === 0 ? 0 : Math.sin(dIdx * 1.25) * 0.022)
+                  )
+                ),
+          value: 1,
+          online: true,
+        }));
+        blindspotRatio = computeRoomBlindspotRatio(
+          polygon,
+          samples
+        ).blindspotRatio;
+      }
+      map[room.id] = evaluateRoomReliability({
+        room,
+        telemetry: tel,
+        devices: roomDevs,
+        blindspotRatio,
+        nowMs,
+      });
+    });
+    return map;
+  }, [allBuildingRooms, buildingTelemetryMap, allDevices, floorDevices]);
+
+  const offlineFloorDevices = useMemo(
+    () =>
+      floorDevices.filter(
+        (d) => !d.online && d.connectionState !== 'ONLINE'
+      ),
+    [floorDevices]
+  );
+
+  const staleFloorRooms = useMemo(
+    () =>
+      visibleFloorRooms.filter(
+        (r) => roomReliabilityMap[r.id]?.state === 'STALE'
+      ),
+    [visibleFloorRooms, roomReliabilityMap]
+  );
+
   const selectedRoom: RoomResponse | null = useMemo(
     () => floorRooms.find((r) => r.id === selectedRoomId) ?? null,
     [floorRooms, selectedRoomId]
@@ -675,6 +759,10 @@ export default function FloorplanPage() {
 
   const selectedRoomTelemetry = selectedRoom
     ? roomTelemetryMap[selectedRoom.id]
+    : null;
+
+  const selectedRoomReliability = selectedRoom
+    ? roomReliabilityMap[selectedRoom.id] ?? null
     : null;
 
   const selectedRoomMicroZones = useMemo(
@@ -1178,6 +1266,24 @@ export default function FloorplanPage() {
             </button>
           )}
 
+          {/* Data Reliability Overlay Toggle (Measured / Interpolated / Blindspot / Stale) */}
+          {!isStudentView && (
+            <button
+              type="button"
+              data-testid="reliability-toggle-btn"
+              aria-pressed={showReliabilityLayer}
+              onClick={() => setShowReliabilityLayer((v) => !v)}
+              className={`rounded-lg border px-2 py-1 text-xs font-medium transition-colors ${
+                showReliabilityLayer
+                  ? 'border-sky-700 bg-sky-900 text-sky-50'
+                  : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+              }`}
+              title="Phân biệt vùng đo trực tiếp, ước lượng nội suy, vùng mù và dữ liệu trễ"
+            >
+              {FLOORPLAN_I18N_VI.controls.reliabilityLayer}
+            </button>
+          )}
+
           {/* Toggle Full TQB Architectural Rooms */}
           <button
             type="button"
@@ -1482,11 +1588,50 @@ export default function FloorplanPage() {
       {!stompConnected && (
         <div
           role="status"
+          data-testid="ws-reconnecting-banner"
           className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900"
         >
           {UI_TEXT_VI.wsReconnectingBanner}
         </div>
       )}
+
+      {/* Silent Sensor & Stale Telemetry Banner */}
+      {!isStudentView &&
+        (offlineFloorDevices.length > 0 || staleFloorRooms.length > 0) && (
+          <div
+            role="status"
+            data-testid="silent-sensor-banner"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+          >
+            <span>
+              <strong>Lưu ý độ tin cậy:</strong>{' '}
+              {offlineFloorDevices.length > 0 &&
+                `${offlineFloorDevices.length} cảm biến đang im lặng/mất kết nối`}
+              {offlineFloorDevices.length > 0 &&
+                staleFloorRooms.length > 0 &&
+                ' · '}
+              {staleFloorRooms.length > 0 &&
+                `${staleFloorRooms.length} phòng dữ liệu trễ > 5 phút`}
+            </span>
+            <button
+              type="button"
+              data-testid="silent-sensor-inspect-btn"
+              onClick={() => {
+                setShowReliabilityLayer(true);
+                setShowBlindspots(true);
+                const targetRoomId =
+                  offlineFloorDevices[0]?.roomId ?? staleFloorRooms[0]?.id;
+                if (targetRoomId) {
+                  setSelectedRoomId(targetRoomId);
+                  setZoomedRoomId(targetRoomId);
+                }
+              }}
+              className="rounded-md border border-amber-700 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-950 hover:bg-amber-100"
+            >
+              Xem trên bản đồ
+            </button>
+          </div>
+        )}
 
       {/* Error State */}
       {roomsQuery.isError && (
@@ -1602,6 +1747,8 @@ export default function FloorplanPage() {
                     setSelectedBayId(bay.bayId);
                   }}
                   showBlindspots={showBlindspots}
+                  showReliabilityLayer={showReliabilityLayer}
+                  roomReliabilityMap={roomReliabilityMap}
                   showTechOverlay={isMaintenanceView}
                   defaultLabelDensity={
                     isMaintenanceView ? 'detailed' : 'balanced'
@@ -1643,9 +1790,9 @@ export default function FloorplanPage() {
                         selectedRoomTelemetry?.isSynthetic) && (
                         <span
                           className="rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-amber-800"
-                          title="Dữ liệu mô phỏng kiến trúc khi chưa gắn cảm biến thật"
+                          title="Dữ liệu tham khảo kiến trúc khi chưa gắn cảm biến thật"
                         >
-                          Mô phỏng
+                          Tham khảo
                         </span>
                       )}
                       {isTelemetryStale(
@@ -1658,7 +1805,7 @@ export default function FloorplanPage() {
                           className="rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium text-slate-600"
                           title="Dữ liệu đo đã quá 5 phút chưa cập nhật mới"
                         >
-                          Dữ liệu cũ
+                          Dữ liệu trễ
                         </span>
                       )}
                       <span>·</span>
@@ -1725,6 +1872,44 @@ export default function FloorplanPage() {
                     <span className="text-2xs text-slate-400">/100</span>
                   </div>
                 </div>
+
+                {/* Manager-Friendly Data Reliability Summary */}
+                {!isStudentView && selectedRoomReliability && (
+                  <div
+                    data-testid="drawer-reliability-card"
+                    title={selectedRoomReliability.tooltipText}
+                    className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-800">
+                        Độ tin cậy số liệu
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded bg-slate-200/80 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-800">
+                          {selectedRoomReliability.qualityLabel}
+                        </span>
+                        <span className="font-semibold text-slate-900">
+                          {selectedRoomReliability.badgeText}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-snug text-slate-600">
+                      {selectedRoomReliability.tooltipText}
+                    </p>
+                    <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+                      <span>
+                        Cập nhật: {selectedRoomReliability.relativeTimeText}
+                      </span>
+                      {selectedRoomReliability.totalDeviceCount > 0 && (
+                        <span>
+                          Trạm hoạt động:{' '}
+                          {selectedRoomReliability.onlineDeviceCount}/
+                          {selectedRoomReliability.totalDeviceCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Compact 6 Metrics Grid */}
                 <div className="grid grid-cols-3 gap-2 text-xs">
@@ -2033,6 +2218,7 @@ export default function FloorplanPage() {
             layer={selectedLayer}
             onlyExceedingThreshold={onlyExceedingThreshold}
             activeRoomTypes={visibleFloorRooms.map((r) => r.type ?? 'STUDY_ROOM')}
+            showReliabilityKey={showReliabilityLayer}
           />
 
           {/* Unconfigured Rooms Callout (Collapsed by default) */}

@@ -1,3 +1,4 @@
+import { TIMING_CONFIG } from '@/config/floorplan-hmi.config';
 import { UI_TEXT_VI } from '@/messages/vi';
 
 const VN_TIMEZONE = 'Asia/Ho_Chi_Minh';
@@ -43,21 +44,23 @@ export function formatRelativeTimeVi(
   return `${diffDays} ngày trước`;
 }
 
-export const STALE_TELEMETRY_MS = 5 * 60 * 1000;
+export const STALE_TELEMETRY_MS = TIMING_CONFIG.staleTelemetryMs;
 
 /**
- * Kiểm tra xem bản tin Telemetry đã cũ quá 5 phút hay chưa (> 300.000 ms).
+ * Kiểm tra xem bản tin Telemetry đã cũ quá ngưỡng cấu hình hay chưa (mặc định TIMING_CONFIG.staleTelemetryMs = 5 phút).
  * Bỏ qua dữ liệu giả lập (`isSynthetic === true`).
  */
 export function isTelemetryStale(
   isoString: string | null | undefined,
   nowMs: number = Date.now(),
-  isSynthetic?: boolean
+  isSynthetic?: boolean,
+  staleTelemetryMs: number = TIMING_CONFIG.staleTelemetryMs
 ): boolean {
   if (isSynthetic) return false;
   if (!isoString) return false;
   const targetMs = new Date(isoString).getTime();
   if (Number.isNaN(targetMs)) return false;
-  return nowMs - targetMs > STALE_TELEMETRY_MS;
+  return nowMs - targetMs > staleTelemetryMs;
 }
+
 

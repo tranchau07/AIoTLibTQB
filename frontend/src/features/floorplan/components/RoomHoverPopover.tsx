@@ -4,6 +4,7 @@ import React from 'react';
 import { ArrowUpRight, Sparkles } from 'lucide-react';
 import type { HeatmapLayerMetric } from '@/config/thresholds';
 import { formatLayerMetricValue } from '@/features/floorplan/components/FloorplanCanvas';
+import type { RoomReliabilitySummary } from '@/lib/floorplan/reliability';
 import {
   METRIC_LAYER_META,
   getMetricStatusSymbol,
@@ -17,6 +18,7 @@ export interface RoomHoverPopoverProps {
   historyValues?: readonly number[];
   openAlertsCount?: number;
   preset?: { areaM2?: number; roomType?: RoomType } | null;
+  reliability?: RoomReliabilitySummary | null;
   onInspectRoom?: (room: RoomResponse) => void;
   className?: string;
 }
@@ -72,6 +74,7 @@ export function RoomHoverPopover({
   historyValues,
   openAlertsCount = 0,
   preset,
+  reliability,
   onInspectRoom,
   className = '',
 }: RoomHoverPopoverProps) {
@@ -183,6 +186,27 @@ export function RoomHoverPopover({
           )}
         </svg>
       </div>
+
+      {/* Data Reliability Summary (Manager-friendly wording) */}
+      {reliability && (
+        <div
+          data-testid="popover-reliability"
+          className="mt-2 rounded-lg border border-slate-800 bg-slate-900/80 px-2 py-1.5 text-[11px]"
+          title={reliability.tooltipText}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-slate-200">
+              Độ tin cậy: {reliability.badgeText}
+            </span>
+            <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-sky-200">
+              {reliability.qualityLabel}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[10px] leading-snug text-slate-300">
+            {reliability.tooltipText}
+          </p>
+        </div>
+      )}
 
       {/* SOP Recommendation & Quick Action */}
       <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900/75 p-2 text-[11px] text-slate-200">

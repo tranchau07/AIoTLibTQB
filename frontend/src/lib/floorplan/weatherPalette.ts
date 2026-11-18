@@ -593,9 +593,71 @@ export function computeRoomBlindspotRatio(
 export interface RenderHeatmapOptions {
   readonly normalizedPolygon?: readonly Point2D[];
   readonly showBlindspots?: boolean;
+  readonly reliabilityMode?: boolean;
+  readonly roomIsStale?: boolean;
+  readonly roomIsReferencePreset?: boolean;
+  readonly roomIsBlindspot?: boolean;
   readonly skipDarkBase?: boolean;
   readonly onlyExceedingThreshold?: boolean;
   readonly roomExceedsThreshold?: boolean;
+}
+
+function applyStaleDesaturation(
+  r: number,
+  g: number,
+  b: number,
+  a: number
+): [number, number, number, number] {
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  return [
+    Math.round(r * 0.45 + luma * 0.55),
+    Math.round(g * 0.45 + luma * 0.55),
+    Math.round(b * 0.45 + luma * 0.55),
+    a * 0.65,
+  ];
+}
+
+function drawDiagonalHatchOverlay(
+  ctx: CanvasRenderingContext2D,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+  strokeStyle: string
+) {
+  ctx.save();
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = 1.25;
+  const span = maxY - minY;
+  const step = 12;
+  for (let x = minX - span; x <= maxX + span; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, minY);
+    ctx.lineTo(x + span, maxY);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStaleStippleOverlay(
+  ctx: CanvasRenderingContext2D,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number
+) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(226, 232, 240, 0.24)';
+  const step = 14;
+  for (let y = Math.floor(minY) + 5; y <= maxY; y += step) {
+    const offset = ((Math.floor(y / step) % 2) * step) / 2;
+    for (let x = Math.floor(minX) + 5 + offset; x <= maxX; x += step) {
+      ctx.beginPath();
+      ctx.arc(x, y, 1.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 let sharedOffscreenCanvas: HTMLCanvasElement | null = null;
@@ -683,20 +745,60 @@ export function renderWeatherDiffusionHeatmap(
     return;
   }
 
-  // Case A: No online devices and no telemetry -> neutral dark slate
+  const revealBlindspots = Boolean(
+    options?.showBlindspots || options?.reliabilityMode
+  );
+
+  // Case A: No online devices and no telemetry -> neutral dark slate or hatch in reliability/blindspot mode
   if (idwSamples.length === 0 && fallbackValue === null) {
-    ctx.fillStyle = options?.showBlindspots ? 'rgba(245, 158, 11, 0.28)' : '#64748B';
-    ctx.globalAlpha = options?.showBlindspots ? 0.55 : 0.22;
+    ctx.fillStyle = revealBlindspots ? 'rgba(245, 158, 11, 0.28)' : '#64748B';
+    ctx.globalAlpha = revealBlindspots ? 0.55 : 0.22;
     ctx.fillRect(minX, minY, roomW, roomH);
+    if (revealBlindspots) {
+      drawDiagonalHatchOverlay(
+        ctx,
+        minX,
+        minY,
+        maxX,
+        maxY,
+        'rgba(245, 158, 11, 0.42)'
+      );
+    }
     ctx.restore();
     return;
   }
 
-  // Case B: No desk sensors, but room-level telemetry exists
-  if (idwSamples.length === 0 && fallbackValue !== null) {
-    const [r, g, b, a] = getContinuousMetricColor(layer, fallbackValue);
-    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a * 0.48})`;
+  // Case B: No desk sensors, but room-level telemetry exists (or Preset reference room / offline-sensor room in reliability mode)
+  if (
+    idwSamples.length === 0 &&
+    fallbackValue !== null
+  ) {
+    let [r, g, b, a] = getContinuousMetricColor(layer, fallbackValue);
+    if (options?.roomIsStale) {
+      [r, g, b, a] = applyStaleDesaturation(r, g, b, a);
+    }
+    const isHatchNeeded = Boolean(
+      options?.reliabilityMode &&
+        (options?.roomIsReferencePreset || options?.roomIsBlindspot)
+    );
+    const alphaScale = isHatchNeeded ? 0.32 : 0.48;
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(a * alphaScale).toFixed(2)})`;
     ctx.fillRect(minX, minY, roomW, roomH);
+    if (isHatchNeeded) {
+      drawDiagonalHatchOverlay(
+        ctx,
+        minX,
+        minY,
+        maxX,
+        maxY,
+        options?.roomIsBlindspot
+          ? 'rgba(245, 158, 11, 0.38)'
+          : 'rgba(148, 163, 184, 0.26)'
+      );
+    }
+    if (options?.roomIsStale) {
+      drawStaleStippleOverlay(ctx, minX, minY, maxX, maxY);
+    }
     ctx.restore();
     return;
   }
@@ -724,7 +826,8 @@ export function renderWeatherDiffusionHeatmap(
     ? computeAdaptiveSigma(options.normalizedPolygon, idwSamples.length, coverageRadius)
     : Math.max(0.08, coverageRadius * 0.60);
   const twoSigmaSq = 2 * sigma * sigma;
-  const showBlindspots = Boolean(options?.showBlindspots);
+  const reliabilityMode = Boolean(options?.reliabilityMode);
+  const roomIsStale = Boolean(options?.roomIsStale);
 
   let ptr = 0;
   for (let gy = 0; gy < gridH; gy++) {
@@ -751,16 +854,25 @@ export function renderWeatherDiffusionHeatmap(
       // Infinitely smooth Gaussian field presence (naturally decays to 0 in unmonitored zones)
       const fieldPresence = 1 - Math.exp(-2.2 * sumWeight);
 
-      if (showBlindspots && fieldPresence < 0.25) {
-        // Highlight sensor coverage blindspot (< 0.25 fieldPresence) with diagnostic amber-crimson stipple
-        const stripe = (gx + gy) % 3 === 0 ? 1.0 : 0.55;
+      if (revealBlindspots && fieldPresence < 0.25) {
+        // 45-degree diagonal hatch marking sensor coverage blindspot (< 0.25 fieldPresence)
+        const stripe = (gx + gy) % 3 === 0 ? 1.0 : 0.28;
         data[ptr] = 245;
         data[ptr + 1] = 158;
         data[ptr + 2] = 11;
-        data[ptr + 3] = Math.round(145 * stripe);
+        data[ptr + 3] = Math.round(185 * stripe);
       } else if (fieldPresence > 0.01 && sumWeight > 0.0001) {
         const val = sumVal / sumWeight;
-        const [r, g, b, a] = getContinuousMetricColor(layer, val);
+        let [r, g, b, a] = getContinuousMetricColor(layer, val);
+        if (roomIsStale) {
+          [r, g, b, a] = applyStaleDesaturation(r, g, b, a);
+        } else if (reliabilityMode) {
+          // Visual separation between MEASURED (>= 0.55) and INTERPOLATED (0.25..0.55)
+          a =
+            fieldPresence >= 0.55
+              ? Math.max(0.84, a)
+              : Math.min(0.62, a * 0.68);
+        }
 
         data[ptr] = r;
         data[ptr + 1] = g;
@@ -793,6 +905,10 @@ export function renderWeatherDiffusionHeatmap(
 
   if (hasFilter) {
     ctx.filter = 'none';
+  }
+
+  if (roomIsStale) {
+    drawStaleStippleOverlay(ctx, minX, minY, maxX, maxY);
   }
 
   ctx.restore();
