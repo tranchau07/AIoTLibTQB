@@ -459,10 +459,11 @@ export function FloorplanCanvas({
     return f === 0 ? 1 : f;
   }, [rooms]);
 
-  // Cache ảnh SVG lớp nền kiến trúc CAD TQB theo tầng
+  // Cache ảnh SVG lớp nền kiến trúc CAD TQB theo tầng (giới hạn kích thước & dọn dẹp khi unmount)
   const cadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    let cancelled = false;
     const svgPath = getFloorCadSvgPath(activeFloor);
     if (cadImagesRef.current.has(svgPath)) {
       setCadImageLoadedFloor(activeFloor);
@@ -470,11 +471,28 @@ export function FloorplanCanvas({
     }
     const img = new window.Image();
     img.onload = () => {
+      if (cancelled) return;
+      if (cadImagesRef.current.size >= 12) {
+        const oldestKey = cadImagesRef.current.keys().next().value;
+        if (oldestKey) {
+          cadImagesRef.current.delete(oldestKey);
+        }
+      }
       cadImagesRef.current.set(svgPath, img);
       setCadImageLoadedFloor(activeFloor);
     };
     img.src = svgPath;
+    return () => {
+      cancelled = true;
+    };
   }, [activeFloor]);
+
+  useEffect(() => {
+    const cadMap = cadImagesRef.current;
+    return () => {
+      cadMap.clear();
+    };
+  }, []);
 
   // Chuẩn hóa danh sách phòng kèm đa giác TQB thực tế và phân khu bàn đọc (readingBays)
   const enrichedRooms = useMemo(() => {
@@ -819,8 +837,22 @@ export function FloorplanCanvas({
   const prevLayerRef = useRef(layer);
 
   useEffect(() => {
+    const animMap = animValuesRef.current;
+    return () => {
+      animMap.clear();
+    };
+  }, []);
+
+  useEffect(() => {
     const layerChanged = prevLayerRef.current !== layer;
     prevLayerRef.current = layer;
+
+    const activeDeviceIds = new Set(devices.map((d) => d.id));
+    for (const existingId of animValuesRef.current.keys()) {
+      if (!activeDeviceIds.has(existingId)) {
+        animValuesRef.current.delete(existingId);
+      }
+    }
 
     const prefersReducedMotion = isReducedMotionPreferred();
     const now = performance.now();
@@ -859,8 +891,16 @@ export function FloorplanCanvas({
 
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      if (rect.width <= 0) return;
-      const containerW = Math.max(320, Math.floor(rect.width));
+      if (rect.width <= 0 && (!maxViewportHeightPx || maxViewportHeightPx <= 320)) {
+        return;
+      }
+      const rawWidth =
+        rect.width > 0
+          ? rect.width
+          : typeof window !== 'undefined' && window.innerWidth > 0
+            ? Math.max(320, window.innerWidth - 320)
+            : 960;
+      const containerW = Math.max(320, Math.floor(rawWidth));
       const maxH =
         maxViewportHeightPx && maxViewportHeightPx > 320
           ? maxViewportHeightPx
@@ -2604,6 +2644,8 @@ export function FloorplanCanvas({
       data-reliability-layer={showReliabilityLayer ? 'true' : 'false'}
       data-furniture-layer={showFurnitureLayer ? 'true' : 'false'}
       data-furniture-edit={furnitureEditMode ? 'true' : 'false'}
+      data-anim-cache-size={animValuesRef.current.size}
+      data-cad-cache-size={cadImagesRef.current.size}
       className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1120] shadow-inner"
     >
       <div

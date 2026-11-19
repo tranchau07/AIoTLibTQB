@@ -493,6 +493,92 @@ class AlertServiceTest {
     }
 
     @Test
+    @DisplayName("Kịch bản heat/humid (35.5°C + 85.0%RH): BOOK_STORAGE kích hoạt HIGH HUMIDITY_HIGH + SOP Kho sách & TEMPERATURE; STUDY_ROOM chỉ kích hoạt MEDIUM TEMPERATURE")
+    void evaluate_heatHumidScenario_differentiatesBookStorageAndStudyRoom() {
+        Room storageRoom = Room.builder()
+                .id("room-storage-103")
+                .code("TQB_103")
+                .name("Kho sách Tầng 1")
+                .type(RoomType.BOOK_STORAGE)
+                .build();
+        Room studyRoom = Room.builder()
+                .id("room-study-301")
+                .code("TQB_301")
+                .name("Phòng đọc Tầng 3")
+                .type(RoomType.STUDY_ROOM)
+                .build();
+
+        when(roomRepository.findById("room-storage-103")).thenReturn(Optional.of(storageRoom));
+        when(roomRepository.findById("room-study-301")).thenReturn(Optional.of(studyRoom));
+        AtomicInteger idSeq = new AtomicInteger(1);
+        when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
+            Alert a = inv.getArgument(0);
+            if (a.getId() == null) {
+                a.setId("alert-hh-" + idSeq.getAndIncrement());
+            }
+            return a;
+        });
+
+        TelemetryPayload.TelemetryData heatHumid = TelemetryPayload.TelemetryData.builder()
+                .environment(TelemetryPayload.EnvironmentData.builder()
+                        .temperature(35.5)
+                        .humidity(85.0)
+                        .build())
+                .build();
+
+        alertService.evaluateTelemetry("dev-s103", "ESP32_T1_03", "room-storage-103", heatHumid);
+        alertService.evaluateTelemetry("dev-d301", "ESP32_T3_01", "room-study-301", heatHumid);
+
+        mutableClock.advance(Duration.ofSeconds(30));
+
+        TelemetryPayload.TelemetryData heatHumidT2 = TelemetryPayload.TelemetryData.builder()
+                .environment(TelemetryPayload.EnvironmentData.builder()
+                        .temperature(36.0)
+                        .humidity(86.0)
+                        .build())
+                .build();
+
+        alertService.evaluateTelemetry("dev-s103", "ESP32_T1_03", "room-storage-103", heatHumidT2);
+        alertService.evaluateTelemetry("dev-d301", "ESP32_T3_01", "room-study-301", heatHumidT2);
+
+        ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
+        verify(alertRepository, times(3)).save(captor.capture());
+
+        List<Alert> savedAlerts = captor.getAllValues();
+        List<Alert> storageAlerts = savedAlerts.stream()
+                .filter(a -> "room-storage-103".equals(a.getRoomId()))
+                .toList();
+        List<Alert> studyAlerts = savedAlerts.stream()
+                .filter(a -> "room-study-301".equals(a.getRoomId()))
+                .toList();
+
+        assertThat(storageAlerts).hasSize(2);
+        Alert storageHumidityAlert = storageAlerts.stream()
+                .filter(a -> "HUMIDITY_HIGH".equals(a.getMetricType()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(storageHumidityAlert.getStatus()).isEqualTo(AlertStatus.FIRING);
+        assertThat(storageHumidityAlert.getSeverity()).isEqualTo(AlertSeverity.HIGH);
+        assertThat(storageHumidityAlert.getThreshold()).isEqualTo(60.0);
+        assertThat(storageHumidityAlert.getRecommendedAction()).contains("SOP Kho sách");
+
+        Alert storageTempAlert = storageAlerts.stream()
+                .filter(a -> "TEMPERATURE".equals(a.getMetricType()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(storageTempAlert.getStatus()).isEqualTo(AlertStatus.FIRING);
+        assertThat(storageTempAlert.getSeverity()).isEqualTo(AlertSeverity.MEDIUM);
+        assertThat(storageTempAlert.getThreshold()).isEqualTo(24.0);
+
+        assertThat(studyAlerts).hasSize(1);
+        Alert studyTempAlert = studyAlerts.get(0);
+        assertThat(studyTempAlert.getMetricType()).isEqualTo("TEMPERATURE");
+        assertThat(studyTempAlert.getStatus()).isEqualTo(AlertStatus.FIRING);
+        assertThat(studyTempAlert.getSeverity()).isEqualTo(AlertSeverity.MEDIUM);
+        assertThat(studyTempAlert.getThreshold()).isEqualTo(32.0);
+    }
+
+    @Test
     @DisplayName("Deadband biên độ: Dao động nhỏ trong vùng trễ (63.5–65.0 dBA) không kích hoạt recovery sớm")
     void evaluate_deadband_preventsPrematureRecoveryWhenHoveringNearThreshold() {
         when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {

@@ -148,12 +148,12 @@ export function summarizeAlertForManagerVi(
   const measuredSnippet = valMatch ? ` (${valMatch[1]} ${valMatch[2]})` : '';
 
   let headlineVi = localizedRaw || 'Phát sinh cảnh báo vận hành tại phòng đọc';
-  if (alert.type === 'NOISE_EXCEEDED' || lower.includes('noise') || lower.includes('ồn')) {
-    headlineVi = `Độ ồn tại ${roomDisplay} đang vượt ngưỡng cho phép${measuredSnippet} — Cần nhắc nhở độc giả giữ trật tự`;
-  } else if (alert.type === 'DEVICE_OFFLINE') {
+  if (alert.type === 'DEVICE_OFFLINE') {
     headlineVi = `Trạm cảm biến ${alert.hardwareId ?? ''} tại ${roomDisplay} mất kết nối — Cần kiểm tra nguồn/mạng`;
   } else if (alert.type === 'SENSOR_MALFUNCTION') {
     headlineVi = `Cảm biến ${alert.hardwareId ?? ''} tại ${roomDisplay} gửi số liệu bất thường — Cần kiểm tra thiết bị`;
+  } else if (alert.type === 'NOISE_EXCEEDED' || lower.includes('noise') || lower.includes('ồn')) {
+    headlineVi = `Độ ồn tại ${roomDisplay} đang vượt ngưỡng cho phép${measuredSnippet} — Cần nhắc nhở độc giả giữ trật tự`;
   } else if (alert.type === 'AIR_UNHEALTHY') {
     if (lower.includes('humidity') || lower.includes('%rh') || lower.includes('ẩm')) {
       headlineVi = `Độ ẩm tại ${roomDisplay} vượt ngưỡng bảo quản${measuredSnippet} — Nguy cơ ảnh hưởng tài liệu/tiện nghi`;

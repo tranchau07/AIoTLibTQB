@@ -684,9 +684,20 @@ export default function FloorplanPage() {
         const series = next[key] ? [...next[key], val] : [val];
         next[key] = series.slice(-8);
       }
+      const keys = Object.keys(next);
+      if (keys.length > 300) {
+        const activeRoomSet = new Set(allBuildingRooms.map((r) => r.id));
+        for (const k of keys) {
+          const roomPart = k.split(':')[0];
+          if (!activeRoomSet.has(roomPart)) {
+            delete next[k];
+            lastHistorySigRef.current.delete(k);
+          }
+        }
+      }
       return next;
     });
-  }, [floorRooms, roomTelemetryMap, selectedLayer]);
+  }, [floorRooms, roomTelemetryMap, selectedLayer, allBuildingRooms]);
 
   const roomTelemetryHistoryMap = useMemo(() => {
     const map: Record<string, readonly number[]> = {};

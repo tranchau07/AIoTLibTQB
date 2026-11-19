@@ -198,6 +198,28 @@ class AiotStompManager {
     return this.connected;
   }
 
+  public getListenerDiagnostics(): {
+    connectionListenersCount: number;
+    alertListenersCount: number;
+    roomChannelCount: number;
+    roomListenersCount: number;
+    activeRoomSubsCount: number;
+    hasAlertSub: boolean;
+  } {
+    let totalRoomListeners = 0;
+    for (const set of this.roomListeners.values()) {
+      totalRoomListeners += set.size;
+    }
+    return {
+      connectionListenersCount: this.connectionListeners.size,
+      alertListenersCount: this.alertListeners.size,
+      roomChannelCount: this.roomListeners.size,
+      roomListenersCount: totalRoomListeners,
+      activeRoomSubsCount: this.activeRoomSubs.size,
+      hasAlertSub: Boolean(this.alertSub),
+    };
+  }
+
   public onConnectionChange(listener: ConnectionListener): () => void {
     this.connectionListeners.add(listener);
     listener(this.connected);
