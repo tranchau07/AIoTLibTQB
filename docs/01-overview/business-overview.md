@@ -30,7 +30,7 @@ Ma trận vai trò thực tế được khởi tạo trong [`ApplicationInitConf
 | Vai trò / Role | Mô tả nghiệp vụ / Business Responsibility | Khu vực màn hình chính / Primary Screens |
 | :--- | :--- | :--- |
 | **Quản lý & Thủ thư chính**<br>`LIBRARIAN` / `ADMIN` | Giám sát toàn tòa nhà trên Dải tóm tắt (Summary Strip), xử lý sự cố từ Inspector Drawer, điều chỉnh ngưỡng phòng, duyệt thiết bị mới, xuất báo cáo PNG/PDF. `ADMIN` có toàn quyền IAM (user/role/permission) và chuyển góc nhìn thử vai trò. | `/floorplan`, `/dashboard`, `/alerts`, `/rooms/[id]`, `/telemetry-explorer`, `/admin/*` |
-| **Thủ thư phụ trách khu vực**<br>`ZONE_MANAGER` | Giám sát và xử lý cảnh báo bị **cô lập chặt trong phạm vi `assignedZones`** được giao. | `/floorplan`, `/dashboard`, `/alerts`, `/rooms/[id]` |
+| **Thủ thư phụ trách khu vực**<br>`ZONE_MANAGER` | Giám sát dữ liệu telemetry, thiết bị và xử lý cảnh báo bị **cô lập chặt trong phạm vi `assignedZones`** được giao. | `/floorplan`, `/dashboard`, `/alerts`, `/rooms/[id]` |
 | **Kỹ thuật viên bảo trì**<br>`MAINTENANCE` | Kiểm tra sức khỏe trạm đo (`ONLINE/OFFLINE`, `wifiRssi`), bật lớp **Data Reliability / Vùng mù (Blindspots)**, chỉnh sửa bố trí nội thất `1:100` (bàn, giá sách, vị trí cảm biến), xử lý sự cố thiết bị. | `/floorplan` (Tech Overlay & Furniture Editor), `/alerts`, `/admin/devices` |
 | **Bạn đọc đã đăng nhập**<br>`VIEWER` / `USER` | Tra cứu độ yên tĩnh và gợi ý khu bàn đọc phù hợp (ẩn thông tin phần cứng theo quy tắc `FE-VIZ-09`). | `/floorplan`, `/dashboard`, `/rooms/[id]`, `/telemetry-explorer` |
 | **Khách / Sinh viên tại Kiosk**<br>*(Public Unauthenticated)* | Xem màn hình Kiosk sảnh thư viện không cần đăng nhập: điểm LCS, nhiệt độ/ẩm/ồn và gợi ý khu vực đọc bài (ẩn hoàn toàn dữ liệu thiết bị & nhật ký bảo trì). | `/kiosk` |
@@ -57,13 +57,15 @@ Ma trận vai trò thực tế được khởi tạo trong [`ApplicationInitConf
 
 ## 4. Quy Chuẩn Môi Trường Áp Dụng Trong Code / Standards Implemented in Code
 
-Bảng dưới đây đối chiếu chuẩn quốc tế được trích dẫn trong [`ComfortScoreService.java`](../../src/main/java/com/example/AIoTLibTQB/service/ComfortScoreService.java) và ngưỡng mặc định tại [`RoomThresholdConfig.java`](../../src/main/java/com/example/AIoTLibTQB/document/RoomThresholdConfig.java):
+Bảng dưới đây đối chiếu chuẩn quốc tế được trích dẫn trong [`ComfortScoreService.java`](../../src/main/java/com/example/AIoTLibTQB/service/ComfortScoreService.java), cấu hình ngưỡng mặc định lưu ở [`RoomThresholdConfig.java`](../../src/main/java/com/example/AIoTLibTQB/document/RoomThresholdConfig.java) và luật phát cảnh báo tự động thực thi tại [`AlertRuleEngine.java`](../../src/main/java/com/example/AIoTLibTQB/service/AlertRuleEngine.java):
 
 | Loại phòng (`RoomType`) | Tham chiếu chuẩn / Referenced Standards | Độ ồn TB / Đỉnh (`dBA`) | Nhiệt độ (`°C`) | Độ ẩm (`%RH`) | Bụi mịn `PM2.5` (`µg/m³`) | Ánh sáng tối ưu (`Lux`) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| `STUDY_ROOM` *(Phòng đọc)* | ANSI/ASA S12.60, EN 12464-1, ASHRAE 55 | Cảnh báo `> 65` / `> 75` (tức thời `≥ 85`) | Tối ưu `23.5–25.5`; cảnh báo `< 18.0` hoặc `> 32.0` | Tối ưu `40–60`; cảnh báo `< 35` hoặc `> 70` | Cảnh báo `> 50` (tối ưu `≤ 10`) | `400–600` |
-| `BOOK_STORAGE` *(Kho sách)* | ISO 11799, IFLA | Cảnh báo `> 70` / `> 80` (tức thời `≥ 85`) | Tối ưu `18.0–22.0`; cảnh báo `< 18.0` hoặc `> 24.0` | Tối ưu `45–55`; cảnh báo `< 45` hoặc `> 60` | Cảnh báo `> 35` (tối ưu `≤ 10`) | `≤ 100` *(chống phai mực/giấy)* |
-| `CIRCULATION_HALL` *(Sảnh mượn trả)* | Thực tế vận hành dịch vụ bạn đọc | Cảnh báo `> 70` / `> 80` (tức thời `≥ 85`) | Tối ưu `24.0–26.5`; cảnh báo `< 20.0` hoặc `> 32.0` | Tối ưu `40–65`; cảnh báo `< 35` hoặc `> 70` | Cảnh báo `> 50` (tối ưu `≤ 15`) | `300–500` |
+| `STUDY_ROOM` *(Phòng đọc)* | ANSI/ASA S12.60, EN 12464-1, ASHRAE 55 | Cảnh báo `> 65` / `> 75` (tức thời `≥ 85`) | Tối ưu `23.5–25.5`<br>Cấu hình `18.0–32.0` *(Backend tự kích hoạt alert khi `> 32.0`)* | Tối ưu `40–60`<br>Cấu hình `35–70` *(không kích hoạt alert tự động trên phòng đọc)* | Cảnh báo `> 50` (tối ưu `≤ 10`) | `400–600` |
+| `BOOK_STORAGE` *(Kho sách)* | ISO 11799, IFLA | Cảnh báo `> 70` / `> 80` (tức thời `≥ 85`) | Tối ưu `18.0–22.0`<br>Cấu hình `18.0–24.0` *(Backend tự kích hoạt alert khi `> 24.0`)* | Tối ưu `45–55`<br>**Cảnh báo tự động `< 45` hoặc `> 60`** | Cảnh báo `> 35` (tối ưu `≤ 10`) | `≤ 100` *(chống phai mực/giấy)* |
+| `CIRCULATION_HALL` *(Sảnh mượn trả)* | Thực tế vận hành dịch vụ bạn đọc | Cảnh báo `> 70` / `> 80` (tức thời `≥ 85`) | Tối ưu `24.0–26.5`<br>Cấu hình `20.0–32.0` *(Backend tự kích hoạt alert khi `> 32.0`)* | Tối ưu `40–65`<br>Cấu hình `35–70` *(không kích hoạt alert tự động trên sảnh)* | Cảnh báo `> 50` (tối ưu `≤ 15`) | `300–500` |
+
+> **Lưu ý từ [`AlertRuleEngine.java:410-452`](../../src/main/java/com/example/AIoTLibTQB/service/AlertRuleEngine.java):** Động cơ cảnh báo tự động Backend hiện chỉ bắn cảnh báo nhiệt độ chiều vượt trần (`temp > tempMax`) và **chỉ bắn cảnh báo độ ẩm (`HUMIDITY_HIGH` / `HUMIDITY_LOW`) đối với phòng loại `BOOK_STORAGE`**; các mốc cận dưới (`tempMin` và `humidity` ở `STUDY_ROOM`/`CIRCULATION_HALL`) phục vụ chấm điểm LCS và đánh giá trạng thái trực quan trên Heatmap UI (`weatherPalette.ts`).
 
 ---
 

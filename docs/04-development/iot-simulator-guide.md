@@ -1,6 +1,6 @@
 # Hướng Dẫn Bộ Giả Lập Mạch IoT / IoT Circuit Simulator Guide
 
-> **Vị trí mã nguồn / Source Path:** [`tools/iot-simulator/`](../../tools/iot-simulator) *(Node.js ESM `>= 18`, hợp nhất nội dung từ tài liệu công cụ cũ).*
+> **Vị trí mã nguồn / Source Path:** [`tools/iot-simulator/`](../../tools/iot-simulator) *(Node.js ESM `"type": "module"`, Dockerfile dùng `node:20-alpine`; hợp nhất nội dung từ tài liệu công cụ cũ).*
 
 ---
 
@@ -25,14 +25,14 @@ cp .env.example .env
 | `MQTT_DEVICE_PASSWORD` | `***` | Mật khẩu dùng chung cho node thiết bị dev |
 | `MQTT_USERNAME`, `MQTT_PASSWORD` | `aiot_backend` / `***` | Tài khoản fallback khi tắt per-device auth |
 | `API_BASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` | `http://localhost:8080`, `admin`, `***` | Thông tin REST API cho bước `--provision` |
-| `SIM_INTERVAL_MS`, `SIM_SPEED`, `DEFAULT_SCENARIO` | `500`, `1`, `normal` | Chu kỳ phát (ms), hệ số tua nhanh & kịch bản mặc định |
-| `FORCE_REMOTE` | `false` | Cho phép kết nối broker ngoài localhost |
+| `SIM_INTERVAL_MS`, `SIM_SPEED`, `DEFAULT_SCENARIO` | `500`, `1`, `normal` *(Compose: `demo`)* | Chu kỳ phát (ms), hệ số tua nhanh & kịch bản mặc định (`docker-compose.yml` đặt `demo`). |
+| `FORCE_REMOTE` | `false` *(Compose: `true`)* | Cho phép kết nối broker ngoài localhost (`docker-compose.yml` đặt `true` để gọi `mosquitto`). |
 
 ---
 
 ## 2. Rào An Toàn & Provisioning / Safety Guard & Idempotent Provisioning
 
-- **Safety Guard ([`src/safety.js`](../../tools/iot-simulator/src/safety.js))**: Chặn kết nối tới broker không phải local (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `host.docker.internal`, `*.local`) trừ khi truyền `--force-remote` hoặc `FORCE_REMOTE=true`.
+- **Safety Guard ([`src/safety.js`](../../tools/iot-simulator/src/safety.js))**: Chặn mọi kết nối tới host không nằm trong allowlist `7` host nội bộ (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `host.docker.internal`, `mosquitto`, `backend` — **không** cho phép `*.local`) trừ khi truyền `--force-remote` hoặc `FORCE_REMOTE=true`.
 - **Idempotent Provisioning ([`src/provision.js`](../../tools/iot-simulator/src/provision.js))**: Lệnh `npm run provision` (hoặc thêm cờ `--provision`) tạo phân khu, phòng kèm `boundaryPolygon` / `RoomType` và thiết bị mẫu mà không tạo trùng lặp khi chạy lại.
 
 ---

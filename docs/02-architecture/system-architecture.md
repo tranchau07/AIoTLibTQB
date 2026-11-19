@@ -58,7 +58,7 @@ flowchart TB
 | **`mongo-express`** (`1.0.2`) | `127.0.0.1:8081` | `aiot_db_net` | Chỉ khởi chạy khi kèm `--profile dev` hoặc `--profile debug`; bảo vệ bằng Basic Auth. |
 | **`mosquitto`** (`eclipse-mosquitto:2.0`) | `127.0.0.1:1883` | `aiot_app_net` | Không ẩn danh (`allow_anonymous false`); chặn brute-force/DoS (`max_connections 200`, `max_packet_size 65536`), phân quyền ACL theo `%u`. |
 | **`backend`** (Java 21 / Spring Boot) | `8080` | `aiot_db_net`, `aiot_app_net` | Cầu nối duy nhất giữa tầng ứng dụng và `mongodb`; `RateLimitFilter` Bucket4j; JWT `HS512` & RBAC/ABAC. |
-| **`frontend`** (Next.js 15 Standalone) | `3000` | `aiot_app_net` | Khung SSR + App Router; viết lại `/api/v1/:path*` về Backend nội bộ trong [`next.config.ts`](../../frontend/next.config.ts) kèm Security Headers (`X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`). |
+| **`frontend`** (Next.js 15 Standalone) | `3000` | `aiot_app_net` | Khung SSR + App Router; trong [`next.config.ts`](../../frontend/next.config.ts) cấu hình Security Headers (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`) và rewrite `/api/v1/:path*` → `http://127.0.0.1:8080/api/v1/:path*` *(áp dụng cho dev cùng host)*. |
 | **`simulator`** (Node.js 20 Alpine) | *(no ports)* | `aiot_app_net` | Chỉ kết nối tới `mosquitto:1883` và `backend:8080` sau khi cả 2 đạt `service_healthy`. |
 | **`gateway.js`** (`tools/cloudflared`) | `4000` *(host script)* | Host loopback | Gộp Frontend (`:3000`) và Backend (`:8080`) về cùng origin `4000` để cấp HTTPS/WSS qua `cloudflared` mà không lỗi Mixed Content hay CORS. |
 

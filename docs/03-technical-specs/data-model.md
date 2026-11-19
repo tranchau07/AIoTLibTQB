@@ -1,6 +1,6 @@
 # Mô Hình Dữ Liệu & Kiến Trúc MongoDB 8.0 / Data Model & MongoDB Schema
 
-> **Cơ sở kiểm chứng / Verified From:** `18` lớp trong [`document/`](../../src/main/java/com/example/AIoTLibTQB/document) và `7` enums trong [`enums/`](../../src/main/java/com/example/AIoTLibTQB/enums) (`9` collections thực tế trên MongoDB `8.0`).
+> **Cơ sở kiểm chứng / Verified From:** `18` lớp trong [`document/`](../../src/main/java/com/example/AIoTLibTQB/document) và `8` enums trong [`enums/`](../../src/main/java/com/example/AIoTLibTQB/enums) (`9` collections thực tế trên MongoDB `8.0`).
 
 ---
 

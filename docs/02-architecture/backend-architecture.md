@@ -8,7 +8,7 @@
 
 ```text
 src/main/java/com/example/AIoTLibTQB/
-├── AIoTLibTqbApplication.java         # Entry point (@EnableScheduling, @EnableMongoAuditing)
+├── AIoTLibTQBApplication.java         # Entry point (@EnableScheduling, @EnableMongoAuditing)
 ├── configuration/                     # SecurityConfig, RateLimitFilter, MqttConfig, WebSocketConfig,
 │                                      # StompChannelInterceptor, CustomJwtDecoder, ApplicationInitConfig,
 │                                      # AlertConfiguration, AlertSopCatalog
@@ -21,7 +21,7 @@ src/main/java/com/example/AIoTLibTQB/
 ├── enums/                             # AlertSeverity, AlertStatus, AlertType, AlertWorkflowStatus,
 │                                      # ErrorCode (48), Permission (14), Role (7), RoomType (3)
 ├── exception/                         # AppException, GlobalExceptionHandler
-├── mapper/                            # MapStruct mappers (User, Role, Permission, Room, Device)
+├── mapper/                            # 3 MapStruct mappers (User, Role, Permission; Room & Device build thủ công)
 ├── repository/                        # Spring Data MongoDB repositories
 └── service/                           # 26 business, caching, ingestion, scoring, alert & watchdog classes
 ```
@@ -40,8 +40,8 @@ src/main/java/com/example/AIoTLibTQB/
    - Nếu thiết bị nằm trong danh sách offline RAM (`DeviceWatchdogService`), khôi phục tức thời `ONLINE` và tự đóng cảnh báo `DEVICE_OFFLINE`.
    - Cập nhật trường `lastSeenAt` vào MongoDB chỉ chạy tối đa 1 lần / **`30s`** / thiết bị nhờ `lastSeenThrottleCache` (Caffeine `10,000` entries).
 4. **3-Layer Sanitizer ([`TelemetrySanitizerService`](../../src/main/java/com/example/AIoTLibTQB/service/TelemetrySanitizerService.java))**:
-   - **Lớp 1 — Giới hạn vật lý**: Kẹp/loại bỏ giá trị ngoài ngưỡng (`noiseAvg ∈ [30, 110]`, `noisePeak ∈ [30, 130]`, `PM ∈ [0, 1000]`, `temp ∈ [0, 60]`, `humidity ∈ [0, 100]`, `lux ∈ [0, 65535]`).
-   - **Lớp 2 — Cửa sổ trượt âm học & Forward-fill 30s**: Tích hợp `NoiseSlidingWindow` (`30s`, tối đa `1,000` mẫu/thiết bị) tính trung bình trượt cho luồng phát 500ms; tự bù giá trị gần nhất trong vòng `30s` khi thiếu trường cảm biến tạm thời (**ngoại trừ `noisePeak` không bao giờ forward-fill** để tránh kéo dài cảnh báo giả).
+   - **Lớp 1 — Giới hạn vật lý**: Kẹp/loại bỏ giá trị ngoài ngưỡng: đầu vào chính `noise ∈ [30, 130]` *(aliases `sound`/`db`/`dBA`; hoặc fallback tương thích ngược `noiseAvg ∈ [30, 110]` / `noisePeak ∈ [30, 130]`)*, `PM ∈ [0, 1000]`, `temp ∈ [0, 60]`, `humidity ∈ [0, 100]`, `lux ∈ [0, 65535]`.
+   - **Lớp 2 — Cửa sổ trượt âm học & Forward-fill 30s**: Khi nhận `noise`, `NoiseSlidingWindow` (`30s`, tối đa `1,000` mẫu/thiết bị) tính `noiseAvg` (trần `110.0`) và `noisePeak = max(noise, noiseAvg)`; tự bù giá trị gần nhất trong vòng `30s` khi thiếu trường cảm biến tạm thời (**ngoại trừ `noisePeak` không bao giờ forward-fill** để tránh kéo dài cảnh báo giả).
    - **Lớp 3 — Timestamp & Guard**: Tự phân giải Unix epoch giây (10 số) hoặc mili-giây (13 số), hoặc fallback `Instant.now()`; hủy gói tin nếu toàn bộ chỉ số rỗng sau làm sạch. Theo dõi `RawValidationTracker` để báo cảnh báo `SENSOR_MALFUNCTION` nếu cảm biến gửi sai liên tục.
 5. **MongoDB Write Semaphore**: Ghi vào `telemetry_records` qua `Semaphore(30, true)` (timeout `3000ms`, luôn giải phóng trong `finally`) nhằm tránh cạn kiệt connection pool khi thiết bị đồng loạt burst.
 
@@ -89,7 +89,7 @@ $$\text{bottleneckRatio} = \operatorname{clamp}\left(\frac{S_{\min}}{S_{\text{we
 | Service & Method | Tần suất / Schedule | Trách nhiệm / Responsibility |
 | :--- | :--- | :--- |
 | [`TelemetryConflationService#conflateAndPublish`](../../src/main/java/com/example/AIoTLibTQB/service/TelemetryConflationService.java) | `${app.telemetry.conflation-ms:500}` (`500ms` = `2Hz`) | Gom `ConcurrentHashMap<roomId, TelemetryResponse>` và phát qua WebSocket STOMP tới `/topic/rooms/{id}/telemetry` và `/topic/public/rooms/{id}/telemetry`. |
-| [`DeviceWatchdogService#scanOfflineDevices`](../../src/main/java/com/example/AIoTLibTQB/service/DeviceWatchdogService.java) | `15,000ms` (`15s`) | Phát hiện thiết bị `isActive=true` mất tin `> 2 phút` (`lastSeenAt < now - 2m` hoặc `null`), đánh dấu `OFFLINE` trong DB, kích hoạt cảnh báo `DEVICE_OFFLINE` (`HIGH`) và tự đóng cảnh báo môi trường cũ. |
+| [`DeviceWatchdogService#scanOfflineDevices`](../../src/main/java/com/example/AIoTLibTQB/service/DeviceWatchdogService.java) | `15,000ms` (`15s`) | Phát hiện thiết bị `isActive=true` mất tin `> 2 phút` (`lastSeenAt < now - 2m` hoặc `null`), đánh dấu `OFFLINE` trong DB, kích hoạt cảnh báo `DEVICE_OFFLINE` (`HIGH`) và tự đóng cảnh báo môi trường cũ *(lưu ý [`DeviceService#toDeviceResponse`](../../src/main/java/com/example/AIoTLibTQB/service/DeviceService.java) dùng ngưỡng `ONLINE_THRESHOLD_MINUTES = 5` phút khi tính cờ `online` kết hợp `connectionState != OFFLINE`)*. |
 | [`AlertEmailNotificationService#scanUnacknowledgedHighAlerts`](../../src/main/java/com/example/AIoTLibTQB/service/AlertEmailNotificationService.java) | `60,000ms` (`60s`) | Leo thang email cho các cảnh báo `HIGH` vẫn ở trạng thái `FIRING` quá `high-escalation-minutes` (`10 phút`). |
 | [`AuthenticationService#cleanExpiredTokens`](../../src/main/java/com/example/AIoTLibTQB/service/AuthenticationService.java) | Cron `0 0 2 * * ?` (`02:00` hàng ngày) | Dọn phụ trợ các JWT hết hạn trong `invalidated_tokens` (song song TTL index `expireAfter="0s"`). |
 

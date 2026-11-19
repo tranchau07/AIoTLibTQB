@@ -30,7 +30,7 @@
 | **Semantic Zoom & LOD** | Tự động thay đổi chi tiết hiển thị trên bản đồ theo mức phóng to: `Overview` (gom cụm) $\to$ `Intermediate` $\to$ `Detail` (hiện bàn đọc & nhãn đầy đủ). | Progressive level-of-detail switching across 3 zoom tiers (`Overview`, `Intermediate`, `Detail`) to avoid label clutter. |
 | **Optimistic Locking (`@Version`)** | Khóa lạc quan sử dụng trường version trên `alerts` và `room_furniture_layouts` để ngăn hai người dùng ghi đè công sức của nhau (trả HTTP `409` mã `5007` khi xung đột). | Concurrency control via `@Version` fields on `alerts` and `room_furniture_layouts`, preventing silent overwrites (HTTP `409`, code `5007`). |
 | **Refresh Token Rotation (RTR)** | Cơ chế bảo mật làm mới JWT theo từng lần dùng một: mỗi lần đổi refresh token, token cũ bị đưa ngay vào danh sách đen TTL (`invalidated_tokens`). | Security pattern invalidating each used refresh token in a TTL MongoDB blacklist (`invalidated_tokens`) upon issuing a new token pair. |
-| **ABAC (`assignedZones`)** | Kiểm soát truy cập dựa trên thuộc tính: giới hạn nhân sự không phải `ADMIN` chỉ xem/xử lý cảnh báo thuộc các `zoneId` được cấp. | Attribute-Based Access Control restricting non-`ADMIN` staff to alerts within their assigned `assignedZones` set. |
+| **ABAC (`assignedZones`)** | Kiểm soát truy cập dựa trên thuộc tính: `AlertServiceImpl` giới hạn mọi vai trò không phải `ADMIN` theo `assignedZones`, còn `DeviceService` và `TelemetryService` giới hạn `ZONE_MANAGER` theo các `zoneId` được cấp. | Attribute-Based Access Control restricting non-`ADMIN` staff on alerts (`AlertServiceImpl`) and `ZONE_MANAGER` on devices/telemetry (`DeviceService`, `TelemetryService`) to their `assignedZones`. |
 
 ---
 
@@ -38,7 +38,7 @@
 
 | Đại lượng / Dimension | Đơn vị / Unit | Quy ước chuẩn trong hệ thống / System Convention |
 | :--- | :---: | :--- |
-| **Độ ồn / Acoustic Level (`noise_avg`, `noise_peak`)** | `dBA` | Trọng số tần số A theo thính giác người; dải hợp lệ `[30.0, 110.0]` (`noiseAvg`) và `[30.0, 130.0]` (`noisePeak`). |
+| **Độ ồn / Acoustic Level (`noise`, `noise_avg`, `noise_peak`)** | `dBA` | Trọng số tần số A theo thính giác người; dải hợp lệ `[30.0, 130.0]` (`noise`, `noisePeak`) và `[30.0, 110.0]` (`noiseAvg`). |
 | **Bụi mịn / Particulate Matter (`pm1_0..pm10`)** | `µg/m³` | Dải hợp lệ `[0.0, 1000.0]`. |
 | **Nhiệt độ / Temperature** | `°C` | Độ Celsius; dải hợp lệ `[0.0, 60.0]`. |
 | **Độ ẩm / Relative Humidity** | `%RH` | Phần trăm thang `0.0–100.0`. |

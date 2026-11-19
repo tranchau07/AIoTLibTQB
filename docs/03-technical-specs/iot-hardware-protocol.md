@@ -45,14 +45,17 @@
   "timestamp": 1728543600000,
   "wifi_rssi": -58,
   "data": {
-    "acoustics": { "noise_avg": 43.2, "noise_peak": 57.8 },
+    "acoustics": { "noise": 45.2 },
     "air_quality": { "pm1_0": 9.2, "pm2_5": 15.6, "pm4_0": 19.3, "pm10": 22.4 },
     "environment": { "temperature": 24.8, "humidity": 52.5, "lux": 460.0 }
   }
 }
 ```
+- **Định dạng âm học (`acoustics`)**:
+  - **Chuẩn hiện hành (`main` — Firmware & Simulator):** Thiết bị chỉ gửi mức độ ồn tức thời `"noise"` (aliases `@JsonAlias`: `"sound"`, `"db"`, `"dBA"`, dải hợp lệ `[30.0, 130.0]` dBA). [`TelemetrySanitizerService`](../../src/main/java/com/example/AIoTLibTQB/service/TelemetrySanitizerService.java) tự động tính trung bình trượt `noiseAvg` trong cửa sổ **`30s`** (tối đa `1,000` mẫu/thiết bị, trần `110.0` dBA) và tính `noisePeak = max(noise, noiseAvg)` tại Server.
+  - **Tương thích ngược (Legacy fallback):** Nếu payload **không có** `"noise"` (`in.getNoise() == null`), Server vẫn chấp nhận cặp `"noise_avg"` (`[30.0, 110.0]`) và `"noise_peak"` (`[30.0, 130.0]`). Nếu gửi đồng thời cả hai, nhánh `"noise"` luôn được ưu tiên xử lý.
 - **Quy tắc Payload**: Bắt buộc bọc trong object `"data"` và có ít nhất 1 chỉ số hợp lệ; không gửi `NaN` / `Infinity` hoặc mã lỗi giả (`-1`, `-999`, `0 dBA`). Nếu 1 cảm biến hỏng tạm thời, bỏ qua key đó — server có bộ đệm **Forward-fill 30s** cho các trường trừ `noise_peak`.
-- **`timestamp`**: Chuẩn Unix Epoch UTC — tự nhận diện **10 chữ số (giây)** hoặc **13 chữ số (mili-giây)**; nếu chưa đồng bộ NTP có thể bỏ qua trường này để Server gắn `Instant.now()`.
+- **`timestamp`**: Chuẩn Unix Epoch UTC — tự nhận diện **10 chữ số (giây)** hoặc **13 chữ số (mili-giây)**; nếu chưa đồng bộ NTP có thể bỏ qua trường này để Server gắn `Instant.now()` (gói tin `pre-2020` hoặc vượt tương lai `> 60s` cũng bị kẹp về `Instant.now()`).
 - **Chu kỳ gửi khuyến nghị**: Phát đều đặn (`0.5s` – `30s`, tối đa `<= 60s`) để không kích hoạt Watchdog offline (`> 120s`).
 
 ### 3.2. Status & Last Will and Testament (`devices/{hardwareId}/status`)
@@ -92,6 +95,6 @@ mqttClient.setBufferSize(512);
 ### Checklist 5 Lỗi Firmware Hay Gặp / Top 5 Hardware Integration Pitfalls
 1. **Quên `mqttClient.setBufferSize(512)`**: `status` gửi được nhưng `telemetry` bị rớt âm thầm (`publish()` trả `false`).
 2. **Lệch chữ hoa/thường `hardware_id` giữa Topic và JSON**: Bị `MqttMessageDispatcherService` chặn vì Anti-Spoofing.
-3. **Gửi `0` dBA cho `noise_avg` / `noise_peak`**: Nằm dưới sàn `30.0 dBA` nên bị `TelemetrySanitizerService` loại bỏ.
+3. **Gửi `0` dBA cho `noise` *(hoặc `noise_avg` / `noise_peak`)***: Nằm dưới sàn `30.0 dBA` nên bị `TelemetrySanitizerService` loại bỏ.
 4. **Gửi JSON phẳng không có `"data"` wrapper**: Bị coi là bản tin rỗng.
 5. **Mạch chưa được duyệt từ Auto-Discovery**: Tin đến Broker nhưng chưa vào phòng đọc cho đến khi Admin/Thủ thư đăng ký tại `/admin/devices/discovery`.

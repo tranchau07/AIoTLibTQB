@@ -24,8 +24,8 @@
 
 ## 2. Lưu Ý Quan Trọng Khi Build Frontend Cho Môi Trường Khác Localhost / Build-Time Public URLs
 
-- Trong [`frontend/Dockerfile`](../../frontend/Dockerfile), hai biến `NEXT_PUBLIC_API_BASE_URL` và `NEXT_PUBLIC_WS_URL` được nhúng ở giai đoạn **`ARG` / `builder` (`npm run build`)**.
-- Nếu triển khai qua Reverse Proxy cùng tên miền hoặc qua Unified Gateway (`:4000`), giữ mặc định `NEXT_PUBLIC_API_BASE_URL=/api/v1` (hoặc cấu hình trong `.env` trước khi chạy `docker compose up -d --build frontend`).
+- Trong [`frontend/Dockerfile`](../../frontend/Dockerfile) và [`docker-compose.yml`](../../docker-compose.yml), hai biến `NEXT_PUBLIC_API_BASE_URL` (mặc định `http://localhost:8080/api/v1`) và `NEXT_PUBLIC_WS_URL` (mặc định `ws://localhost:8080/ws-aiot`) được nhúng ở giai đoạn **`ARG` / `builder` (`npm run build`)**.
+- Nếu triển khai qua Reverse Proxy cùng tên miền hoặc qua Unified Gateway (`:4000`), cần truyền tường minh giá trị rỗng (`NEXT_PUBLIC_API_BASE_URL=""` và `NEXT_PUBLIC_WS_URL=""` — hoặc URL công khai đích) trong `.env` trước khi chạy `docker compose up -d --build frontend` để trình duyệt tự nối `${window.location.origin}/api/v1` và `${ws|wss}://${window.location.host}/ws-aiot` thay vì gọi về `localhost:8080` của máy khách.
 
 ---
 

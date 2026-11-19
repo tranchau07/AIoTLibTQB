@@ -16,7 +16,7 @@
    - Mọi controller trả `ApiResponse<T>` (`code = 1000` khi thành công); lỗi nghiệp vụ ném `new AppException(ErrorCode.XXX)` để `GlobalExceptionHandler` xử lý tập trung.
    - Luôn kẹp phân trang `safePage = Math.max(0, page)`, `safeSize = Math.max(1, Math.min(100, size))` và whitelist `sortBy`.
 4. **Mapping & Secrets Hygiene**:
-   - Dùng MapStruct cho CRUD 1:1 (`User`, `Role`, `Permission`, `Room`, `Device`) và Builder thủ công khi hợp nhất trạng thái động (`AlertResponse`, `TelemetryResponse`).
+   - Dùng MapStruct cho CRUD 1:1 (`User`, `Role`, `Permission`) và Builder thủ công khi chuyển đổi dữ liệu tổng hợp hoặc tính trạng động (`Room`, `Device`, `AlertResponse`, `TelemetryResponse`).
    - Tuyệt đối không hard-code secret; `BCrypt(10)` cho mật khẩu và `apiKey`.
 
 ---
@@ -44,6 +44,6 @@
 | :--- | :--- |
 | **Backend Concurrency** | Không có Blocking I/O trong `synchronized` hoặc `ConcurrentHashMap.compute()`; `Semaphore` luôn `release()` trong `finally`. |
 | **MongoDB TimeSeries** | Chỉ `insert` vào `telemetry_records`; aggregation dùng `$dateTrunc` + chặn `<= 1000` buckets. |
-| **API & Security** | Đủ `@PreAuthorize` + Zone ABAC (nếu liên quan Alert); không lộ secret/API key ra log; mọi endpoint mới cập nhật [API Spec](../03-technical-specs/api-and-realtime-spec.md). |
+| **API & Security** | Đủ `@PreAuthorize` + Zone ABAC (`Alert`, `Device`, `Telemetry`); không lộ secret/API key ra log; mọi endpoint mới cập nhật [API Spec](../03-technical-specs/api-and-realtime-spec.md). |
 | **Frontend Arch & Viz** | HTTP qua `client.ts`; `accessToken` chỉ trên RAM; dùng `coords.ts` + `weatherPalette.ts`; tôn trọng `FE-VIZ-09` trên `/kiosk`. |
 | **Automated Quality Gate** | `./mvnw test` xanh (`0` failed) + `cd frontend && npm run typecheck && npm test && npm run build` xanh hoàn toàn. |

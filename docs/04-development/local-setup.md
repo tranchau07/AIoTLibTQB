@@ -36,8 +36,8 @@
 | `ALERT_EMAIL_FROM`, `ALERT_EMAIL_COOLDOWN_MINUTES`, `ALERT_EMAIL_HIGH_ESCALATION_MINUTES` | `noreply@aiotlibtqb.edu.vn` / `30` / `10` | Địa chỉ gửi, thời gian cooldown phòng (phút) và ngưỡng leo thang `HIGH`. | [`application.yaml`](../../src/main/resources/application.yaml) |
 | `app.telemetry.conflation-ms` | `500` | Nhịp gộp STOMP WebSocket (`500ms = 2Hz`) *(chưa có trong `application.yaml.example`)*. | [`TelemetryConflationService`](../../src/main/java/com/example/AIoTLibTQB/service/TelemetryConflationService.java) |
 | `security.rate-limit.trusted-proxies` | *(empty — chỉ tin loopback mặc định)* | Danh sách IP Reverse Proxy được tin cậy đọc header `X-Forwarded-For`. | [`RateLimitFilter`](../../src/main/java/com/example/AIoTLibTQB/configuration/RateLimitFilter.java) |
-| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080/api/v1` | Endpoint REST cho Frontend (trống sẽ fallback tương đối `/api/v1`). | [`frontend/src/config/env.ts`](../../frontend/src/config/env.ts) |
-| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8080/ws-aiot` | Endpoint WebSocket STOMP cho Frontend. | [`frontend/src/config/env.ts`](../../frontend/src/config/env.ts) |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8080/api/v1` | Endpoint REST cho Frontend; nếu để trống, trình duyệt tự nối `${window.location.origin}/api/v1`, còn SSR fallback về `http://localhost:8080/api/v1`. | [`frontend/src/config/env.ts`](../../frontend/src/config/env.ts) |
+| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8080/ws-aiot` | Endpoint STOMP; nếu để trống, trình duyệt tự nối `${ws\|wss}://${window.location.host}/ws-aiot`, còn SSR fallback về `ws://localhost:8080/ws-aiot`. | [`frontend/src/config/env.ts`](../../frontend/src/config/env.ts) |
 | `SIM_INTERVAL_MS` | `500` (`docker-compose`) / `5000` (`.env.example`) | Chu kỳ phát Simulator *(lưu ý đồng bộ biến này về `500` khi chạy Docker).* | [`docker-compose.yml`](../../docker-compose.yml) |
 
 ---

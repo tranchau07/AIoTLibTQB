@@ -27,7 +27,7 @@
 
 3. **Mặt phẳng IoT & WebSocket STOMP**:
    - **Mosquitto Broker ACL ([`acl.conf`](../../mosquitto/config/acl.conf))**: `allow_anonymous false`. Tài khoản thiết bị đăng nhập với `username = hardwareId` bị khóa bởi `pattern write devices/%u/telemetry`, `pattern write devices/%u/status`, `pattern read devices/%u/command`.
-   - **STOMP (`StompChannelInterceptor`)**: `CONNECT` đòi JWT hợp lệ trừ khi client gửi `X-Public-Kiosk: true` *(khi đó chỉ được subscribe `/topic/public/rooms/*`)*. Kênh `/topic/alerts` và `/topic/zones/*/alerts` (`^/topic/zones/[^/]+/alerts$`) yêu cầu quyền `VIEW_ALERTS` hoặc `ADMIN`; role `DEVICE` bị chặn subscribe `/topic/rooms/*`.
+   - **STOMP (`StompChannelInterceptor`)**: `CONNECT` đòi JWT hợp lệ trừ khi client gửi `X-Public-Kiosk: true` *(khi đó chỉ được subscribe `/topic/public/rooms/*`)*. Kênh `/topic/alerts` và `/topic/zones/*/alerts` (`^/topic/zones/[^/]+/alerts$`) yêu cầu quyền `VIEW_ALERTS` hoặc `ADMIN`; role `DEVICE` bị chặn subscribe `/topic/rooms/*`, và mọi frame **`SEND` tới `/topic/*` từ client đều bị từ chối**.
 
 ---
 
@@ -56,8 +56,13 @@
 
 ---
 
-## 3. Phân Quyền Theo Phân Khu (ABAC `assignedZones`) / Zone Isolation
+## 3. Phân Quyền Theo Phân Khu (ABAC `assignedZones`) / Zone Isolation Across Services
 
-**[VI]** Trong [`AlertServiceImpl`](../../src/main/java/com/example/AIoTLibTQB/service/AlertServiceImpl.java), **chỉ `ADMIN`** (`ADMIN` / `ROLE_ADMIN`) mới được xem và thao tác cảnh báo toàn tòa nhà không giới hạn (`fullAccess = true`). Mọi vai trò khác (`LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`) bị lọc danh sách (`GET /api/v1/alerts`, `/unread-count`) theo trường `User.assignedZones` và chặn bằng `ErrorCode.ZONE_ACCESS_DENIED` (`4031`, HTTP `403`) khi gọi `acknowledge` / `resolve` / `workflow` cho cảnh báo ngoài khu vực được cấp.
+**[VI]** Cơ chế kiểm soát truy cập theo thuộc tính `User.assignedZones` được thực thi ở cả **3 tầng Service** (mã lỗi `4031 ZONE_ACCESS_DENIED`, HTTP `403` khi truy cập ngoài phân khu được giao):  
+**[EN]** Attribute-based isolation via `User.assignedZones` is enforced across **three backend services** (returning HTTP `403`, code `4031 ZONE_ACCESS_DENIED` on cross-zone access):
 
-**[EN]** In [`AlertServiceImpl`](../../src/main/java/com/example/AIoTLibTQB/service/AlertServiceImpl.java), **only `ADMIN`** has unrestricted building-wide alert visibility (`fullAccess = true`). Non-`ADMIN` staff (`LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`) are filtered by `User.assignedZones` on read endpoints and rejected with `4031 ZONE_ACCESS_DENIED` (HTTP `403`) when mutating alerts outside their assigned zones.
+| Service | Vai trò có toàn quyền tòa nhà (`fullAccess`) | Đối tượng bị cô lập theo `assignedZones` | Hành vi khi không khớp hoặc trống `assignedZones` |
+| :--- | :--- | :--- | :--- |
+| [`AlertServiceImpl`](../../src/main/java/com/example/AIoTLibTQB/service/AlertServiceImpl.java) | **Chỉ `ADMIN`** (`ADMIN` / `ROLE_ADMIN`) | Mọi vai trò khác (`LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `VIEWER`) | Đọc `/alerts` & `/unread-count` trả rỗng (`__none__`); gọi `acknowledge` / `resolve` / `workflow` ngoài zone bị chặn `4031`. |
+| [`DeviceService`](../../src/main/java/com/example/AIoTLibTQB/service/DeviceService.java) | `getAll` / `getById`: `ADMIN`, `LIBRARIAN`, `MAINTENANCE`<br>`getByZone`: `ADMIN`, `LIBRARIAN` | **`ZONE_MANAGER`** *(ở `getAll`, `getById`, `getByZone`)* | Chỉ trả các thiết bị thuộc `assignedZones` hoặc ném `4031 ZONE_ACCESS_DENIED`. |
+| [`TelemetryService`](../../src/main/java/com/example/AIoTLibTQB/service/TelemetryService.java) | `ADMIN`, `LIBRARIAN` | **`ZONE_MANAGER`** *(trên toàn bộ `/telemetry/**` theo device hoặc room)* | Kiểm tra `device.getZoneId()` trong `assignedZones` (chặn `4031` nếu phòng không có thiết bị thuộc zone được giao). |

@@ -30,14 +30,14 @@
 ### 2.2. Người dùng — [`UserController`](../../src/main/java/com/example/AIoTLibTQB/controller/UserController.java) (`/api/v1/users`)
 | Method & Path | Quyền / Auth (`UserService`) | Chi tiết / Notes |
 | :--- | :--- | :--- |
-| `POST /api/v1/users` | Public *(Rate limit 10/phút)* | `UserCreationRequest`: `username` `>= 6`, `password` `8..72`, `phone`, `email`. |
+| `POST /api/v1/users` | Public *(Rate limit 10/phút)* | `UserCreationRequest`: `username` `>= 6`, `password` `8..72`, `phone`, `email`; `roles` & `assignedZones` chỉ có hiệu lực khi caller có quyền `ADMIN` (khách tự đăng ký bị gắn `USER` và `assignedZones` rỗng). |
 | `GET /api/v1/users` | `ADMIN` | `page`, `size`, `sortBy` *(whitelist: `username`, `createdAt`, `email`)*, `sortDir`. Trả `PageResponse<UserResponse>`. |
 | `GET /api/v1/users/myInfo` | Authenticated | Trả thông tin tài khoản hiện tại. |
 | `POST /api/v1/users/change-password` | Authenticated | `PasswordChangeRequest`: `oldPassword`, `newPassword` (`8..72`). Thu hồi token cũ qua `credentialsUpdatedAt`. |
 | `GET /api/v1/users/{userId}` | `ADMIN` hoặc chính user đó (`@PostAuthorize`) | Trả `UserResponse`. |
 | `PUT /api/v1/users/{userId}` | `ADMIN` hoặc chính user đó | Chỉ `ADMIN` mới đổi được `roles`, `assignedZones` và reset `password` người khác. |
 | `PATCH /api/v1/users/{userId}/status` | `ADMIN` | `UserStatusRequest` (`active`). Không thể tự khóa chính mình (`1013`). |
-| `DELETE /api/v1/users/{userId}` | `ADMIN` | Không thể tự xóa chính mình (`1014`). |
+| `DELETE /api/v1/users/{userId}` | `ADMIN` | Trả `ApiResponse<String>`. Không thể tự xóa chính mình (`1014`). |
 
 ### 2.3. Vai trò & Quyền — [`RoleController`](../../src/main/java/com/example/AIoTLibTQB/controller/RoleController.java) & [`PermissionController`](../../src/main/java/com/example/AIoTLibTQB/controller/PermissionController.java)
 - **Roles (`/api/v1/roles` — toàn bộ `ADMIN`)**: `POST /`, `GET /`, `PUT /{name}`, `DELETE /{name}` (chặn xóa role hệ thống `2006`).
@@ -52,7 +52,7 @@
 | `PUT /api/v1/rooms/{id}` | `ADMIN`, `LIBRARIAN` | Cập nhật thông tin phòng, `boundaryPolygon`, `type`. |
 | `PUT /api/v1/rooms/{id}/thresholds` | `ADMIN`, `LIBRARIAN` | `RoomThresholdUpdateRequest` (`noiseAvgMax`, `noisePeakMax`, `noisePeakImmediate`, `tempMin/Max`, `humidityMin/Max`, `pm25Max`). |
 | `DELETE /api/v1/rooms/{id}` | `ADMIN` | Chặn xóa nếu phòng còn thiết bị (`5006`); xóa kèm layout nội thất nếu có. |
-| `GET /api/v1/rooms/{id}/furniture` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `VIEWER`, `USER` | Trả `RoomFurnitureResponse` *(lưu ý: Controller truyền `includeSensitive = true` cho endpoint authenticated này — khác với public kiosk ẩn `IOT_NODE`)*. |
+| `GET /api/v1/rooms/{id}/furniture` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `VIEWER`, `USER` | Trả `RoomFurnitureResponse` *(Controller truyền `includeSensitive = hasOperatorAuthority()` gồm `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `MANAGE_ZONES`; do đó **`VIEWER` và `USER` vẫn nhận `includeSensitive = false`** — ẩn `IOT_NODE` và ẩn `auditHistory`/`updatedBy`)*. |
 | `PUT /api/v1/rooms/{id}/furniture` | `ADMIN`, `LIBRARIAN`, `MAINTENANCE`, `MANAGE_ZONES` | `RoomFurnitureUpdateRequest` (`expectedVersion`, `items`, `changeNote`). Kiểm tra hình học trong biên phòng & SAT chồng lấn (`5008`), xung đột version (`5007`). |
 
 ### 2.5. Thiết bị IoT & Auto-Discovery — [`DeviceController`](../../src/main/java/com/example/AIoTLibTQB/controller/DeviceController.java) (`/api/v1/devices`)
@@ -64,9 +64,9 @@
 | `POST /api/v1/devices/{id}/regenerate-key` | `ADMIN`, `LIBRARIAN` | Cấp lại `rawApiKey` mới (thu hồi hash cũ). |
 | `PATCH /api/v1/devices/{id}/status` | `ADMIN`, `LIBRARIAN` | Query `?active=true|false`. |
 | `DELETE /api/v1/devices/{id}` | `ADMIN` | Xóa thiết bị. |
-| `GET /api/v1/devices` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `VIEWER`, `USER` | `page`, `size`, optional `zoneId`, `roomId`. |
-| `GET /api/v1/devices/{id}` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE` | Chi tiết trạm đo. |
-| `GET /api/v1/devices/zone/{zoneId}` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER` | Danh sách thiết bị theo zone. |
+| `GET /api/v1/devices` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `VIEWER`, `USER` | `page`, `size`, optional `zoneId`, `roomId`. `ZONE_MANAGER` bị lọc theo `assignedZones` (`4031 ZONE_ACCESS_DENIED` nếu lọc `zoneId` ngoài quyền). |
+| `GET /api/v1/devices/{id}` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE` | Chi tiết trạm đo (`ZONE_MANAGER` bị chặn `4031 ZONE_ACCESS_DENIED` ngoài `assignedZones`). |
+| `GET /api/v1/devices/zone/{zoneId}` | `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER` | Danh sách thiết bị theo zone (`ZONE_MANAGER` bị chặn `4031 ZONE_ACCESS_DENIED` ngoài `assignedZones`). |
 | `POST /api/v1/devices/authenticate` | Public *(Rate limit 10/phút)* | `DeviceAuthRequest` (`hardwareId`, `apiKey`) → trả Device JWT `8h`. |
 | `POST /api/v1/devices/{id}/heartbeat` | `ADMIN`, `DEVICE` | Cập nhật `lastSeenAt` thủ công qua HTTP. |
 
@@ -80,31 +80,31 @@
 | `PATCH /api/v1/alerts/{id}/workflow` | `ACKNOWLEDGE_ALERT` hoặc `MANAGE_ALERT_CONFIG` | `AlertWorkflowUpdateRequest` (`workflowStatus`: `NEW/ACKNOWLEDGED/IN_PROGRESS/RESOLVED`, `assignedTo`, `handlingNote`, `snoozeMinutes`). |
 
 ### 2.7. Chuỗi thời gian & Tổng hợp — [`TelemetryController`](../../src/main/java/com/example/AIoTLibTQB/controller/TelemetryController.java) (`/api/v1/telemetry`)
-- Toàn bộ yêu cầu `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `USER`, `VIEWER`:
+- Toàn bộ yêu cầu `ADMIN`, `LIBRARIAN`, `ZONE_MANAGER`, `MAINTENANCE`, `USER`, `VIEWER` *(riêng `ZONE_MANAGER` bị chặn `4031 ZONE_ACCESS_DENIED` qua `checkDeviceAccess` / `checkRoomAccess` nếu thiết bị/phòng ngoài `assignedZones`; `ADMIN`/`LIBRARIAN` có toàn quyền)*:
   - `GET /api/v1/telemetry/device/{deviceId}/latest` & `GET /api/v1/telemetry/room/{roomId}/latest`
-  - `GET /api/v1/telemetry/device/{deviceId}` & `GET /api/v1/telemetry/room/{roomId}` (`start`, `end` chuẩn ISO-8601 UTC)
-  - `GET /api/v1/telemetry/room/{roomId}/buckets` (`interval`: `15m` | `1h` | `1d`, mặc định `1h`; tối đa `1000` buckets — lỗi `7002`)
+  - `GET /api/v1/telemetry/device/{deviceId}` & `GET /api/v1/telemetry/room/{roomId}` (`start`, `end` chuẩn ISO-8601 UTC; mặc định 1 giờ gần nhất nếu bỏ trống)
+  - `GET /api/v1/telemetry/room/{roomId}/buckets` (`interval`: `15m` | `1h` | `1d`, mặc định `1h`; **bắt buộc** truyền cả `start` và `end` với `start < end`, lỗi `7001 INVALID_TIME_RANGE` nếu thiếu/sai; tối đa `1000` buckets — lỗi `7002`)
   - `GET /api/v1/telemetry/overview/summary` → `TelemetrySummaryResponse` (`totalRooms`, `optimalRoomsCount`, `averageComfortScore`, `overallGrade`, `bestRoom`, `attentionRoom`, `worstRoom`).
 
 ### 2.8. Cổng Công Khai Kiosk & Actuator — [`PublicController`](../../src/main/java/com/example/AIoTLibTQB/controller/PublicController.java) (`/api/v1/public`, `/actuator`)
 - Public GET *(Rate limit `60 req/phút/IP`)*:
   - `GET /api/v1/public/rooms?floor=` → `List<PublicRoomStatusResponse>`
   - `GET /api/v1/public/rooms/{id}/latest` → `PublicRoomStatusResponse`
-  - `GET /api/v1/public/rooms/{id}/furniture` → `RoomFurnitureResponse` *(truyền `includeSensitive = false`: **ẩn `IOT_NODE` và ẩn `auditHistory` / `updatedBy`**)*
+  - `GET /api/v1/public/rooms/{id}/furniture` → `RoomFurnitureResponse` *(`PublicController` truy vấn trực tiếp `roomFurnitureLayoutRepository`, lọc bỏ item `IOT_NODE`, đặt `auditHistory = []` và không gán `updatedBy`)*
 - Actuator công khai: `GET /actuator/health`, `GET /actuator/info` (`metrics` được expose nhưng yêu cầu xác thực).
 
 ---
 
 ## 3. Giao Tiếp WebSocket STOMP (`/ws-aiot`) / Realtime STOMP Topics
 
-Endpoint hỗ trợ cả SockJS và Raw WebSocket tại **`/ws-aiot`**, kiểm tra CORS từ `cors.allowed-origins` ([`WebSocketConfig`](../../src/main/java/com/example/AIoTLibTQB/configuration/WebSocketConfig.java)) và xác thực frame qua [`StompChannelInterceptor`](../../src/main/java/com/example/AIoTLibTQB/configuration/StompChannelInterceptor.java):
+Endpoint hỗ trợ cả SockJS và Raw WebSocket tại **`/ws-aiot`**, kiểm tra CORS từ `cors.allowed-origins` ([`WebSocketConfig`](../../src/main/java/com/example/AIoTLibTQB/configuration/WebSocketConfig.java)) và xác thực frame qua [`StompChannelInterceptor`](../../src/main/java/com/example/AIoTLibTQB/configuration/StompChannelInterceptor.java) *(mọi frame `SEND` từ client lên `/topic/*` đều bị từ chối)*:
 
 | Topic Destination | Điều kiện `CONNECT` / `SUBSCRIBE` | Payload & Tần suất phát |
 | :--- | :--- | :--- |
 | `/topic/rooms/{roomId}/telemetry` | User JWT hợp lệ (cấm `DEVICE` role) | `TelemetryResponse` — nhịp conflation **`500ms` (`2Hz`)** |
 | `/topic/public/rooms/{roomId}/telemetry` | Cho phép kết nối ẩn danh với header `X-Public-Kiosk: true` | `PublicRoomStatusResponse` (ẩn dữ liệu phần cứng) — nhịp **`500ms` (`2Hz`)** |
 | `/topic/alerts` | Yêu cầu quyền `VIEW_ALERTS` hoặc `ADMIN` | `AlertResponse` — tức thời theo sự kiện FSM / workflow |
-| `/topic/zones/{zoneId}/alerts` | Publisher phát đồng thời khi alert có `zoneId` | `AlertResponse` — phục vụ tách kênh theo phân khu |
+| `/topic/zones/{zoneId}/alerts` | Yêu cầu quyền `VIEW_ALERTS` hoặc `ADMIN` (`^/topic/zones/[^/]+/alerts$`); Publisher phát đồng thời khi alert có `zoneId` | `AlertResponse` — phục vụ tách kênh theo phân khu |
 
 ---
 
