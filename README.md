@@ -1,90 +1,95 @@
-# AIoTLibTQB — Hệ Thống Giám Sát Vi Khí Hậu & Âm Học Thông Minh Thư Viện Tạ Quang Bửu
+# AIoTLibTQB — Hệ thống Giám sát Vi khí hậu & Âm học Thông minh | Smart Library Microclimate & Acoustic Monitoring
 
-Hệ thống IoT thời gian thực giám sát môi trường đọc sách, bảo tồn kho lưu trữ tài liệu quý và trực quan hóa bản đồ nhiệt không gian 2D tại Thư viện Tạ Quang Bửu (ĐH Bách khoa Hà Nội).
-
----
-
-## Điểm nhấn Kiến trúc (v2.1)
-
-- **Động cơ Điểm Tiện nghi Liebig (LCS)**: Chấm điểm phi tuyến theo 3 cấu hình không gian (`STUDY_ROOM`, `BOOK_STORAGE`, `CIRCULATION_HALL`), tự tái phân bổ trọng số khi thiếu cảm biến và áp dụng phạt nút cổ chai theo Nguyên lý Thùng gỗ Liebig ([`docs/03-lcs-algorithm.md`](docs/03-lcs-algorithm.md)).
-- **Ingestion Pipeline & Alert FSM Thích ứng**: Tiếp nhận MQTT QoS 1 trên Java 21 Virtual Threads, lọc 9 chỉ số vật lý + forward-fill `30s` (loại trừ `noisePeak`), ngưỡng cảnh báo động theo từng phòng (`RoomThresholdConfig`), phát hiện xung ồn kép (`Dual-Threshold Noise Peak`), kiểm soát độ ẩm kho sách (`BOOK_STORAGE`) và danh mục SOP chuẩn ([`docs/04-ingestion-and-alerts.md`](docs/04-ingestion-and-alerts.md)).
-- **Bản đồ Nhiệt Không gian 2D (CAD 1:100)**: Render Canvas 2D HiDPI trên nền 5 bản vẽ AutoCAD SVG (`76.0m × 57.2m`, 33 preset phòng), khuếch tán Gaussian RBF thích ứng diện tích (`computeAdaptiveSigma`), phóng đại 2 cấp, ẩn danh bàn đọc cho bạn đọc và lớp phủ chẩn đoán vùng mù cho kỹ thuật viên ([`docs/09-spatial-heatmap-2d.md`](docs/09-spatial-heatmap-2d.md)).
-- **Cổng Kiosk Công khai & Bảo mật Đa lớp**: Kiosk sảnh tầng 1 (`/kiosk`) không cần đăng nhập qua `/api/v1/public/**` và STOMP ẩn danh (`X-Public-Kiosk: true`), đồng thời bảo vệ dữ liệu quản trị bằng Dual JWT `HS512`, 7 Roles × 14 Permissions, Bucket4j Rate Limit và Mosquitto ACL `%u` ([`docs/06-security-and-rbac.md`](docs/06-security-and-rbac.md)).
+> **Bản quyền mã nguồn / Repository Truth:** Toàn bộ bộ tài liệu này được đối chiếu và trích xuất trực tiếp từ mã nguồn thực tế (`Java 21 / Spring Boot 3.5.8`, `Next.js 15 / React 19`, `Docker Compose`, `tools/iot-simulator`) — *Zero Hallucination*.
 
 ---
 
-## Tech Stack Chính
+## 1. Tổng Quan Dự Án / Project Overview
 
-| Thành phần | Công nghệ & Phiên bản (Kiểm chứng mã nguồn) |
-| :--- | :--- |
-| **Backend Core** | Spring Boot `3.5.8`, Java `21 LTS` (Virtual Threads), Spring Integration MQTT, STOMP WebSocket, MapStruct `1.5.5.Final`, Lombok `1.18.38` |
-| **Bảo mật & Bộ đệm** | Nimbus JOSE+JWT `10.0.2` (`HS512`), Spring Security 6, Bucket4j `8.10.1`, Caffeine Cache |
-| **Cơ sở Dữ liệu** | MongoDB `8.0` (Native TimeSeries `telemetry_records` TTL 90 ngày + 7 Document Collections) |
-| **Message Broker** | Eclipse Mosquitto `2.0` (MQTT v3.1.1, QoS 1, PBKDF2 Auth, Per-device ACL `%u`) |
-| **Frontend Web** | Next.js `^15.5.28` (App Router, 16 routes), React `^19.0.0`, TypeScript `^5.6.3`, Tailwind CSS `^3.4.14`, Zustand `^5.0.1`, TanStack Query `^5.59.0`, `@stomp/stompjs ^7.0.0` |
-| **IoT & Hạ tầng** | ESP32-S3 (INMP441, SPS30, SHT30/31, BH1750), Node.js IoT Simulator (10 kịch bản), Docker Compose, Cloudflare Quick Tunnel |
+**[VI]** **AIoTLibTQB** là hệ thống IoT thời gian thực giúp Ban quản lý, Thủ thư và Đội kỹ thuật tại **Thư viện Tạ Quang Bửu (Đại học Bách khoa Hà Nội)** giám sát liên tục chất lượng môi trường bên trong 5 tầng thư viện — bao gồm độ ồn (`LAeq`, dBA), nhiệt độ (`°C`), độ ẩm (`%RH`), bụi mịn (`PM1.0 / PM2.5 / PM4.0 / PM10`) và ánh sáng (`Lux`). Hệ thống quy đổi các chỉ số vật lý thành **Điểm Tiện nghi Thư viện (LCS — thang 0–100)** theo nguyên lý thùng gỗ Liebig, trực quan hóa qua **Bản đồ nhiệt 2D chuẩn AutoCAD 1:100** và tự động phát cảnh báo đa kênh (WebSocket STOMP & Email SMTP) kèm quy trình xử lý sự cố 4 bước để bảo vệ sức khỏe bạn đọc, chất lượng học tập và công tác bảo quản tài liệu lưu trữ.
+
+**[EN]** **AIoTLibTQB** is a real-time IoT monitoring platform built for the **Ta Quang Buu Library (Hanoi University of Science and Technology)**. It continuously tracks indoor acoustics (`LAeq`, dBA), thermal comfort (`°C`, `%RH`), particulate matter (`PM1.0 / PM2.5 / PM4.0 / PM10`), and illuminance (`Lux`) across 5 library floors. Sensor readings are converted into a 0–100 **Library Comfort Score (LCS)** using a Liebig bottleneck model, visualized on a **1:100 AutoCAD 2D Spatial Heatmap**, and routed through a real-time **Alert Engine** (WebSocket STOMP & SMTP escalation) with a 4-stage incident workflow to support library managers, technicians, and students.
 
 ---
 
-## Quickstart 5 Phút (Docker Compose)
+## 2. Điều Hướng Theo Vai Trò / Role-Based Documentation Map
 
-> [!IMPORTANT]
-> **Yêu cầu**: Docker `24.0+` & Docker Compose `v2.20+`. Với chạy local không qua Docker cần JDK `21`, Maven `3.9+` (hoặc `./mvnw`), Node.js `20+` (`npm 10+`).
-
-1. **Khởi tạo cấu hình môi trường** (chỉnh sửa các giá trị `CHANGE_ME_*` và `JWT_SECRET >= 64` ký tự trong `.env`):
-   ```bash
-   cp .env.example .env
-   ```
-2. **Khởi chạy toàn bộ cụm dịch vụ** (`mongodb`, `mosquitto`, `backend`, `frontend`, `simulator`):
-   ```bash
-   docker compose up -d --build
-   # (Tùy chọn dev/debug) Bật thêm Mongo Express Web GUI trên cổng 8081:
-   docker compose --profile dev up -d mongo-express
-   ```
-3. **Kiểm tra nhanh các cổng dịch vụ**:
-   - **Web App & Kiosk**: `http://localhost:3000` (trang chủ `/` tự chuyển tới `/kiosk`; đăng nhập quản trị tại `/login`)
-   - **Backend Healthcheck**: `http://localhost:8080/actuator/health` (`{"status":"UP"}`)
-   - **MQTT Broker & MongoDB**: `127.0.0.1:1883` (Mosquitto), `127.0.0.1:27017` (MongoDB)
-
-> Xem hướng dẫn chạy từng thành phần (local dev, nạp `rooms.json`, mở Cloudflare Tunnel công khai và xử lý sự cố) tại [`docs/12-runbook.md`](docs/12-runbook.md).
+| Đối tượng đọc / Audience | Tài liệu cần đọc theo thứ tự / Recommended Reading Path | Mục tiêu / Goal |
+| :--- | :--- | :--- |
+| **Non-tech: PM, BA, Quản lý thư viện, Stakeholder**<br>*(Library Managers & Stakeholders)* | 1. [Tổng quan Nghiệp vụ / Business Overview](./docs/01-overview/business-overview.md)<br>2. [Luồng Hoạt động Hệ thống / System Flows](./docs/01-overview/system-flows.md)<br>3. [Từ điển Thuật ngữ / Glossary](./docs/01-overview/glossary.md) | Nắm bài toán, vai trò người dùng, chuẩn vi khí hậu & quy trình xử lý cảnh báo không cần biết code. |
+| **Kỹ sư Backend / Frontend / Full-stack**<br>*(Software Engineers)* | 1. [Kiến trúc Tổng thể / System Architecture](./docs/02-architecture/system-architecture.md)<br>2. [Kiến trúc Backend](./docs/02-architecture/backend-architecture.md) · [Kiến trúc Frontend & Bản đồ 2D](./docs/02-architecture/frontend-architecture.md)<br>3. [Mô hình Dữ liệu](./docs/03-technical-specs/data-model.md) · [REST API & STOMP](./docs/03-technical-specs/api-and-realtime-spec.md) · [Bảo mật & RBAC](./docs/03-technical-specs/security-and-rbac.md)<br>4. [Cài đặt Local](./docs/04-development/local-setup.md) · [Quy chuẩn Code](./docs/04-development/coding-conventions.md) · [Kiểm thử](./docs/04-development/testing-guide.md) | Hiểu kiến trúc pipeline, schema MongoDB, hợp đồng API/STOMP, quy tắc bất biến và cách dev/test. |
+| **Kỹ sư Phần cứng IoT / Embedded**<br>*(Firmware & Hardware Engineers)* | 1. [Giao thức Phần cứng ESP32-S3 & MQTT](./docs/03-technical-specs/iot-hardware-protocol.md)<br>2. [Hướng dẫn Bộ giả lập IoT](./docs/04-development/iot-simulator-guide.md) | Cấu hình MQTT ACL, LWT, anti-spoofing, dải đo hợp lệ & kịch bản kiểm thử mô phỏng. |
+| **DevOps / Kỹ thuật Vận hành**<br>*(Operations & DevOps)* | 1. [Triển khai Hạ tầng & Cloudflare Tunnel](./docs/05-operations/deployment.md)<br>2. [Quy trình Xử lý Sự cố & Runbook](./docs/05-operations/runbook-and-troubleshooting.md)<br>3. [Quyết định Kiến trúc & Nợ Kỹ thuật](./docs/02-architecture/decisions-and-tradeoffs.md) | Vận hành Docker Compose 6 service, giám sát Actuator, xử lý sự cố và rà soát rủi ro. |
 
 ---
 
-## Bản đồ Tài liệu Kỹ thuật (`docs/`)
+## 3. Công Nghệ Cốt Lõi / Verified Tech Stack
 
-Toàn bộ tài liệu chuẩn v2.1 được tổ chức tại [**Cổng Tài liệu Kỹ thuật (`docs/README.md`)**](docs/README.md):
-
-| STT | Tài liệu | Nội dung chính |
-| :---: | :--- | :--- |
-| **01** | [Bài toán & Tiêu chuẩn (`01-domain-and-standards.md`)](docs/01-domain-and-standards.md) | Bối cảnh Thư viện TQB, tiêu chuẩn ISO 11799 / ASHRAE 55 / WHO / TCVN, 3 `RoomType` |
-| **02** | [Kiến trúc Hệ thống (`02-architecture.md`)](docs/02-architecture.md) | Sơ đồ C4, Tech Stack, 6 Docker services, mạng cách ly & ADRs |
-| **03** | [Thuật toán LCS (`03-lcs-algorithm.md`)](docs/03-lcs-algorithm.md) | Công thức chấm điểm thành phần, tái phân bổ trọng số động & phạt Liebig |
-| **04** | [Ingestion & Alert FSM (`04-ingestion-and-alerts.md`)](docs/04-ingestion-and-alerts.md) | Pipeline MQTT 8 bước, Caffeine caches, Alert FSM thích ứng & SOP Catalog |
-| **05** | [Mô hình Dữ liệu (`05-data-model.md`)](docs/05-data-model.md) | 8 MongoDB collections, TimeSeries compression, indexes & `$dateTrunc` |
-| **06** | [Bảo mật & RBAC (`06-security-and-rbac.md`)](docs/06-security-and-rbac.md) | Dual JWT `HS512`, 7 Roles × 14 Permissions, Bucket4j Rate Limit & STOMP ACL |
-| **07** | [API & Error Codes (`07-api-reference.md`)](docs/07-api-reference.md) | 9 REST Controllers, 3 STOMP topics, `ApiResponse<T>` & 46 mã lỗi |
-| **08** | [Kiến trúc Frontend (`08-frontend-architecture.md`)](docs/08-frontend-architecture.md) | Next.js 15 App Router (16 routes), Zustand, TanStack Query & Light Mode UI |
-| **09** | [Bản đồ Nhiệt 2D (`09-spatial-heatmap-2d.md`)](docs/09-spatial-heatmap-2d.md) | AutoCAD SVG 1:100 5 tầng, Gaussian RBF + IDW, Zoom 2 cấp & công cụ theo Role |
-| **10** | [Phần cứng IoT & Simulator (`10-iot-hardware-and-simulator.md`)](docs/10-iot-hardware-and-simulator.md) | Node ESP32-S3, giao thức MQTT JSON payloads & 10 kịch bản giả lập |
-| **11** | [Quy chuẩn Phát triển (`11-conventions.md`)](docs/11-conventions.md) | Quy chuẩn code Backend/Frontend, an toàn Virtual Threads & PR Checklist |
-| **12** | [Cẩm nang Vận hành (`12-runbook.md`)](docs/12-runbook.md) | Cài đặt local/Docker, Cloudflare Tunnel, kiểm tra nghiệm thu & Troubleshooting |
-| **13** | [Từ điển Thuật ngữ (`13-glossary.md`)](docs/13-glossary.md) | Thuật ngữ chuyên ngành, từ viết tắt, đơn vị đo & quy chuẩn dữ liệu |
+| Lớp / Layer | Công nghệ & Phiên bản thực tế / Stack & Version | Tệp nguồn đối chiếu / Source Reference |
+| :--- | :--- | :--- |
+| **Backend Core** | Java `21` (Virtual Threads), Spring Boot `3.5.8`, Maven (`./mvnw`) | [`pom.xml`](./pom.xml) |
+| **Database** | MongoDB `8.0` (`spring-boot-starter-data-mongodb`, `@TimeSeries` 90d TTL + 8 document collections) | [`docker-compose.yml`](./docker-compose.yml), [`TelemetryRecord.java`](./src/main/java/com/example/AIoTLibTQB/document/TelemetryRecord.java) |
+| **IoT Broker** | Eclipse Mosquitto `2.0`, `spring-integration-mqtt`, Paho Client `1.2.5` (QoS 1, Per-device ACL `%u`) | [`mosquitto.conf`](./mosquitto/config/mosquitto.conf), [`acl.conf`](./mosquitto/config/acl.conf) |
+| **Realtime & Email** | Spring WebSocket STOMP (`/ws-aiot`), `@stomp/stompjs ^7.0.0`, `spring-boot-starter-mail` (JavaMailSender) | [`WebSocketConfig.java`](./src/main/java/com/example/AIoTLibTQB/configuration/WebSocketConfig.java), [`AlertEmailNotificationService.java`](./src/main/java/com/example/AIoTLibTQB/service/AlertEmailNotificationService.java) |
+| **Security & Auth** | Nimbus JOSE JWT `10.0.2` (HS512), Spring OAuth2 Resource Server, Bucket4j `8.10.1` + Caffeine, BCrypt(10) | [`SecurityConfig.java`](./src/main/java/com/example/AIoTLibTQB/configuration/SecurityConfig.java), [`RateLimitFilter.java`](./src/main/java/com/example/AIoTLibTQB/configuration/RateLimitFilter.java) |
+| **Frontend Core** | Next.js `^15.5.28` (`output: 'standalone'`), React `^19.0.0`, TypeScript `^5.6.3`, Tailwind CSS `^3.4.14` | [`frontend/package.json`](./frontend/package.json), [`frontend/next.config.ts`](./frontend/next.config.ts) |
+| **Frontend State & Viz** | `@tanstack/react-query ^5.59.0`, Zustand `^5.0.1`, Zod `^3.23.8`, HTML5 Canvas 2D HiDPI + AutoCAD SVG | [`FloorplanCanvas.tsx`](./frontend/src/features/floorplan/components/FloorplanCanvas.tsx) |
+| **Testing & A11y** | JUnit 5 / Mockito (`32` test classes, `281` tests); Vitest `^2.1.4`, Testing Library `^16.0.1`, `axe-core ^4.14.1` (`13` files, `146` tests) | [`src/test/`](./src/test), [`frontend/src/lib/__tests__/`](./frontend/src/lib/__tests__) |
+| **Simulator & Tunnel** | Node.js `20-alpine` (`mqtt ^5.10.3`, `dotenv ^16.4.7`), Unified Gateway (`:4000`) + `cloudflared` | [`tools/iot-simulator/package.json`](./tools/iot-simulator/package.json), [`gateway.js`](./tools/cloudflared/gateway.js) |
 
 ---
 
-## Cấu trúc Thư mục Dự án
+## 4. Khởi Chạy Nhanh / Quick Start
+
+> **[VI]** Yêu cầu Docker Engine `24+` & Docker Compose `v2.20+` (chi tiết chạy dev native không Docker xem [Local Setup](./docs/04-development/local-setup.md)).  
+> **[EN]** Requires Docker Engine `24+` & Docker Compose `v2.20+` (for native non-Docker dev setup, see [Local Setup](./docs/04-development/local-setup.md)).
+
+```bash
+# 1. Sao chép cấu hình môi trường & thay các giá trị bí mật (đặc biệt JWT_SECRET >= 64 ký tự)
+#    Copy env template & replace placeholders (JWT_SECRET MUST be >= 64 chars for HS512)
+cp .env.example .env
+
+# 2. Khởi chạy toàn bộ 5 dịch vụ cốt lõi (mongodb, mosquitto, backend, frontend, simulator)
+#    Start all 5 core services (add --profile dev to also launch mongo-express on :8081)
+docker compose up -d --build
+
+# 3. Kiểm tra sức khỏe dịch vụ / Verify health checks
+docker compose ps
+curl http://localhost:8080/actuator/health
+```
+
+- **Web Portal & Bản đồ nhiệt / Heatmap UI**: `http://localhost:3000` (tài khoản khởi tạo / seeded user: `admin` với mật khẩu `INITIAL_ADMIN_PASSWORD` trong `.env`)
+- **Màn hình Kiosk công khai / Public Kiosk**: `http://localhost:3000/kiosk`
+- **Backend REST API & Actuator**: `http://localhost:8080/api/v1` · `http://localhost:8080/actuator/health`
+- **Mongo Express (`--profile dev`)**: `http://127.0.0.1:8081`
+
+---
+
+## 5. Cấu Trúc Thư Mục Tài Liệu / Documentation Tree
 
 ```text
-AIoTLibTQB/
-├── src/                                  # Backend Spring Boot 3.5.8 (Java 21)
-├── frontend/                             # Frontend Next.js 15 + React 19 + Canvas 2D
-├── mosquitto/config/                     # Cấu hình Mosquitto & ACL per-device (%u)
-├── tools/
-│   ├── iot-simulator/                    # Bộ giả lập mạch Node.js (10 kịch bản kiểm thử)
-│   └── cloudflared/                      # Unified Gateway (:4000) & Cloudflare Tunnel scripts
-├── docs/                                 # Bộ tài liệu kỹ thuật chuẩn v2.1 (README + 01..13)
-│   └── archive/                          # Hồ sơ nghiệp vụ & lịch sử audit/kế hoạch cũ
-├── AIoTLibTQB_Postman_Collection.json    # Bộ sưu tập Postman kiểm thử REST API v2.1
-├── docker-compose.yml                    # Điều phối 6 dịch vụ & 2 mạng Docker cách ly
-└── .env.example                          # Mẫu biến môi trường chuẩn 12-Factor
+├── README.md
+└── docs/
+    ├── 01-overview/
+    │   ├── business-overview.md
+    │   ├── system-flows.md
+    │   └── glossary.md
+    ├── 02-architecture/
+    │   ├── system-architecture.md
+    │   ├── backend-architecture.md
+    │   ├── frontend-architecture.md
+    │   └── decisions-and-tradeoffs.md
+    ├── 03-technical-specs/
+    │   ├── data-model.md
+    │   ├── api-and-realtime-spec.md
+    │   ├── security-and-rbac.md
+    │   └── iot-hardware-protocol.md
+    ├── 04-development/
+    │   ├── local-setup.md
+    │   ├── iot-simulator-guide.md
+    │   ├── coding-conventions.md
+    │   └── testing-guide.md
+    └── 05-operations/
+        ├── deployment.md
+        └── runbook-and-troubleshooting.md
 ```
