@@ -2218,8 +2218,16 @@ export default function FloorplanPage() {
           </nav>
 
           <div className="w-full">
-            <div className="relative min-w-0 w-full" data-testid="floorplan-main-stage">
-              <div className="card overflow-hidden">
+            <div
+              className={`relative min-w-0 w-full ${
+                selectedRoom
+                  ? 'flex flex-col gap-3 lg:flex-row lg:items-start'
+                  : ''
+              }`}
+              data-testid="floorplan-main-stage"
+              data-drawer-open={selectedRoom ? 'true' : 'false'}
+            >
+              <div className="card min-w-0 flex-1 overflow-hidden">
                 <FloorplanCanvas
                   rooms={visibleFloorRooms}
                   devices={floorDevices}
@@ -2248,9 +2256,7 @@ export default function FloorplanPage() {
                   showReliabilityLayer={showReliabilityLayer}
                   roomReliabilityMap={roomReliabilityMap}
                   showTechOverlay={isMaintenanceView}
-                  defaultLabelDensity={
-                    isMaintenanceView ? 'detailed' : 'balanced'
-                  }
+                  defaultLabelDensity="clean"
                   highlightedZoneIds={
                     onlyAssignedZones ? assignedZones : undefined
                   }
@@ -2299,13 +2305,18 @@ export default function FloorplanPage() {
                 />
               </div>
 
-            {/* Streamlined Right Floating Drawer (Does not shrink canvas width) */}
+            {/* Side-docked Right Room Detail Panel (Shifts map left so heatmap is never covered) */}
             {selectedRoom && (
               <aside
                 role="complementary"
                 data-testid="room-detail-drawer"
                 aria-label={`Chi tiết phòng ${selectedRoom.name}`}
-                className="card absolute right-3 top-3 z-30 max-h-[calc(100%-1.5rem)] w-[min(390px,calc(100%-1.5rem))] space-y-3.5 overflow-y-auto border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur"
+                style={
+                  maxViewportHeightPx
+                    ? { maxHeight: `${Math.max(460, maxViewportHeightPx + 40)}px` }
+                    : undefined
+                }
+                className="card w-full shrink-0 space-y-3.5 overflow-y-auto border-slate-200 bg-white p-4 shadow-sm lg:w-[370px] xl:w-[390px]"
               >
                 <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
                   <div className="min-w-0">

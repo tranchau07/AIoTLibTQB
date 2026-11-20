@@ -333,7 +333,7 @@ export function FloorplanCanvas({
   const [hoveredBayId, setHoveredBayId] = useState<string | null>(null);
   const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
   const [labelDensity, setLabelDensity] = useState<LabelDensity>(
-    defaultLabelDensity ?? (showTechOverlay ? 'detailed' : 'balanced')
+    defaultLabelDensity ?? 'clean'
   );
   const [internalZoomedRoomId, setInternalZoomedRoomId] = useState<
     string | null
@@ -2494,6 +2494,7 @@ export function FloorplanCanvas({
       data-reliability-layer={showReliabilityLayer ? 'true' : 'false'}
       data-furniture-layer={showFurnitureLayer ? 'true' : 'false'}
       data-furniture-edit={furnitureEditMode ? 'true' : 'false'}
+      data-label-density={labelDensity}
       data-anim-cache-size={animValuesRef.current.size}
       data-cad-cache-size={cadImagesRef.current.size}
       className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1120] shadow-inner"
@@ -2503,7 +2504,7 @@ export function FloorplanCanvas({
         className="relative overflow-hidden"
         style={{ width: canvasSize.width, height: canvasSize.height }}
       >
-        {/* Top Floating Controls: CAD Layer Toggle, Display Density & Zoom Fit */}
+        {/* Top Floating Controls: CAD Layer Toggle, Clean Density & Zoom Fit */}
         <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1.5">
           <button
             type="button"
@@ -2519,36 +2520,20 @@ export function FloorplanCanvas({
             {FLOORPLAN_I18N_VI.controls.cadToggle}
           </button>
 
-          {/* Display Density Segmented Control (Tinh gọn | Cân bằng | Chi tiết) */}
+          {/* Display Density (Only Tinh gọn mode) */}
           <div
             role="group"
             aria-label="Mật độ hiển thị nhãn bản đồ"
             className="flex items-center rounded-lg border border-slate-700/90 bg-slate-900/90 p-0.5 text-xs shadow-sm backdrop-blur"
           >
-            {(
-              [
-                { key: 'clean', label: 'Tinh gọn' },
-                { key: 'balanced', label: 'Cân bằng' },
-                { key: 'detailed', label: 'Chi tiết' },
-              ] as const
-            ).map((opt) => {
-              const active = labelDensity === opt.key;
-              return (
-                <button
-                  key={opt.key}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setLabelDensity(opt.key)}
-                  className={`rounded-md px-2 py-0.5 text-2xs font-semibold transition-colors ${
-                    active
-                      ? 'bg-sky-500 text-slate-950 shadow-xs'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
+            <button
+              type="button"
+              aria-pressed={labelDensity === 'clean'}
+              onClick={() => setLabelDensity('clean')}
+              className="rounded-md bg-sky-500 px-2 py-0.5 text-2xs font-semibold text-slate-950 shadow-xs transition-colors"
+            >
+              Tinh gọn
+            </button>
           </div>
 
           {zoomViewport.isZoomed ? (

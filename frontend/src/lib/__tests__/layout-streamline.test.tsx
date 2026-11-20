@@ -204,5 +204,70 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
     expect(screen.queryByTestId('time-comparison-bar')).not.toBeInTheDocument();
     expect(screen.queryByTestId('floor-room-tree-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('map-alert-queue-panel')).not.toBeInTheDocument();
+
+    // Chỉ duy nhất chế độ "Tinh gọn" (xóa "Cân bằng" và "Chi tiết")
+    const canvasWrapper = screen.getByTestId('floorplan-canvas-wrapper');
+    expect(canvasWrapper).toHaveAttribute('data-label-density', 'clean');
+    expect(screen.getByRole('button', { name: 'Tinh gọn' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Cân bằng' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Chi tiết' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('shifts heatmap left beside room-detail-drawer instead of overlaying it when a room is selected', async () => {
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [room301],
+      page: 0,
+      size: 100,
+      totalElements: 1,
+      totalPages: 1,
+      last: true,
+    });
+    vi.spyOn(devicesApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 50,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(telemetryApi, 'getRoomLatest').mockResolvedValue(
+      makeTelemetry('ROOM_301')
+    );
+    vi.spyOn(roomsApi, 'getFurniture').mockResolvedValue({
+      roomId: 'ROOM_301',
+      version: 1,
+      items: [],
+      auditHistory: [],
+    });
+
+    window.history.replaceState({}, '', '/floorplan?floor=3&roomId=ROOM_301');
+    renderWithProviders(<FloorplanPage />);
+
+    const mainStage = await screen.findByTestId('floorplan-main-stage');
+    const drawer = await screen.findByTestId('room-detail-drawer');
+
+    await waitFor(() => {
+      expect(mainStage).toHaveAttribute('data-drawer-open', 'true');
+      expect(mainStage.className).toContain('lg:flex-row');
+      expect(drawer.className).not.toContain('absolute');
+    });
+
+    window.history.replaceState({}, '', '/floorplan');
   });
 });
