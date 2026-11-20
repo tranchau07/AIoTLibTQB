@@ -620,6 +620,7 @@ describe('Giai đoạn 2: Cây Điều Hướng WAI-ARIA Tầng -> Phòng, Đồ
     });
 
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    window.history.replaceState({}, '', '/floorplan?floor=3&roomId=ROOM_302');
     render(
       <QueryClientProvider client={qc}>
         <ToastProvider>
@@ -628,8 +629,8 @@ describe('Giai đoạn 2: Cây Điều Hướng WAI-ARIA Tầng -> Phòng, Đồ
       </QueryClientProvider>
     );
 
-    const r302TreeItem = await screen.findByTestId('tree-room-TQB_302');
-    fireEvent.click(r302TreeItem);
+    // Thành phần "Tầng & Phòng" không còn gắn trên trang Bản đồ mặt bằng
+    expect(screen.queryByTestId('floor-room-tree-panel')).not.toBeInTheDocument();
 
     // Breadcrumb hiện "Tầng 3 › TQB_302 — ..." và bản đồ zoom vào P.302
     const roomCrumb = await screen.findByTestId('breadcrumb-room-label');
@@ -647,6 +648,7 @@ describe('Giai đoạn 2: Cây Điều Hướng WAI-ARIA Tầng -> Phòng, Đồ
       expect(screen.queryByTestId('breadcrumb-room-label')).not.toBeInTheDocument();
       expect(Number(wrapper.getAttribute('data-scale'))).toBe(1);
     });
+    window.history.replaceState({}, '', '/floorplan');
   });
 
   it('TC-G2-10: Thu gọn / mở rộng ngăn Cây điều hướng sang dải 44px hiển thị chấm trạng thái 5 tầng', () => {

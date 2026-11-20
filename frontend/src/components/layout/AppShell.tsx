@@ -19,6 +19,8 @@ import {
   Map,
   Menu,
   MonitorPlay,
+  PanelLeftClose,
+  PanelLeftOpen,
   Radar,
   ShieldAlert,
   Table2,
@@ -57,12 +59,37 @@ interface NavGroup {
   items: NavItem[];
 }
 
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'tqb_desktop_sidebar_collapsed';
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true') {
+        setDesktopCollapsed(true);
+      }
+    } catch {
+      // Ignore storage access failures
+    }
+  }, []);
+
+  const toggleDesktopSidebar = useCallback(() => {
+    setDesktopCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
+      } catch {
+        // Ignore storage access failures
+      }
+      return next;
+    });
+  }, []);
 
   const hydrated = useAuthStore((s) => s.hydrated);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -497,10 +524,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       : allItems.find((i) => isActive(i))?.label ?? '';
 
   return (
-    <div className="flex min-h-screen bg-canvas text-slate-900">
+    <div
+      data-sidebar-collapsed={desktopCollapsed ? 'true' : 'false'}
+      className="flex min-h-screen bg-canvas text-slate-900"
+    >
       {/* Sidebar desktop */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-slate-200/80 bg-slate-50 lg:block">
-        {sidebar}
+      <aside
+        aria-label="Thanh điều hướng bên trái"
+        aria-hidden={desktopCollapsed}
+        data-testid="desktop-sidebar"
+        data-collapsed={desktopCollapsed ? 'true' : 'false'}
+        className={`sticky top-0 hidden h-screen shrink-0 overflow-hidden bg-slate-50 transition-[width,opacity] duration-200 ease-in-out lg:block ${
+          desktopCollapsed
+            ? 'invisible pointer-events-none w-0 border-r-0 opacity-0'
+            : 'visible w-60 border-r border-slate-200/80 opacity-100'
+        }`}
+      >
+        <div className="h-full w-60">{sidebar}</div>
       </aside>
 
       {/* Sidebar mobile */}
@@ -526,7 +566,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur lg:px-8">
+        <header
+          className={`sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur transition-[padding] duration-200 ${
+            desktopCollapsed || pathname?.startsWith('/floorplan') ? 'lg:px-4' : 'lg:px-8'
+          }`}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -535,6 +579,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               aria-label="Mở menu"
             >
               <Menu className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleDesktopSidebar}
+              data-testid="desktop-sidebar-toggle"
+              aria-expanded={!desktopCollapsed}
+              aria-label={
+                desktopCollapsed ? 'Mở thanh điều hướng' : 'Thu gọn thanh điều hướng'
+              }
+              title={
+                desktopCollapsed ? 'Mở thanh điều hướng' : 'Thu gọn thanh điều hướng'
+              }
+              className="btn-icon hidden lg:inline-flex"
+            >
+              {desktopCollapsed ? (
+                <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+              )}
             </button>
             <span className="truncate text-sm font-medium text-slate-900">{currentTitle}</span>
           </div>
@@ -581,8 +644,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main
           className={
             pathname?.startsWith('/floorplan')
-              ? 'flex-1 px-3 py-2.5 lg:px-4 lg:py-3'
-              : 'flex-1 px-4 py-6 lg:px-8 lg:py-8'
+              ? 'flex-1 px-2.5 py-2 lg:px-3 lg:py-2'
+              : desktopCollapsed
+                ? 'flex-1 px-4 py-6 lg:px-5 lg:py-6'
+                : 'flex-1 px-4 py-6 lg:px-8 lg:py-8'
           }
         >
           {children}

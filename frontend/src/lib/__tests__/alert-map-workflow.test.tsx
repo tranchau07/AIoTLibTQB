@@ -18,6 +18,7 @@ import { TQB_ROOM_PRESETS } from '@/config/tqb-floorplan-presets';
 import { alertsApi } from '@/features/alerts/api';
 import { useAuthStore } from '@/features/auth/store';
 import { devicesApi } from '@/features/devices/api';
+import { MapAlertQueuePanel } from '@/features/floorplan/components/AlertInspectorDrawer';
 import { roomsApi } from '@/features/rooms/api';
 import { telemetryApi } from '@/features/telemetry/api';
 import { buildCapabilities } from '@/lib/rbac/capabilities';
@@ -463,23 +464,23 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
       totalPages: 0,
       last: true,
     });
+    const overdueAlert = makeAlert({
+      id: 'alert-overdue',
+      roomId: 'ROOM_302',
+      severity: 'MEDIUM',
+      startedAt: overdueStarted,
+      workflowStatus: 'NEW',
+    });
+    const freshAlert = makeAlert({
+      id: 'alert-fresh',
+      roomId: 'ROOM_301',
+      severity: 'CRITICAL',
+      startedAt: freshStarted,
+      workflowStatus: 'NEW',
+    });
+
     vi.spyOn(alertsApi, 'list').mockResolvedValue({
-      content: [
-        makeAlert({
-          id: 'alert-fresh',
-          roomId: 'ROOM_301',
-          severity: 'CRITICAL',
-          startedAt: freshStarted,
-          workflowStatus: 'NEW',
-        }),
-        makeAlert({
-          id: 'alert-overdue',
-          roomId: 'ROOM_302',
-          severity: 'MEDIUM',
-          startedAt: overdueStarted,
-          workflowStatus: 'NEW',
-        }),
-      ],
+      content: [freshAlert, overdueAlert],
       page: 0,
       size: 50,
       totalElements: 2,
@@ -491,8 +492,28 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
     );
 
     renderFloorplanPage();
+    expect(screen.queryByTestId('map-alert-queue-panel')).not.toBeInTheDocument();
 
-    const queuePanel = await screen.findByTestId('map-alert-queue-panel');
+    // Trên bản đồ Canvas, huy hiệu phòng ROOM_302 vẫn mang đánh dấu tồn đọng nổi bật
+    const mapBadge302 = await screen.findByTestId('room-alert-badge-ROOM_302');
+    expect(mapBadge302).toHaveAttribute('data-overdue', 'true');
+    expect(mapBadge302).toHaveTextContent(/Tồn đọng/i);
+
+    // Kiểm chứng sắp xếp tồn đọng trên component MapAlertQueuePanel độc lập
+    render(
+      <MapAlertQueuePanel
+        alerts={[freshAlert, overdueAlert]}
+        rooms={[room301, room302]}
+        nowMs={Date.now()}
+        overdueAlertMs={TIMING_CONFIG.overdueAlertMs}
+        canAcknowledge
+        isSubmitting={false}
+        onFlyToAlert={vi.fn()}
+        onAcknowledgeRoomAlerts={vi.fn()}
+      />
+    );
+
+    const queuePanel = screen.getByTestId('map-alert-queue-panel');
     const overdueGroup = within(queuePanel).getByTestId('alert-group-ROOM_302');
     const freshGroup = within(queuePanel).getByTestId('alert-group-ROOM_301');
 
@@ -507,70 +528,48 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
       overdueGroup.compareDocumentPosition(freshGroup) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-
-    // Trên bản đồ Canvas, huy hiệu phòng ROOM_302 cũng mang đánh dấu tồn đọng nổi bật
-    const mapBadge302 = await screen.findByTestId('room-alert-badge-ROOM_302');
-    expect(mapBadge302).toHaveAttribute('data-overdue', 'true');
-    expect(mapBadge302).toHaveTextContent(/Tồn đọng/i);
   });
 
   it('TC-G6-09: Gom nhóm nhiều cảnh báo trong cùng phòng P.301 (3 cảnh báo) với mức nghiêm trọng cao nhất & mở rộng xem con', async () => {
-    authenticateAs('LIBRARIAN');
     const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+    const alerts = [
+      makeAlert({
+        id: 'a-301-noise',
+        roomId: 'ROOM_301',
+        type: 'NOISE_EXCEEDED',
+        severity: 'MEDIUM',
+        message: 'Noise 71 dBA',
+      }),
+      makeAlert({
+        id: 'a-301-temp',
+        roomId: 'ROOM_301',
+        type: 'AIR_UNHEALTHY',
+        metricType: 'TEMPERATURE',
+        severity: 'HIGH',
+        message: 'Temperature 33.0 °C',
+      }),
+      makeAlert({
+        id: 'a-301-pm25',
+        roomId: 'ROOM_301',
+        type: 'AIR_UNHEALTHY',
+        metricType: 'PM2_5',
+        severity: 'CRITICAL',
+        message: 'PM2.5 78 µg/m³',
+      }),
+    ];
 
-    vi.spyOn(roomsApi, 'list').mockResolvedValue({
-      content: [room301],
-      page: 0,
-      size: 100,
-      totalElements: 1,
-      totalPages: 1,
-      last: true,
-    });
-    vi.spyOn(devicesApi, 'list').mockResolvedValue({
-      content: [],
-      page: 0,
-      size: 100,
-      totalElements: 0,
-      totalPages: 0,
-      last: true,
-    });
-    vi.spyOn(alertsApi, 'list').mockResolvedValue({
-      content: [
-        makeAlert({
-          id: 'a-301-noise',
-          roomId: 'ROOM_301',
-          type: 'NOISE_EXCEEDED',
-          severity: 'MEDIUM',
-          message: 'Noise 71 dBA',
-        }),
-        makeAlert({
-          id: 'a-301-temp',
-          roomId: 'ROOM_301',
-          type: 'AIR_UNHEALTHY',
-          metricType: 'TEMPERATURE',
-          severity: 'HIGH',
-          message: 'Temperature 33.0 °C',
-        }),
-        makeAlert({
-          id: 'a-301-pm25',
-          roomId: 'ROOM_301',
-          type: 'AIR_UNHEALTHY',
-          metricType: 'PM2_5',
-          severity: 'CRITICAL',
-          message: 'PM2.5 78 µg/m³',
-        }),
-      ],
-      page: 0,
-      size: 50,
-      totalElements: 3,
-      totalPages: 1,
-      last: true,
-    });
-    vi.spyOn(telemetryApi, 'getRoomLatest').mockImplementation(async (id) =>
-      makeTelemetry(id, { score: 42 })
+    render(
+      <MapAlertQueuePanel
+        alerts={alerts}
+        rooms={[room301]}
+        nowMs={Date.now()}
+        overdueAlertMs={TIMING_CONFIG.overdueAlertMs}
+        canAcknowledge
+        isSubmitting={false}
+        onFlyToAlert={vi.fn()}
+        onAcknowledgeRoomAlerts={vi.fn()}
+      />
     );
-
-    renderFloorplanPage();
 
     const group301 = await screen.findByTestId('alert-group-ROOM_301');
     expect(group301).toHaveTextContent('P.301 (3 cảnh báo)');
@@ -592,7 +591,7 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
     expect(within(group301).getByTestId('queue-alert-item-a-301-noise')).toBeInTheDocument();
   });
 
-  it('TC-G6-10: Bấm "Bay tới vị trí" trên cảnh báo Tầng 5 chuyển từ Tầng 1 → Tầng 5, đổi lớp temperature, zoom P.502 & ghim node ESP32_T5_02', async () => {
+  it('TC-G6-10: Điều hướng deep-link cảnh báo Tầng 5 chuyển đúng Tầng 5, đổi lớp temperature, zoom P.502 & ghim node ESP32_T5_02', async () => {
     authenticateAs('LIBRARIAN');
     const room101 = makeRoomFromPreset('TQB_101', 'ROOM_101');
     const room502 = makeRoomFromPreset('TQB_502', 'ROOM_502');
@@ -644,20 +643,8 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
       makeTelemetry('ROOM_502', { score: 58, temperature: 34.5 })
     );
 
+    window.history.replaceState({}, '', '/floorplan?floor=1&alertId=alert-fl5');
     renderFloorplanPage();
-
-    // Chuyển về Tầng 1 trước để kiểm chứng hành động bay xuyên tầng (Tầng 1 -> Tầng 5)
-    const floor1Btn = await screen.findByRole('button', { name: 'Tầng 1' });
-    fireEvent.click(floor1Btn);
-    await waitFor(() => {
-      expect(screen.getByTestId('breadcrumb-floor-btn')).toHaveTextContent(
-        'Tầng 1'
-      );
-    });
-
-    // Click nút "Bay tới vị trí" trong hàng đợi cảnh báo
-    const flyToBtn = await screen.findByTestId('queue-fly-to-alert-fl5');
-    fireEvent.click(flyToBtn);
 
     await waitFor(() => {
       expect(screen.getByTestId('breadcrumb-floor-btn')).toHaveTextContent(
@@ -677,6 +664,7 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
     expect(drawer).toHaveTextContent('Node cảm biến đang định vị');
     expect(drawer).toHaveTextContent('ESP32_T5_02');
     expect(screen.getByTestId('device-pin-dev-t5-02')).toBeInTheDocument();
+    window.history.replaceState({}, '', '/floorplan');
   });
 
   it('TC-G6-11: Thông báo aria-live="assertive" khi có cảnh báo FIRING mới qua STOMP & giữ cô lập phân khu fail-closed', async () => {

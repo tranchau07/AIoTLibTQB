@@ -568,15 +568,7 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
 
         const { unmount } = renderWithProviders(<FloorplanPage />);
 
-        const alertFilterBtn = await screen.findByTestId(
-          'summary-filter-alerts'
-        );
-        await waitFor(() => {
-          expect(alertFilterBtn).toHaveTextContent('1 Cảnh báo mở');
-          expect(alertFilterBtn).toHaveTextContent('1 Khẩn cấp');
-        });
-
-        const canvasWrapper = screen.getByTestId('floorplan-canvas-wrapper');
+        const canvasWrapper = await screen.findByTestId('floorplan-canvas-wrapper');
         const canvasHeight = Number(
           canvasWrapper.getAttribute('data-canvas-height')
         );
@@ -825,19 +817,11 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
 
       const { container } = renderWithProviders(<FloorplanPage />);
 
-      const treeFloor3 = await screen.findByTestId('tree-floor-3');
-      treeFloor3.focus();
-      fireEvent.keyDown(treeFloor3, { key: 'ArrowDown' });
-
-      const treeRoom301 = screen.getByTestId('tree-room-TQB_301');
-      expect(document.activeElement).toBe(treeRoom301);
-
-      fireEvent.keyDown(treeRoom301, { key: 'ArrowDown' });
-      const treeRoom302 = screen.getByTestId('tree-room-TQB_302');
-      expect(document.activeElement).toBe(treeRoom302);
-
-      // Select alerting room TQB_302 using Enter key -> opens Drawer + AlertInspectorDrawer
-      fireEvent.keyDown(treeRoom302, { key: 'Enter' });
+      // Select alerting room TQB_302 directly via its map alert badge -> opens Drawer + AlertInspectorDrawer
+      const alertBadge302 = await screen.findByTestId(
+        'room-alert-badge-ROOM_TQB_302'
+      );
+      fireEvent.click(alertBadge302);
       expect(
         await screen.findByTestId('room-detail-drawer')
       ).toBeInTheDocument();

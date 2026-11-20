@@ -15,6 +15,7 @@ import { TQB_ROOM_PRESETS } from '@/config/tqb-floorplan-presets';
 import { alertsApi } from '@/features/alerts/api';
 import { useAuthStore } from '@/features/auth/store';
 import { devicesApi } from '@/features/devices/api';
+import { TimeComparisonBar } from '@/features/floorplan/components/TimeComparisonBar';
 import { roomsApi } from '@/features/rooms/api';
 import { telemetryApi } from '@/features/telemetry/api';
 import {
@@ -408,18 +409,18 @@ describe('Phase 7 (GĐ7): Chiều Thời Gian (-1h, Playback, Ngày Điển Hìn
       ],
     });
 
+    window.history.replaceState(
+      {},
+      '',
+      '/floorplan?floor=3&roomId=ROOM_301&timeMode=compare_1h'
+    );
     renderFloorplanPage();
 
-    const compareBtn = await screen.findByTestId('time-mode-compare_1h');
-    fireEvent.click(compareBtn);
-    expect(compareBtn).toHaveAttribute('aria-pressed', 'true');
-
-    // Chọn P.301 từ cây điều hướng để mở Drawer và kiểm tra badge biến động -1h
-    const roomTreeNode = await screen.findByTestId('tree-room-TQB_301');
-    fireEvent.click(roomTreeNode);
+    expect(screen.queryByTestId('time-comparison-bar')).not.toBeInTheDocument();
 
     const drawerDelta = await screen.findByTestId('drawer-delta-1h');
     expect(drawerDelta).toHaveTextContent('↓ -14đ so với 1h trước');
+    window.history.replaceState({}, '', '/floorplan');
   });
 
   it('TC-G7-02: Xử lý an toàn khi thiếu dữ liệu lịch sử -1h (buckets = []) không gây NaN', () => {
@@ -490,56 +491,26 @@ describe('Phase 7 (GĐ7): Chiều Thời Gian (-1h, Playback, Ngày Điển Hìn
       'Đã ổn định lại'
     );
 
-    // Tích hợp UI: bật Playback, đổi sang lớp noiseAvg, bấm Tua bước qua t1 -> t2
-    authenticateAsLibrarian();
-    vi.spyOn(roomsApi, 'list').mockResolvedValue({
-      content: [room301, room302],
-      page: 0,
-      size: 100,
-      totalElements: 2,
-      totalPages: 1,
-      last: true,
-    });
-    vi.spyOn(devicesApi, 'list').mockResolvedValue({
-      content: [makeDevice('dev-302', 'ESP32_302_01', 'ROOM_302', 'ZONE_B')],
-      page: 0,
-      size: 100,
-      totalElements: 1,
-      totalPages: 1,
-      last: true,
-    });
-    vi.spyOn(alertsApi, 'list').mockResolvedValue({
-      content: [],
-      page: 0,
-      size: 50,
-      totalElements: 0,
-      totalPages: 0,
-      last: true,
-    });
-    vi.spyOn(telemetryApi, 'getRoomLatest').mockImplementation(async (id) =>
-      makeTelemetry(id, { noiseAvg: 44 })
-    );
-    vi.spyOn(telemetryApi, 'getDeviceLatest').mockResolvedValue(
-      makeTelemetry('ROOM_302', { noiseAvg: 44 })
-    );
-    vi.spyOn(telemetryApi, 'getRoomBuckets').mockImplementation(async (p) => ({
-      roomId: p.roomId,
-      interval: p.interval,
-      dataPoints: roomBuckets[p.roomId] ?? [],
-    }));
+    // Kiểm thử UI thanh tua Playback trên component TimeComparisonBar độc lập
+    function ControlledPlaybackBar() {
+      const [idx, setIdx] = React.useState(0);
+      return (
+        <TimeComparisonBar
+          timeMode="playback"
+          onTimeModeChange={() => {}}
+          frames={frames}
+          playbackIndex={idx}
+          onPlaybackIndexChange={setIdx}
+        />
+      );
+    }
 
-    renderFloorplanPage();
-
-    fireEvent.click(await screen.findByTestId('layer-btn-noiseAvg'));
-    fireEvent.click(screen.getByTestId('time-mode-playback'));
+    render(<ControlledPlaybackBar />);
 
     await screen.findByTestId('playback-subbar');
     const slider = screen.getByTestId('playback-slider');
     const summary = screen.getByTestId('playback-propagation-summary');
-
-    await waitFor(() => {
-      expect(slider).toHaveAttribute('max', '3');
-    });
+    expect(slider).toHaveAttribute('max', '3');
 
     // Tua sang t1 -> hiện Khởi phát sự cố (#1)
     fireEvent.change(slider, { target: { value: '1' } });
@@ -587,43 +558,22 @@ describe('Phase 7 (GĐ7): Chiều Thời Gian (-1h, Playback, Ngày Điển Hìn
       1
     );
 
-    // Tích hợp UI: chuyển Ngày điển hình & kéo thanh trượt giờ từ 15 -> 08 -> 15
-    authenticateAsLibrarian();
-    vi.spyOn(roomsApi, 'list').mockResolvedValue({
-      content: floor3Rooms.slice(0, 2),
-      page: 0,
-      size: 100,
-      totalElements: 2,
-      totalPages: 1,
-      last: true,
-    });
-    vi.spyOn(devicesApi, 'list').mockResolvedValue({
-      content: [],
-      page: 0,
-      size: 100,
-      totalElements: 0,
-      totalPages: 0,
-      last: true,
-    });
-    vi.spyOn(alertsApi, 'list').mockResolvedValue({
-      content: [],
-      page: 0,
-      size: 50,
-      totalElements: 0,
-      totalPages: 0,
-      last: true,
-    });
-    vi.spyOn(telemetryApi, 'getRoomLatest').mockImplementation(async (id) =>
-      makeTelemetry(id, { temperature: 22.8, score: 86 })
-    );
-    vi.spyOn(telemetryApi, 'getRoomBuckets').mockResolvedValue({
-      roomId: floor3Rooms[0].id,
-      interval: '1h',
-      dataPoints: [],
-    });
+    // Kiểm thử thanh trượt giờ Ngày điển hình trên component TimeComparisonBar độc lập
+    function ControlledTypicalBar() {
+      const [hour, setHour] = React.useState(15);
+      const snap = computeTypicalDayFloorSnapshot(floor3Rooms, hour);
+      return (
+        <TimeComparisonBar
+          timeMode="typical_day"
+          onTimeModeChange={() => {}}
+          typicalHour={hour}
+          onTypicalHourChange={setHour}
+          typicalSummaryNote={snap.summaryNoteVi}
+        />
+      );
+    }
 
-    renderFloorplanPage();
-    fireEvent.click(await screen.findByTestId('time-mode-typical_day'));
+    render(<ControlledTypicalBar />);
 
     const slider = await screen.findByTestId('typical-hour-slider');
     const hourLabel = screen.getByTestId('typical-hour-label');
@@ -708,14 +658,11 @@ describe('Phase 7 (GĐ7): Chiều Thời Gian (-1h, Playback, Ngày Điển Hìn
       dataPoints: [],
     });
 
-    const clipboardWriteSpy = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: clipboardWriteSpy },
-    });
-
     window.history.replaceState({}, '', `/floorplan?${query}`);
     renderFloorplanPage();
+
+    expect(screen.queryByTestId('time-comparison-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('summary-filter-poor')).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByTestId('breadcrumb-floor-btn')).toHaveTextContent('Tầng 5');
@@ -725,31 +672,7 @@ describe('Phase 7 (GĐ7): Chiều Thời Gian (-1h, Playback, Ngày Điển Hìn
         'true'
       );
       expect(screen.getByTestId('zoom-scale-label')).toHaveTextContent('2.25x');
-      expect(screen.getByTestId('time-mode-compare_1h')).toHaveAttribute(
-        'aria-pressed',
-        'true'
-      );
-      expect(screen.getByTestId('summary-filter-poor')).toHaveAttribute(
-        'aria-pressed',
-        'true'
-      );
     });
-
-    // Bấm sao chép Deep Link
-    const copyBtn = screen.getByTestId('copy-deeplink-btn');
-    fireEvent.click(copyBtn);
-    await waitFor(() => {
-      expect(clipboardWriteSpy).toHaveBeenCalledTimes(1);
-    });
-    const sharedUrl = String(clipboardWriteSpy.mock.calls[0][0]);
-    expect(sharedUrl).toContain('floor=5');
-    expect(sharedUrl).toContain('roomId=ROOM_502');
-    expect(sharedUrl).toContain('layer=noiseAvg');
-    expect(sharedUrl).toContain('scale=2.25');
-    expect(sharedUrl).toContain('tx=-310');
-    expect(sharedUrl).toContain('ty=-140');
-    expect(sharedUrl).toContain('timeMode=compare_1h');
-    expect(sharedUrl).toContain('statusFilter=POOR');
   });
 
   it('TC-G7-06: Xuất báo cáo PNG vẽ đầy đủ Bản đồ + Chú giải + Mốc thời gian + Tóm tắt cảnh báo & tải về .png', () => {

@@ -67,18 +67,9 @@ import {
   extractLayerMetricValue,
   formatLayerMetricValue,
 } from '@/features/floorplan/components/FloorplanCanvas';
-import {
-  AlertInspectorDrawer,
-  MapAlertQueuePanel,
-} from '@/features/floorplan/components/AlertInspectorDrawer';
-import { FloorRoomTree } from '@/features/floorplan/components/FloorRoomTree';
+import { AlertInspectorDrawer } from '@/features/floorplan/components/AlertInspectorDrawer';
 import { FloorplanLegend } from '@/features/floorplan/components/FloorplanLegend';
 import { FurnitureLayerEditor } from '@/features/floorplan/components/FurnitureLayerEditor';
-import {
-  ManagerSummaryStrip,
-  computeBuildingSummaryMetrics,
-} from '@/features/floorplan/components/ManagerSummaryStrip';
-import { TimeComparisonBar } from '@/features/floorplan/components/TimeComparisonBar';
 import {
   FURNITURE_CATALOG,
   filterVisibleFurnitureItems,
@@ -86,15 +77,9 @@ import {
 import { formatRealtimeAlertAnnouncementVi } from '@/lib/floorplan/alertWorkflow';
 import type { ViewportTransform } from '@/lib/floorplan/coords';
 import {
-  buildFloorplanShareUrl,
   parseFloorplanUrlState,
   serializeFloorplanUrlState,
 } from '@/lib/floorplan/deepLink';
-import {
-  exportFloorplanReportPdf,
-  exportFloorplanReportPng,
-} from '@/lib/floorplan/exportReport';
-import { buildBuildingFloorTree } from '@/lib/floorplan/floorTreeBuilder';
 import {
   createFurnitureHistory,
   pushFurnitureHistory,
@@ -229,10 +214,7 @@ export default function FloorplanPage() {
   const [onlyAssignedZones, setOnlyAssignedZones] = useState<boolean>(false);
   const [includeTqbArchitecturePresets, setIncludeTqbArchitecturePresets] =
     useState<boolean>(true);
-  const [adminRoleOverride, setAdminRoleOverride] =
-    useState<EffectiveRoleView | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [isTreeCollapsed, setIsTreeCollapsed] = useState<boolean>(false);
   const [timeMode, setTimeMode] = useState<FloorplanTimeMode>('live');
   const [typicalHour, setTypicalHour] = useState<number>(15);
   const [playbackIndex, setPlaybackIndex] = useState<number>(0);
@@ -244,12 +226,7 @@ export default function FloorplanPage() {
   });
   const [restoredInitialViewport, setRestoredInitialViewport] =
     useState<ViewportTransform | null>(null);
-  const [deepLinkCopied, setDeepLinkCopied] = useState<boolean>(false);
   const lastWrittenSearchRef = useRef<string | null>(null);
-  const initialUrlHydratedRef = useRef<boolean>(false);
-  const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [liveAlertAnnouncement, setLiveAlertAnnouncement] =
     useState<string>('');
@@ -286,9 +263,6 @@ export default function FloorplanPage() {
     const id = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => {
       clearInterval(id);
-      if (copyFeedbackTimerRef.current) {
-        clearTimeout(copyFeedbackTimerRef.current);
-      }
     };
   }, []);
 
@@ -309,7 +283,7 @@ export default function FloorplanPage() {
       const vh = window.innerHeight;
       if (!vh || vh <= 0) return;
       setMaxViewportHeightPx(
-        Math.max(360, vh - (isFullscreen ? 125 : 275))
+        Math.max(380, vh - (isFullscreen ? 110 : 175))
       );
     };
     updateMaxH();
@@ -334,8 +308,8 @@ export default function FloorplanPage() {
     }
   }, []);
 
-  // Xác định góc nhìn Role đang kích hoạt (cho phép ADMIN chuyển đổi góc nhìn 4 Role ngay trên thanh công cụ)
-  const defaultRoleView: EffectiveRoleView = useMemo(() => {
+  // Xác định góc nhìn Role đang kích hoạt theo quyền tài khoản hiện tại
+  const effectiveRole: EffectiveRoleView = useMemo(() => {
     if (capabilities.isAdmin) return 'ADMIN';
     if (capabilities.isMaintenance) return 'MAINTENANCE';
     if (capabilities.isLibrarian || capabilities.isZoneManager) {
@@ -343,10 +317,6 @@ export default function FloorplanPage() {
     }
     return 'USER';
   }, [capabilities]);
-
-  const effectiveRole: EffectiveRoleView = capabilities.isAdmin
-    ? (adminRoleOverride ?? defaultRoleView)
-    : defaultRoleView;
 
   const isStudentView = effectiveRole === 'USER';
   const isLibrarianView =
@@ -716,28 +686,6 @@ export default function FloorplanPage() {
     }
     return map;
   }, [floorRooms, roomTelemetryMap, selectedLayer, telemetryHistoryState]);
-
-  const buildingSummaryMetrics = useMemo(
-    () =>
-      computeBuildingSummaryMetrics(
-        allBuildingRooms,
-        buildingTelemetryMap,
-        activeAlerts,
-        nowMs,
-        TIMING_CONFIG.overdueAlertMs
-      ),
-    [allBuildingRooms, buildingTelemetryMap, activeAlerts, nowMs]
-  );
-
-  const buildingFloorTree = useMemo(
-    () =>
-      buildBuildingFloorTree(
-        allBuildingRooms,
-        buildingTelemetryMap,
-        isStudentView ? [] : activeAlerts
-      ),
-    [allBuildingRooms, buildingTelemetryMap, isStudentView, activeAlerts]
-  );
 
   const {
     roomOpenAlertsMap,
@@ -1726,110 +1674,6 @@ export default function FloorplanPage() {
     window.history.replaceState(null, '', nextSearch);
   }, [urlHydrated, currentUrlState]);
 
-  const activeTimeModeLabel = useMemo(() => {
-    switch (timeMode) {
-      case 'compare_1h':
-        return FLOORPLAN_I18N_VI.timeAnalysis.modes.compare_1h;
-      case 'playback':
-        return activePlaybackFrame
-          ? `${FLOORPLAN_I18N_VI.timeAnalysis.modes.playback} (${activePlaybackFrame.timestamp})`
-          : FLOORPLAN_I18N_VI.timeAnalysis.modes.playback;
-      case 'typical_day':
-        return `${FLOORPLAN_I18N_VI.timeAnalysis.modes.typical_day} (${String(
-          typicalHour
-        ).padStart(2, '0')}:00)`;
-      case 'live':
-      default:
-        return FLOORPLAN_I18N_VI.timeAnalysis.modes.live;
-    }
-  }, [timeMode, activePlaybackFrame, typicalHour]);
-
-  const handleCopyDeepLink = useCallback(async () => {
-    const shareUrl = buildFloorplanShareUrl(currentUrlState);
-    if (typeof window !== 'undefined') {
-      const nextSearch = `?${serializeFloorplanUrlState(currentUrlState)}`;
-      lastWrittenSearchRef.current = nextSearch;
-      window.history.replaceState(null, '', nextSearch);
-    }
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-      }
-    } catch {
-      // Ignore clipboard write rejection in restricted contexts
-    }
-    setDeepLinkCopied(true);
-    if (copyFeedbackTimerRef.current) {
-      clearTimeout(copyFeedbackTimerRef.current);
-    }
-    copyFeedbackTimerRef.current = setTimeout(() => {
-      setDeepLinkCopied(false);
-    }, 2200);
-  }, [currentUrlState]);
-
-  const floorOpenAlerts = useMemo(
-    () => activeAlerts.filter((a) => !a.roomId || floorRoomIds.has(a.roomId)),
-    [activeAlerts, floorRoomIds]
-  );
-
-  const handleExportPng = useCallback(() => {
-    const root = workspaceFullscreenRef.current;
-    const staticCanvas =
-      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="static-base-canvas"]') ??
-      null;
-    const dynamicCanvas =
-      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="dynamic-heatmap-canvas"]') ??
-      null;
-    exportFloorplanReportPng({
-      floor: selectedFloor,
-      layer: selectedLayer,
-      staticCanvas,
-      dynamicCanvas,
-      rooms: visibleFloorRooms,
-      roomTelemetryMap: effectiveRoomTelemetryMap,
-      openAlerts: floorOpenAlerts,
-      exportedBy: currentUser?.username ?? 'Quản lý thư viện',
-      timeModeLabel: activeTimeModeLabel,
-    });
-  }, [
-    selectedFloor,
-    selectedLayer,
-    visibleFloorRooms,
-    effectiveRoomTelemetryMap,
-    floorOpenAlerts,
-    currentUser?.username,
-    activeTimeModeLabel,
-  ]);
-
-  const handleExportPdf = useCallback(() => {
-    const root = workspaceFullscreenRef.current;
-    const staticCanvas =
-      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="static-base-canvas"]') ??
-      null;
-    const dynamicCanvas =
-      root?.querySelector<HTMLCanvasElement>('canvas[data-testid="dynamic-heatmap-canvas"]') ??
-      null;
-    exportFloorplanReportPdf({
-      floor: selectedFloor,
-      layer: selectedLayer,
-      staticCanvas,
-      dynamicCanvas,
-      rooms: visibleFloorRooms,
-      roomTelemetryMap: effectiveRoomTelemetryMap,
-      openAlerts: floorOpenAlerts,
-      exportedBy: currentUser?.username ?? 'Quản lý thư viện',
-      timeModeLabel: activeTimeModeLabel,
-    });
-  }, [
-    selectedFloor,
-    selectedLayer,
-    visibleFloorRooms,
-    effectiveRoomTelemetryMap,
-    floorOpenAlerts,
-    currentUser?.username,
-    activeTimeModeLabel,
-  ]);
-
   // ============================================================================
   // ROLE 1 (USER / VIEWER): Smart Study Spot Finder ("Tìm Chỗ Ngồi Học Lý Tưởng")
   // ============================================================================
@@ -2082,8 +1926,8 @@ export default function FloorplanPage() {
       data-testid="floorplan-workspace"
       className={
         isFullscreen
-          ? 'flex h-screen w-full flex-col gap-2 overflow-y-auto bg-canvas p-3'
-          : 'w-full max-w-none space-y-2'
+          ? 'flex h-screen w-full flex-col gap-1.5 overflow-y-auto bg-canvas p-2.5'
+          : 'w-full max-w-none space-y-1.5'
       }
     >
       {/* Screen Reader live alert announcement region (aria-live="assertive") */}
@@ -2103,18 +1947,8 @@ export default function FloorplanPage() {
         <RoomStreamSubscriber key={r.id} roomId={r.id} />
       ))}
 
-      {/* Top Manager Summary Strip (Hidden only in Student/Kiosk View) */}
-      {!isStudentView && (
-        <ManagerSummaryStrip
-          metrics={buildingSummaryMetrics}
-          activeFilter={statusFilter}
-          onFilterChange={setStatusFilter}
-          stompConnected={stompConnected}
-        />
-      )}
-
       {/* Unified Compact Header, Dynamic Floor Selector, 7-Layer Metric Bar & Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-white px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-white px-3 py-1.5">
         <div className="flex flex-wrap items-center gap-2.5">
           <h1 className="text-base font-semibold tracking-tight text-slate-900">
             Bản đồ mặt bằng
@@ -2143,7 +1977,7 @@ export default function FloorplanPage() {
           </div>
         </div>
 
-        {/* 7-Layer Metric Bar + Architecture / Role Controls */}
+        {/* 7-Layer Metric Bar + Architecture Controls */}
         <div className="flex flex-wrap items-center gap-2">
           <div
             className="flex flex-wrap items-center gap-1"
@@ -2270,303 +2104,15 @@ export default function FloorplanPage() {
           >
             Đủ phòng CAD ({visibleFloorRooms.length})
           </button>
-
-          {/* Compact Admin Role Switcher */}
-          {capabilities.isAdmin && (
-            <div className="flex items-center gap-1.5">
-              <label
-                htmlFor="role-view-select"
-                className="text-xs text-slate-500"
-              >
-                Góc nhìn:
-              </label>
-              <select
-                id="role-view-select"
-                value={effectiveRole}
-                onChange={(e) => {
-                  const nextRole = e.target.value as EffectiveRoleView;
-                  setAdminRoleOverride(nextRole);
-                  setShowBlindspots(nextRole === 'MAINTENANCE');
-                  if (nextRole === 'USER') {
-                    setFurnitureEditMode(false);
-                    setSelectedFurnitureIds([]);
-                  }
-                }}
-                className="select h-7 py-0 text-xs font-medium"
-              >
-                <option value="ADMIN">Quản trị viên</option>
-                <option value="LIBRARIAN">Thủ thư & Quản lý khu</option>
-                <option value="MAINTENANCE">Kỹ thuật bảo trì</option>
-                <option value="USER">Độc giả / Sinh viên</option>
-              </select>
-            </div>
-          )}
         </div>
       </div>
-
-      {/* Collapsible Role-Specific Operational Panel (Default collapsed so map stays front & center) */}
-      {isStudentView ? (
-        <CollapsibleSection
-          title="Gợi ý chỗ ngồi học tối ưu"
-          summary={
-            studyRecommendations[0]
-              ? `Đề xuất #1: ${studyRecommendations[0].bay.nameVi} (${studyRecommendations[0].room.code} · ${studyRecommendations[0].bay.metrics.comfortScore}đ)`
-              : 'Chọn nhu cầu học tập để định vị dãy bàn'
-          }
-          badge={
-            <span className="badge-neutral">
-              {studyRecommendations.length} đề xuất
-            </span>
-          }
-          compact
-          defaultOpen={false}
-        >
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  {
-                    key: 'quiet',
-                    label: 'Yên tĩnh (< 42 dBA)',
-                    layer: 'noiseAvg' as HeatmapLayerMetric,
-                  },
-                  {
-                    key: 'group',
-                    label: 'Thảo luận nhóm (Tầng 5)',
-                    layer: 'comfortScore' as HeatmapLayerMetric,
-                  },
-                  {
-                    key: 'bright_cool',
-                    label: 'Đủ sáng & Mát mẻ',
-                    layer: 'lux' as HeatmapLayerMetric,
-                  },
-                  {
-                    key: 'multimedia',
-                    label: 'Multimedia / PC',
-                    layer: 'comfortScore' as HeatmapLayerMetric,
-                  },
-                ] as const
-              ).map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => {
-                    setStudyFilter(item.key);
-                    setSelectedLayer(item.layer);
-                    if (item.key === 'group' && selectedFloor !== 5) {
-                      setSelectedFloor(5);
-                      setZoomedRoomId(null);
-                    }
-                  }}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    studyFilter === item.key
-                      ? 'bg-slate-900 text-white'
-                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
-              {studyRecommendations.map((rec, idx) => {
-                const isChosen =
-                  selectedRoomId === rec.room.id &&
-                  selectedBayId === rec.bay.bayId;
-                return (
-                  <button
-                    key={rec.bay.bayId}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRoomId(rec.room.id);
-                      setSelectedBayId(rec.bay.bayId);
-                      setZoomedRoomId(rec.room.id);
-                    }}
-                    className={`flex flex-col justify-between rounded-lg border p-3 text-left transition-colors ${
-                      isChosen
-                        ? 'border-slate-900 bg-slate-50'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-2xs font-medium text-slate-500">
-                          #{idx + 1} · {rec.room.code}
-                        </span>
-                        <span className="font-mono text-xs font-semibold text-slate-900">
-                          {rec.bay.metrics.comfortScore}đ
-                        </span>
-                      </div>
-                      <h3 className="mt-1 truncate text-xs font-semibold text-slate-900">
-                        {rec.bay.nameVi}
-                      </h3>
-                      <p className="mt-0.5 truncate text-2xs text-slate-500">
-                        {rec.reasonVi}
-                      </p>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-1.5 text-2xs text-slate-500">
-                      <span>{rec.bay.seatCapacity} chỗ</span>
-                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700">
-                        <span>Định vị</span>
-                        <ArrowUpRight className="h-3 w-3" />
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </CollapsibleSection>
-      ) : isMaintenanceView ? (
-        <CollapsibleSection
-          title="Chẩn đoán kỹ thuật & Hạ tầng"
-          summary={`${maintenanceDiagnostics.onlineCount}/${maintenanceDiagnostics.totalDevices} trạm trực tuyến · ${maintenanceDiagnostics.hvacImbalanceRooms.length} lệch nhiệt · ${maintenanceDiagnostics.blindspotRooms.length} vùng mù`}
-          actions={
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setShowBlindspots((v) => !v)}
-                className={`rounded-md border px-2 py-1 text-2xs font-medium transition-colors ${
-                  showBlindspots
-                    ? 'border-slate-900 bg-slate-900 text-white'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                Vùng mù: {showBlindspots ? 'Bật' : 'Tắt'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedLayer('wifiRssi')}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-2xs font-medium text-slate-600 hover:bg-slate-50"
-              >
-                Lớp Wi-Fi
-              </button>
-            </div>
-          }
-          compact
-          defaultOpen={false}
-        >
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-              <span className="text-2xs text-slate-500">Trạm ESP32</span>
-              <p className="mt-0.5 text-sm font-semibold text-slate-900">
-                {maintenanceDiagnostics.onlineCount} /{' '}
-                {maintenanceDiagnostics.totalDevices} trực tuyến
-              </p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-              <span className="text-2xs text-slate-500">Lệch nhiệt (ΔT)</span>
-              <p className="mt-0.5 text-sm font-semibold text-slate-900">
-                {maintenanceDiagnostics.hvacImbalanceRooms.length} phòng
-              </p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-              <span className="text-2xs text-slate-500">Vùng mù cảm biến</span>
-              <p className="mt-0.5 text-sm font-semibold text-slate-900">
-                {maintenanceDiagnostics.blindspotRooms.length} phòng cần bổ sung
-              </p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-              <span className="text-2xs text-slate-500">Tín hiệu Wi-Fi</span>
-              <p className="mt-0.5 text-sm font-semibold text-slate-900">
-                {maintenanceDiagnostics.weakWifiRooms.length === 0
-                  ? 'Ổn định (> -70 dBm)'
-                  : `${maintenanceDiagnostics.weakWifiRooms.length} vùng sóng yếu`}
-              </p>
-            </div>
-          </div>
-        </CollapsibleSection>
-      ) : (
-        <CollapsibleSection
-          title="Điều phối vận hành tầng"
-          summary={
-            librarianAdvisories.length > 0
-              ? `${librarianAdvisories.length} khuyến nghị môi trường cần kiểm tra`
-              : 'Mọi không gian trên tầng đang trong ngưỡng tiêu chuẩn'
-          }
-          badge={
-            activeAlerts.length > 0 ? (
-              <span className="badge-danger">
-                {activeAlerts.length} cảnh báo
-              </span>
-            ) : (
-              <span className="badge-neutral">Ổn định</span>
-            )
-          }
-          actions={
-            <button
-              type="button"
-              onClick={() => setOnlyAssignedZones((v) => !v)}
-              className={`rounded-md border px-2 py-1 text-2xs font-medium transition-colors ${
-                onlyAssignedZones
-                  ? 'border-slate-900 bg-slate-900 text-white'
-                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Phân khu phụ trách ({assignedZones.join(', ')})
-            </button>
-          }
-          compact
-          defaultOpen={false}
-        >
-          {librarianAdvisories.length === 0 ? (
-            <p className="text-xs text-slate-500">
-              Tất cả kho sách, phòng đọc và sảnh lưu thông trên tầng đang duy trì chỉ số trong ngưỡng tiêu chuẩn.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-              {librarianAdvisories.slice(0, 3).map((item) => {
-                const isSelected = selectedRoomId === item.roomId;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRoomId(item.roomId);
-                      setZoomedRoomId(item.roomId);
-                      setSelectedLayer(item.targetLayer);
-                    }}
-                    className={`flex flex-col justify-between rounded-lg border p-3 text-left transition-colors ${
-                      isSelected
-                        ? 'border-slate-900 bg-slate-50'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-xs font-semibold text-slate-900">
-                          {item.roomCode} · {item.badgeText}
-                        </span>
-                        <span className="font-mono text-2xs font-semibold text-slate-700">
-                          {item.valueText}
-                        </span>
-                      </div>
-                      <p className="mt-1 line-clamp-2 text-2xs text-slate-500">
-                        {item.recommendation}
-                      </p>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-1.5 text-2xs text-slate-500">
-                      <span>{item.roomName}</span>
-                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700">
-                        <span>Định vị</span>
-                        <ArrowUpRight className="h-3 w-3" />
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </CollapsibleSection>
-      )}
 
       {/* Reconnecting Alert */}
       {!stompConnected && (
         <div
           role="status"
           data-testid="ws-reconnecting-banner"
-          className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900"
+          className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-1.5 text-xs text-amber-900"
         >
           {UI_TEXT_VI.wsReconnectingBanner}
         </div>
@@ -2578,7 +2124,7 @@ export default function FloorplanPage() {
           <div
             role="status"
             data-testid="silent-sensor-banner"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-950"
           >
             <span>
               <strong>Lưu ý độ tin cậy:</strong>{' '}
@@ -2628,40 +2174,11 @@ export default function FloorplanPage() {
         />
       ) : (
         <div className="space-y-2">
-          {/* Time Dimension Bar (-1h, Playback, Typical Day, Deep Link, PNG/PDF Export) */}
-          {!isStudentView && (
-            <TimeComparisonBar
-              timeMode={timeMode}
-              onTimeModeChange={(nextMode) => {
-                setTimeMode(nextMode);
-                setIsPlaybackPlaying(false);
-                if (nextMode === 'playback') {
-                  setPlaybackIndex(0);
-                }
-              }}
-              frames={playbackFrames}
-              playbackIndex={safePlaybackIndex}
-              onPlaybackIndexChange={(idx) => {
-                setIsPlaybackPlaying(false);
-                setPlaybackIndex(idx);
-              }}
-              isPlaying={isPlaybackPlaying}
-              onTogglePlay={() => setIsPlaybackPlaying((p) => !p)}
-              typicalHour={typicalHour}
-              onTypicalHourChange={setTypicalHour}
-              typicalSummaryNote={typicalDaySnapshot?.summaryNoteVi}
-              onCopyDeepLink={() => void handleCopyDeepLink()}
-              deepLinkCopied={deepLinkCopied}
-              onExportPng={handleExportPng}
-              onExportPdf={handleExportPdf}
-            />
-          )}
-
           {/* Dynamic Navigation Breadcrumb: Tầng X › Phòng Y */}
           <nav
             aria-label="Đường dẫn vị trí bản đồ"
             data-testid="floorplan-breadcrumb"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white px-3 py-1.5 text-xs text-slate-600"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white px-3 py-1 text-xs text-slate-600"
           >
             <div className="flex min-w-0 items-center gap-1.5">
               <button
@@ -2700,33 +2217,8 @@ export default function FloorplanPage() {
             </div>
           </nav>
 
-          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-start">
-            <FloorRoomTree
-              treeNodes={buildingFloorTree}
-              selectedFloor={selectedFloor}
-              selectedRoomId={selectedRoomId}
-              isCollapsed={isTreeCollapsed}
-              onCollapsedChange={setIsTreeCollapsed}
-              onSelectFloor={(floor) => {
-                setSelectedFloor(floor);
-                setSelectedRoomId(null);
-                setZoomedRoomId(null);
-                setFocusedDeviceId(null);
-                setSelectedBayId(null);
-              }}
-              onSelectRoom={(room) => {
-                const targetFloor = room.floor === 0 ? 1 : room.floor;
-                if (targetFloor !== selectedFloor) {
-                  setSelectedFloor(targetFloor);
-                }
-                setSelectedRoomId(room.id);
-                setZoomedRoomId(room.id);
-                setFocusedDeviceId(null);
-                setSelectedBayId(null);
-              }}
-            />
-
-            <div className="relative min-w-0 flex-1" data-testid="floorplan-main-stage">
+          <div className="w-full">
+            <div className="relative min-w-0 w-full" data-testid="floorplan-main-stage">
               <div className="card overflow-hidden">
                 <FloorplanCanvas
                   rooms={visibleFloorRooms}
@@ -3299,65 +2791,313 @@ export default function FloorplanPage() {
             )}
             </div>
           </div>
-
-          {/* Grouped & Prioritized Map Alert Queue */}
-          {!isStudentView && activeAlerts.length > 0 && (
-            <MapAlertQueuePanel
-              alerts={activeAlerts}
-              rooms={allBuildingRooms}
-              nowMs={nowMs}
-              overdueAlertMs={TIMING_CONFIG.overdueAlertMs}
-              canAcknowledge={capabilities.canAcknowledgeAlert}
-              isSubmitting={updateAlertWorkflowMutation.isPending}
-              onFlyToAlert={focusAlertOnMap}
-              onAcknowledgeRoomAlerts={handleAcknowledgeRoomAlerts}
-            />
-          )}
-
-          {/* ISA-101 Color Scale & Geometric Status Legend */}
-          <FloorplanLegend
-            layer={selectedLayer}
-            onlyExceedingThreshold={onlyExceedingThreshold}
-            activeRoomTypes={visibleFloorRooms.map((r) => r.type ?? 'STUDY_ROOM')}
-            showReliabilityKey={showReliabilityLayer}
-          />
-
-          {/* Unconfigured Rooms Callout (Collapsed by default) */}
-          {unconfiguredRooms.length > 0 && !isStudentView && (
-            <CollapsibleSection
-              title="Phòng chưa lưu đa giác tùy chỉnh"
-              summary="Đang áp dụng đa giác CAD mặc định"
-              badge={
-                <span className="badge-warning">
-                  {unconfiguredRooms.length}
-                </span>
-              }
-              compact
-              defaultOpen={false}
-            >
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {unconfiguredRooms.map((room) => (
-                  <div
-                    key={room.id}
-                    className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50/50 p-2 text-xs"
-                  >
-                    <span className="truncate font-medium text-slate-800">
-                      {room.code} — {room.name}
-                    </span>
-                    {capabilities.canManageRooms && (
-                      <Link
-                        href={`/admin/rooms/${room.id}/polygon`}
-                        className="btn-secondary btn-sm h-6 px-2 text-2xs"
-                      >
-                        Sửa CAD
-                      </Link>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CollapsibleSection>
-          )}
         </div>
+      )}
+
+      {/* ISA-101 Color Scale & Geometric Status Legend */}
+      {!roomsQuery.isLoading && visibleFloorRooms.length > 0 && (
+        <FloorplanLegend
+          layer={selectedLayer}
+          onlyExceedingThreshold={onlyExceedingThreshold}
+          activeRoomTypes={visibleFloorRooms.map((r) => r.type ?? 'STUDY_ROOM')}
+          showReliabilityKey={showReliabilityLayer}
+        />
+      )}
+
+      {/* Unconfigured Rooms Callout (Collapsed by default) */}
+      {!roomsQuery.isLoading &&
+        visibleFloorRooms.length > 0 &&
+        unconfiguredRooms.length > 0 &&
+        !isStudentView && (
+          <CollapsibleSection
+            title="Phòng chưa lưu đa giác tùy chỉnh"
+            summary="Đang áp dụng đa giác CAD mặc định"
+            badge={
+              <span className="badge-warning">
+                {unconfiguredRooms.length}
+              </span>
+            }
+            compact
+            defaultOpen={false}
+          >
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {unconfiguredRooms.map((room) => (
+                <div
+                  key={room.id}
+                  className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50/50 p-2 text-xs"
+                >
+                  <span className="truncate font-medium text-slate-800">
+                    {room.code} — {room.name}
+                  </span>
+                  {capabilities.canManageRooms && (
+                    <Link
+                      href={`/admin/rooms/${room.id}/polygon`}
+                      className="btn-secondary btn-sm h-6 px-2 text-2xs"
+                    >
+                      Sửa CAD
+                    </Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        )}
+
+      {/* Collapsible Role-Specific Operational Panel (Positioned below the heatmap) */}
+      {isStudentView ? (
+        <CollapsibleSection
+          title="Gợi ý chỗ ngồi học tối ưu"
+          summary={
+            studyRecommendations[0]
+              ? `Đề xuất #1: ${studyRecommendations[0].bay.nameVi} (${studyRecommendations[0].room.code} · ${studyRecommendations[0].bay.metrics.comfortScore}đ)`
+              : 'Chọn nhu cầu học tập để định vị dãy bàn'
+          }
+          badge={
+            <span className="badge-neutral">
+              {studyRecommendations.length} đề xuất
+            </span>
+          }
+          compact
+          defaultOpen={false}
+        >
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(
+                [
+                  {
+                    key: 'quiet',
+                    label: 'Yên tĩnh (< 42 dBA)',
+                    layer: 'noiseAvg' as HeatmapLayerMetric,
+                  },
+                  {
+                    key: 'group',
+                    label: 'Thảo luận nhóm (Tầng 5)',
+                    layer: 'comfortScore' as HeatmapLayerMetric,
+                  },
+                  {
+                    key: 'bright_cool',
+                    label: 'Đủ sáng & Mát mẻ',
+                    layer: 'lux' as HeatmapLayerMetric,
+                  },
+                  {
+                    key: 'multimedia',
+                    label: 'Multimedia / PC',
+                    layer: 'comfortScore' as HeatmapLayerMetric,
+                  },
+                ] as const
+              ).map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setStudyFilter(item.key);
+                    setSelectedLayer(item.layer);
+                    if (item.key === 'group' && selectedFloor !== 5) {
+                      setSelectedFloor(5);
+                      setZoomedRoomId(null);
+                    }
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    studyFilter === item.key
+                      ? 'bg-slate-900 text-white'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+              {studyRecommendations.map((rec, idx) => {
+                const isChosen =
+                  selectedRoomId === rec.room.id &&
+                  selectedBayId === rec.bay.bayId;
+                return (
+                  <button
+                    key={rec.bay.bayId}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRoomId(rec.room.id);
+                      setSelectedBayId(rec.bay.bayId);
+                      setZoomedRoomId(rec.room.id);
+                    }}
+                    className={`flex flex-col justify-between rounded-lg border p-3 text-left transition-colors ${
+                      isChosen
+                        ? 'border-slate-900 bg-slate-50'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-2xs font-medium text-slate-500">
+                          #{idx + 1} · {rec.room.code}
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-slate-900">
+                          {rec.bay.metrics.comfortScore}đ
+                        </span>
+                      </div>
+                      <h3 className="mt-1 truncate text-xs font-semibold text-slate-900">
+                        {rec.bay.nameVi}
+                      </h3>
+                      <p className="mt-0.5 truncate text-2xs text-slate-500">
+                        {rec.reasonVi}
+                      </p>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-1.5 text-2xs text-slate-500">
+                      <span>{rec.bay.seatCapacity} chỗ</span>
+                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700">
+                        <span>Định vị</span>
+                        <ArrowUpRight className="h-3 w-3" />
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </CollapsibleSection>
+      ) : isMaintenanceView ? (
+        <CollapsibleSection
+          title="Chẩn đoán kỹ thuật & Hạ tầng"
+          summary={`${maintenanceDiagnostics.onlineCount}/${maintenanceDiagnostics.totalDevices} trạm trực tuyến · ${maintenanceDiagnostics.hvacImbalanceRooms.length} lệch nhiệt · ${maintenanceDiagnostics.blindspotRooms.length} vùng mù`}
+          actions={
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setShowBlindspots((v) => !v)}
+                className={`rounded-md border px-2 py-1 text-2xs font-medium transition-colors ${
+                  showBlindspots
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                Vùng mù: {showBlindspots ? 'Bật' : 'Tắt'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedLayer('wifiRssi')}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-2xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Lớp Wi-Fi
+              </button>
+            </div>
+          }
+          compact
+          defaultOpen={false}
+        >
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Trạm ESP32</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                {maintenanceDiagnostics.onlineCount} /{' '}
+                {maintenanceDiagnostics.totalDevices} trực tuyến
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Lệch nhiệt (ΔT)</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                {maintenanceDiagnostics.hvacImbalanceRooms.length} phòng
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Vùng mù cảm biến</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                {maintenanceDiagnostics.blindspotRooms.length} phòng cần bổ sung
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <span className="text-2xs text-slate-500">Tín hiệu Wi-Fi</span>
+              <p className="mt-0.5 text-sm font-semibold text-slate-900">
+                {maintenanceDiagnostics.weakWifiRooms.length === 0
+                  ? 'Ổn định (> -70 dBm)'
+                  : `${maintenanceDiagnostics.weakWifiRooms.length} vùng sóng yếu`}
+              </p>
+            </div>
+          </div>
+        </CollapsibleSection>
+      ) : (
+        <CollapsibleSection
+          title="Điều phối vận hành tầng"
+          summary={
+            librarianAdvisories.length > 0
+              ? `${librarianAdvisories.length} khuyến nghị môi trường cần kiểm tra`
+              : 'Mọi không gian trên tầng đang trong ngưỡng tiêu chuẩn'
+          }
+          badge={
+            activeAlerts.length > 0 ? (
+              <span className="badge-danger">
+                {activeAlerts.length} cảnh báo
+              </span>
+            ) : (
+              <span className="badge-neutral">Ổn định</span>
+            )
+          }
+          actions={
+            <button
+              type="button"
+              onClick={() => setOnlyAssignedZones((v) => !v)}
+              className={`rounded-md border px-2 py-1 text-2xs font-medium transition-colors ${
+                onlyAssignedZones
+                  ? 'border-slate-900 bg-slate-900 text-white'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Phân khu phụ trách ({assignedZones.join(', ')})
+            </button>
+          }
+          compact
+          defaultOpen={false}
+        >
+          {librarianAdvisories.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              Tất cả kho sách, phòng đọc và sảnh lưu thông trên tầng đang duy trì chỉ số trong ngưỡng tiêu chuẩn.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {librarianAdvisories.slice(0, 3).map((item) => {
+                const isSelected = selectedRoomId === item.roomId;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRoomId(item.roomId);
+                      setZoomedRoomId(item.roomId);
+                      setSelectedLayer(item.targetLayer);
+                    }}
+                    className={`flex flex-col justify-between rounded-lg border p-3 text-left transition-colors ${
+                      isSelected
+                        ? 'border-slate-900 bg-slate-50'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-semibold text-slate-900">
+                          {item.roomCode} · {item.badgeText}
+                        </span>
+                        <span className="font-mono text-2xs font-semibold text-slate-700">
+                          {item.valueText}
+                        </span>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-2xs text-slate-500">
+                        {item.recommendation}
+                      </p>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-1.5 text-2xs text-slate-500">
+                      <span>{item.roomName}</span>
+                      <span className="inline-flex items-center gap-0.5 font-medium text-slate-700">
+                        <span>Định vị</span>
+                        <ArrowUpRight className="h-3 w-3" />
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </CollapsibleSection>
       )}
 
       {/* Collapsible Data Table for Screen Readers & Detailed Audit (FE-A11Y-05) */}

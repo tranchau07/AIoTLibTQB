@@ -33,7 +33,7 @@
 @layer components {
   /* ---------- Layout ---------- */
   .page {
-    @apply mx-auto w-full max-w-[1400px] space-y-6;
+    @apply mx-auto w-full max-w-[1400px] space-y-6 transition-[max-width] duration-200;
   }
   .page-header {
     @apply flex flex-wrap items-end justify-between gap-4;
@@ -208,3 +208,9 @@
 .realtime-pulse {
   animation: pulse-ring 300ms ease-out;
 }
+
+/* Mở rộng toàn bộ chiều ngang khi thanh điều hướng bên trái đang đóng */
+[data-sidebar-collapsed='true'] .page {
+  max-width: none;
+}
+

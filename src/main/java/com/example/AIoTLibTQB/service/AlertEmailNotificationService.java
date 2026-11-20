@@ -21,6 +21,7 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.lang.Nullable;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -98,11 +99,11 @@ public class AlertEmailNotificationService {
 
     @Autowired
     public AlertEmailNotificationService(
-            @Autowired(required = false) JavaMailSender mailSender,
-            @Autowired(required = false) UserRepository userRepository,
-            @Autowired(required = false) AlertRepository alertRepository,
-            @Autowired(required = false) Clock clock,
-            @Autowired(required = false) RoomRepository roomRepository,
+            @Nullable JavaMailSender mailSender,
+            @Nullable UserRepository userRepository,
+            @Nullable AlertRepository alertRepository,
+            @Nullable Clock clock,
+            @Nullable RoomRepository roomRepository,
             @Value("${app.alert.email.enabled:false}") boolean enabled,
             @Value("${app.alert.email.from:" + DEFAULT_FROM_ADDRESS + "}") String fromAddress,
             @Value("${app.alert.email.cooldown-minutes:" + DEFAULT_COOLDOWN_MINUTES + "}") long cooldownMinutes,
