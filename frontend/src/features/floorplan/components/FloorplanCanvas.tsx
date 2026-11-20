@@ -100,7 +100,6 @@ import {
   FloorplanMinimap,
   type MinimapRoomShape,
 } from '@/features/floorplan/components/FloorplanMinimap';
-import { RoomHoverPopover } from '@/features/floorplan/components/RoomHoverPopover';
 import type {
   AlertSeverity,
   DeviceResponse,
@@ -318,7 +317,6 @@ export function FloorplanCanvas({
   roomTelemetryHistoryMap,
   roomDeltaMap,
   playbackRoomStateMap,
-  showHoverPopover = true,
 }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -2055,14 +2053,6 @@ export function FloorplanCanvas({
         }
 
         if (!placement || !placement.visible) continue;
-        if (
-          hoveredRoomId === item.roomId &&
-          !hoveredDeviceId &&
-          !hoveredBayId &&
-          actualStyle !== 'rich'
-        ) {
-          continue;
-        }
         drawRoomLabelAt(
           item,
           actualStyle,
@@ -2092,50 +2082,6 @@ export function FloorplanCanvas({
         }
         return computedBadges;
       });
-
-      // Hovered Room Rich Card (fallback only when RoomHoverPopover overlay is disabled)
-      if (!showHoverPopover && hoveredRoomId && !hoveredDeviceId && !hoveredBayId) {
-        const hoveredItem = preparedLabels.find(
-          (item) => item.roomId === hoveredRoomId
-        );
-        if (hoveredItem) {
-          const placedIdx = activeCandidates.findIndex(
-            (c) => c.roomId === hoveredRoomId
-          );
-          const placedLabel = placedIdx >= 0 ? placements[placedIdx] : undefined;
-          const wasRichAndVisible =
-            placedIdx >= 0 &&
-            (placedLabel?.placedStyle ?? activeCandidates[placedIdx].style) ===
-              'rich' &&
-            placedLabel?.visible;
-          if (!wasRichAndVisible) {
-            const richDims = measureRoomLabelBox(hoveredItem, 'rich');
-            const clampedX = Math.max(
-              richDims.width * 0.5 + 8,
-              Math.min(
-                width - richDims.width * 0.5 - 8,
-                hoveredItem.anchorScreen.x
-              )
-            );
-            const clampedY = Math.max(
-              richDims.height * 0.5 + 8,
-              Math.min(
-                height - richDims.height * 0.5 - 8,
-                hoveredItem.anchorScreen.y
-              )
-            );
-            drawRoomLabelAt(
-              hoveredItem,
-              'rich',
-              clampedX,
-              clampedY,
-              richDims.width,
-              richDims.height,
-              true
-            );
-          }
-        }
-      }
 
       ctx.restore(); // End HiDPI scale
 
@@ -2182,7 +2128,6 @@ export function FloorplanCanvas({
     onlyExceedingThreshold,
     roomDeltaMap,
     playbackRoomStateMap,
-    showHoverPopover,
   ]);
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -2460,101 +2405,6 @@ export function FloorplanCanvas({
     firingRoomSet,
     roomAlertSeverities,
     toScreenPx,
-  ]);
-
-  const hoveredPopoverData = useMemo(() => {
-    if (
-      !showHoverPopover ||
-      !hoveredRoomId ||
-      hoveredDeviceId ||
-      hoveredBayId
-    ) {
-      return null;
-    }
-    const found = enrichedRooms.find((er) => er.room.id === hoveredRoomId);
-    if (!found) return null;
-    const { room, preset, polygon } = found;
-    const centroid = computePolygonCentroid(polygon);
-    const anchor = toScreenPx(centroid);
-
-    const roomDevices = positionedDevices.filter((d) => d.roomId === room.id);
-    const onlineDevs = roomDevices.filter(
-      (d) => d.online || d.connectionState === 'ONLINE'
-    );
-    let primaryVal = extractLayerMetricValue(roomTelemetryMap[room.id], layer);
-    if (onlineDevs.length > 0) {
-      const vals = onlineDevs
-        .map((dev) =>
-          extractLayerMetricValue(
-            resolveDeviceTelemetry(
-              dev,
-              deviceTelemetryMap,
-              roomTelemetryMap,
-              roomDevices.length
-            ),
-            layer
-          )
-        )
-        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-      if (vals.length > 0) {
-        primaryVal = vals.reduce((s, v) => s + v, 0) / vals.length;
-      }
-    }
-
-    const popoverPlacement = computePopoverPlacement(
-      anchor,
-      { width: 288, height: 240 },
-      canvasSize,
-      {
-        margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
-        gap: 20,
-        preferredPlacement: 'top',
-      }
-    );
-
-    const openAlertsCount =
-      roomAlertCounts?.[room.id] ?? (firingRoomSet.has(room.id) ? 1 : 0);
-    const reliability =
-      roomReliabilityMap?.[room.id] ??
-      evaluateRoomReliability({
-        room,
-        telemetry: roomTelemetryMap[room.id],
-        devices: roomDevices,
-      });
-
-    return {
-      room,
-      preset,
-      value: primaryVal,
-      historyValues: roomTelemetryHistoryMap?.[room.id],
-      oneHourDelta: roomDeltaMap?.[room.id] ?? null,
-      playbackState: playbackRoomStateMap?.[room.id] ?? null,
-      openAlertsCount,
-      reliability,
-      left: popoverPlacement.left,
-      top: popoverPlacement.top,
-      placement: popoverPlacement.placement,
-      align: popoverPlacement.align,
-    };
-  }, [
-    showHoverPopover,
-    hoveredRoomId,
-    hoveredDeviceId,
-    hoveredBayId,
-    enrichedRooms,
-    toScreenPx,
-    positionedDevices,
-    roomTelemetryMap,
-    deviceTelemetryMap,
-    layer,
-    canvasSize.width,
-    canvasSize.height,
-    roomAlertCounts,
-    firingRoomSet,
-    roomTelemetryHistoryMap,
-    roomReliabilityMap,
-    roomDeltaMap,
-    playbackRoomStateMap,
   ]);
 
   const hoveredBayTooltipData = useMemo(() => {
@@ -3531,36 +3381,6 @@ export function FloorplanCanvas({
                 </div>
               );
             })}
-          </div>
-        )}
-
-        {/* Hover / Click Quick Room Popover (Edge-flipped inside viewport) */}
-        {hoveredPopoverData && (
-          <div
-            data-testid="room-hover-popover-wrapper"
-            data-placement={hoveredPopoverData.placement}
-            data-align={hoveredPopoverData.align}
-            style={{
-              left: `${hoveredPopoverData.left}px`,
-              top: `${hoveredPopoverData.top}px`,
-            }}
-            className="pointer-events-auto absolute z-20"
-          >
-            <RoomHoverPopover
-              room={hoveredPopoverData.room}
-              layer={layer}
-              value={hoveredPopoverData.value}
-              historyValues={hoveredPopoverData.historyValues}
-              oneHourDelta={hoveredPopoverData.oneHourDelta}
-              playbackState={hoveredPopoverData.playbackState}
-              openAlertsCount={hoveredPopoverData.openAlertsCount}
-              preset={hoveredPopoverData.preset}
-              reliability={hoveredPopoverData.reliability}
-              onInspectRoom={(room) => {
-                onSelectRoom(room);
-                setZoomedRoomId(room.id);
-              }}
-            />
           </div>
         )}
 

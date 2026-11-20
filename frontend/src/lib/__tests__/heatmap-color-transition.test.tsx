@@ -710,9 +710,10 @@ describe('Phase 3 (GĐ3): Metric selector, ISA-101 & Colorblind-safe Palette, 45
       });
     });
 
-    const hoverPopover = screen.getByTestId('room-hover-popover');
-    expect(hoverPopover).toHaveTextContent('TQB_103');
-    expect(hoverPopover).toHaveTextContent('Vượt ngưỡng bảo quản (> 60%RH)');
-    expect(screen.getByTestId('popover-sparkline')).toBeInTheDocument();
+    // Hovering a room on FloorplanCanvas must NOT mount RoomHoverPopover
+    expect(screen.queryByTestId('room-hover-popover')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('room-hover-popover-wrapper')
+    ).not.toBeInTheDocument();
   });
 });
