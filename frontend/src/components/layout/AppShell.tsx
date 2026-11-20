@@ -11,7 +11,6 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Bell,
   Building2,
   Cpu,
   KeyRound,
@@ -32,17 +31,18 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '@/features/auth/store';
 import { authKeys, useMyInfoQuery } from '@/features/auth/queries';
+import { AlertBellPopover } from '@/features/alerts/components/AlertBellPopover';
 import { useUnreadAlertsCountQuery } from '@/features/alerts/queries';
 import { useDevicesQuery } from '@/features/devices/queries';
 import { decodeJwtScope } from '@/lib/rbac/scope-parser';
+import { upsertRealtimeAlertList } from '@/lib/realtime/stomp-client';
 import {
   type AlertZoneScope,
   useGlobalAlertStream,
   useStompConnectionState,
 } from '@/lib/realtime/use-room-stream';
-import { formatBottleneckReasonVi } from '@/lib/format/metrics';
 import { UI_TEXT_VI } from '@/messages/vi';
-import { Skeleton, useToast } from '@/components/ui/primitives';
+import { Skeleton } from '@/components/ui/primitives';
 import type { AlertResponse, UserResponse } from '@/types/api';
 
 interface NavItem {
@@ -65,9 +65,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
-  const { pushToast } = useToast();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+  const [realtimeAlerts, setRealtimeAlerts] = useState<AlertResponse[]>([]);
 
   useEffect(() => {
     try {
@@ -141,6 +141,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!accessToken) {
       evictedStaleForTokenRef.current = null;
       evictedScopeCacheForTokenRef.current = null;
+      setRealtimeAlerts([]);
       queryClient.removeQueries({ queryKey: ['alerts'] });
       queryClient.removeQueries({ queryKey: ['devices'] });
       return;
@@ -166,6 +167,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       sessionSwitchedInPlace ||
       (hasMismatchedMyInfo && evictedStaleForTokenRef.current !== accessToken)
     ) {
+      setRealtimeAlerts([]);
       const shouldResetMyInfo =
         sessionSwitchedInPlace || !myInfoQuery.isFetching;
       if (shouldResetMyInfo) {
@@ -235,28 +237,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     Boolean(accessToken && capabilities.canViewAlerts)
   );
 
-  const handleIncomingAlert = useCallback(
-    (alert: AlertResponse) => {
-      if (alert.status === 'FIRING') {
-        const isHighOrCritical =
-          alert.severity === 'HIGH' || alert.severity === 'CRITICAL';
-        const formattedMessage = alert.message
-          ? formatBottleneckReasonVi(alert.message)
-          : '';
-        pushToast({
-          title: isHighOrCritical
-            ? `Cảnh báo ${alert.severity === 'CRITICAL' ? 'khẩn cấp' : 'mức cao'}`
-            : 'Cảnh báo mới',
-          message:
-            formattedMessage || `Thiết bị ${alert.hardwareId} phát cảnh báo`,
-          variant: 'danger',
-          sticky: isHighOrCritical,
-          playSound: isHighOrCritical,
-        });
-      }
-    },
-    [pushToast]
-  );
+  // Không bật popup toast cảnh báo nhảy ở góc dưới; đưa thẳng vào danh sách chuông thông báo
+  const handleIncomingAlert = useCallback((alert: AlertResponse) => {
+    setRealtimeAlerts((prev) =>
+      upsertRealtimeAlertList(prev, alert, {
+        sortBy: 'severity',
+        direction: 'DESC',
+        maxSize: 50,
+      })
+    );
+  }, []);
 
   const hasMismatchedMyInfo = Boolean(
     myInfoQuery.data && !isMatchingSessionUser(myInfoQuery.data)
@@ -625,18 +615,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
 
             {capabilities.canViewAlerts && (
-              <Link
-                href="/alerts"
-                aria-label={`Cảnh báo chưa đọc: ${unreadCount}`}
-                className="btn-icon relative"
-              >
-                <Bell className="h-4 w-4" aria-hidden="true" />
-                {unreadCount > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold tabular-nums text-white ring-2 ring-white">
-                    {unreadCount > 99 ? '99+' : unreadCount}
-                  </span>
-                )}
-              </Link>
+              <AlertBellPopover
+                unreadCount={unreadCount}
+                realtimeAlerts={hasMismatchedMyInfo ? [] : realtimeAlerts}
+                onAlertUpdated={handleIncomingAlert}
+                canViewAlerts={capabilities.canViewAlerts}
+                canAcknowledgeAlert={capabilities.canAcknowledgeAlert}
+                canResolveAlert={capabilities.canResolveAlert}
+                canViewDevices={capabilities.canViewDevices}
+              />
             )}
           </div>
         </header>

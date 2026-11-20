@@ -22,11 +22,18 @@ import { telemetryApi } from '@/features/telemetry/api';
 import { buildCapabilities } from '@/lib/rbac/capabilities';
 import { parseScopeString } from '@/lib/rbac/scope-parser';
 import { stompManager } from '@/lib/realtime/stomp-client';
-import type { RoomResponse, TelemetryResponse, UserResponse } from '@/types/api';
+import type {
+  AlertResponse,
+  RoomResponse,
+  TelemetryResponse,
+  UserResponse,
+} from '@/types/api';
+
+const mockRouterPush = vi.fn();
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
-    push: vi.fn(),
+    push: mockRouterPush,
     replace: vi.fn(),
     back: vi.fn(),
   }),
@@ -269,5 +276,148 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
     });
 
     window.history.replaceState({}, '', '/floorplan');
+  });
+
+  it('opens full alert details and action buttons directly in AlertBellPopover without bottom toast popups', async () => {
+    mockRouterPush.mockClear();
+    const adminUser = makeAdminUser();
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+
+    const alertItem: AlertResponse = {
+      id: 'alert-bell-1',
+      deviceId: 'dev-301',
+      hardwareId: 'ESP32_TQB_301',
+      roomId: 'ROOM_301',
+      zoneId: 'ZONE_A',
+      type: 'NOISE_EXCEEDED',
+      metricType: 'NOISE_AVG',
+      unit: 'dBA',
+      severity: 'CRITICAL',
+      severityRank: 4,
+      status: 'FIRING',
+      workflowStatus: 'NEW',
+      currentValue: 74.5,
+      threshold: 55.0,
+      message: 'Noise average (74.5 dBA) exceeded threshold (55.0 dBA)',
+      recommendedAction: 'Nhắc giữ trật tự tại phòng đọc tầng 3.',
+      startedAt: new Date().toISOString(),
+      acknowledgedAt: null,
+      resolvedAt: null,
+      acknowledgedBy: null,
+      resolvedBy: null,
+    };
+
+    vi.spyOn(authApi, 'getMyInfo').mockResolvedValue(adminUser);
+    vi.spyOn(alertsApi, 'getUnreadCount').mockResolvedValue(1);
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [alertItem],
+      page: 0,
+      size: 30,
+      totalElements: 1,
+      totalPages: 1,
+      last: true,
+    });
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [room301],
+      page: 0,
+      size: 100,
+      totalElements: 1,
+      totalPages: 1,
+      last: true,
+    });
+    vi.spyOn(devicesApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+
+    const ackSpy = vi.spyOn(alertsApi, 'acknowledge').mockResolvedValue({
+      ...alertItem,
+      status: 'ACKNOWLEDGED',
+      workflowStatus: 'ACKNOWLEDGED',
+    });
+    const workflowSpy = vi.spyOn(alertsApi, 'updateWorkflow').mockResolvedValue({
+      ...alertItem,
+      status: 'ACKNOWLEDGED',
+      workflowStatus: 'IN_PROGRESS',
+      assignedTo: 'Thủ thư T3',
+      handlingNote: 'Đang kiểm tra phòng',
+    });
+    const resolveSpy = vi.spyOn(alertsApi, 'resolve').mockResolvedValue({
+      ...alertItem,
+      status: 'RESOLVED',
+      workflowStatus: 'RESOLVED',
+    });
+
+    renderWithProviders(
+      <AppShell>
+        <div>Nội dung trang</div>
+      </AppShell>
+    );
+
+    const bellBtn = await screen.findByTestId('alert-bell-button');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Nhấn chuông -> mở bảng cảnh báo đầy đủ ngay tại chỗ
+    fireEvent.click(bellBtn);
+    const popover = await screen.findByTestId('alert-bell-popover');
+    const item = await screen.findByTestId('bell-alert-item-alert-bell-1');
+
+    expect(popover).toBeInTheDocument();
+    expect(item).toHaveTextContent('Khẩn cấp');
+    expect(item).toHaveTextContent('Kích hoạt');
+    expect(item).toHaveTextContent('Vượt ngưỡng ồn');
+    expect(item).toHaveTextContent(room301.code);
+    expect(item).toHaveTextContent('ESP32_TQB_301');
+    expect(item).toHaveTextContent('74.5 dBA');
+    expect(item).toHaveTextContent('55.0 dBA');
+    expect(item).toHaveTextContent('Nhắc giữ trật tự tại phòng đọc tầng 3.');
+
+    // Thao tác Tiếp nhận
+    fireEvent.click(screen.getByTestId('bell-ack-alert-bell-1'));
+    await waitFor(() => {
+      expect(ackSpy).toHaveBeenCalledWith('alert-bell-1');
+    });
+
+    // Thao tác Đang xử lý
+    fireEvent.click(screen.getByTestId('bell-in-progress-alert-bell-1'));
+    await waitFor(() => {
+      expect(workflowSpy).toHaveBeenCalledWith('alert-bell-1', {
+        workflowStatus: 'IN_PROGRESS',
+      });
+    });
+
+    // Thao tác Giao việc / Ghi chú
+    fireEvent.click(screen.getByTestId('bell-edit-workflow-alert-bell-1'));
+    fireEvent.change(screen.getByLabelText('Người phụ trách'), {
+      target: { value: 'Thủ thư T3' },
+    });
+    fireEvent.change(screen.getByLabelText('Ghi chú xử lý'), {
+      target: { value: 'Đang kiểm tra phòng' },
+    });
+    fireEvent.click(screen.getByTestId('bell-save-workflow-alert-bell-1'));
+    await waitFor(() => {
+      expect(workflowSpy).toHaveBeenCalledWith('alert-bell-1', {
+        assignedTo: 'Thủ thư T3',
+        handlingNote: 'Đang kiểm tra phòng',
+      });
+    });
+
+    // Thao tác Xem bản đồ
+    fireEvent.click(screen.getByTestId('bell-locate-alert-bell-1'));
+    expect(mockRouterPush).toHaveBeenCalledWith(
+      expect.stringContaining('/floorplan?')
+    );
+
+    // Mở lại chuông và Đóng sự cố
+    fireEvent.click(bellBtn);
+    await screen.findByTestId('bell-resolve-alert-bell-1');
+    fireEvent.click(screen.getByTestId('bell-resolve-alert-bell-1'));
+    await waitFor(() => {
+      expect(resolveSpy).toHaveBeenCalledWith('alert-bell-1');
+    });
   });
 });

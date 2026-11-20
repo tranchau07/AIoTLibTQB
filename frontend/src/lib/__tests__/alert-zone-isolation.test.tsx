@@ -25,6 +25,7 @@ import { alertsApi } from '@/features/alerts/api';
 import { authApi } from '@/features/auth/api';
 import { useAuthStore } from '@/features/auth/store';
 import { devicesApi } from '@/features/devices/api';
+import { roomsApi } from '@/features/rooms/api';
 import { buildCapabilities } from '@/lib/rbac/capabilities';
 import { parseScopeString } from '@/lib/rbac/scope-parser';
 import { stompManager } from '@/lib/realtime/stomp-client';
@@ -504,6 +505,22 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
       cb(true);
       return vi.fn();
     });
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 30,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
   });
 
   afterEach(() => {
@@ -613,7 +630,7 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
     expect(screen.queryByText('Cảnh báo legacy Zone B')).not.toBeInTheDocument();
     expect(audioConstructedSpy).not.toHaveBeenCalled();
 
-    // 3. Emit ZONE_A CRITICAL FIRING alert -> renders toast and plays chime
+    // 3. Emit ZONE_A CRITICAL FIRING alert -> no bottom toast; routed to Bell popover
     act(() => {
       capturedListener?.(
         makeAlert({
@@ -628,11 +645,7 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
       );
     });
 
-    expect(screen.getByRole('alert')).toBeInTheDocument();
-    expect(screen.getByText('Cảnh báo khẩn cấp')).toBeInTheDocument();
-    expect(screen.getByText('Cảnh báo Zone A khẩn cấp')).toBeInTheDocument();
-    expect(audioConstructedSpy).toHaveBeenCalledTimes(1);
-    expect(oscStartSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     // 4. Emit legacy zoneId: null alert for ZONE_A device -> allowed via scoped device fallback
     act(() => {
@@ -648,7 +661,15 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
         })
       );
     });
+
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
+    expect(screen.getByText('Cảnh báo Zone A khẩn cấp')).toBeInTheDocument();
     expect(screen.getByText('Cảnh báo legacy Zone A hợp lệ')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Cảnh báo Zone B không được phép hiển thị')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Cảnh báo legacy Zone B')).not.toBeInTheDocument();
   });
 
   it('skips /devices query for VIEWER (preventing 403) while still isolating ZONE_A vs ZONE_B toasts', async () => {
@@ -710,6 +731,9 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
         })
       );
     });
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
+    expect(screen.queryByText('Viewer Zone B bị chặn')).not.toBeInTheDocument();
     expect(screen.getByText('Viewer Zone A hợp lệ')).toBeInTheDocument();
   });
 
@@ -800,6 +824,14 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
         })
       );
     });
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Cảnh báo trước khi tải myInfo')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Custom Role Zone B bị chặn')
+    ).not.toBeInTheDocument();
     expect(screen.getByText('Custom Role Zone A hợp lệ')).toBeInTheDocument();
   });
 
@@ -822,7 +854,14 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
 
     vi.spyOn(authApi, 'getMyInfo').mockResolvedValue(adminUser);
     vi.spyOn(alertsApi, 'getUnreadCount').mockResolvedValue(2);
-    const devicesListSpy = vi.spyOn(devicesApi, 'list');
+    const devicesListSpy = vi.spyOn(devicesApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -852,6 +891,8 @@ describe('P0-1 Zone Isolation: AppShell Toast & Audio Chime Smoke Tests', () => 
       );
     });
 
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
     expect(screen.getByText('Admin nhận cảnh báo Zone B')).toBeInTheDocument();
   });
 });
@@ -928,6 +969,22 @@ describe('P0-1 Zone Isolation: AppShell Cross-Session & Multi-Tab Security (REPR
     });
     vi.spyOn(stompManager, 'activate').mockImplementation(() => {});
     vi.spyOn(stompManager, 'deactivate').mockImplementation(() => {});
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 30,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
   });
 
   afterEach(async () => {
@@ -1082,9 +1139,11 @@ describe('P0-1 Zone Isolation: AppShell Cross-Session & Multi-Tab Security (REPR
         })
       );
     });
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
+    expect(screen.queryByText('REPRO1_ZONE_B_LEAKED_EARLY')).not.toBeInTheDocument();
+    expect(screen.queryByText('REPRO1_ZONE_B_LEAKED')).not.toBeInTheDocument();
     expect(screen.getByText('REPRO1_ZONE_A_ALLOWED')).toBeInTheDocument();
-    expect(audioConstructedSpy).toHaveBeenCalledTimes(1);
-    expect(oscStartSpy).toHaveBeenCalledTimes(1);
   });
 
   it('REPRO-2 (Shared QueryClient, staleTime=0): LIBRARIAN(ZONE_B) logout -> LIBRARIAN(ZONE_A) login fails closed while getMyInfo is pending', async () => {
@@ -1238,9 +1297,12 @@ describe('P0-1 Zone Isolation: AppShell Cross-Session & Multi-Tab Security (REPR
         })
       );
     });
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
+    expect(screen.queryByText('REPRO2_ZONE_B_LEAKED_DURING_FETCH')).not.toBeInTheDocument();
+    expect(screen.queryByText('REPRO2_ZONE_A_PREMATURE')).not.toBeInTheDocument();
+    expect(screen.queryByText('REPRO2_ZONE_B_AFTER')).not.toBeInTheDocument();
     expect(screen.getByText('REPRO2_ZONE_A_AFTER')).toBeInTheDocument();
-    expect(audioConstructedSpy).toHaveBeenCalledTimes(1);
-    expect(oscStartSpy).toHaveBeenCalledTimes(1);
   });
 
   it('REPRO-3 (In-place setTokens / BroadcastChannel switch without unmount): ADMIN -> LIBRARIAN(ZONE_A) drops privileges immediately and evicts stale cache', async () => {
@@ -1363,9 +1425,11 @@ describe('P0-1 Zone Isolation: AppShell Cross-Session & Multi-Tab Security (REPR
         })
       );
     });
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
+    expect(screen.queryByText('REPRO3_ZONE_B_LEAKED_IN_PLACE')).not.toBeInTheDocument();
+    expect(screen.queryByText('REPRO3_ZONE_B_AFTER_RESOLVE')).not.toBeInTheDocument();
     expect(screen.getByText('REPRO3_ZONE_A_ALLOWED')).toBeInTheDocument();
-    expect(audioConstructedSpy).toHaveBeenCalledTimes(1);
-    expect(oscStartSpy).toHaveBeenCalledTimes(1);
   });
 
   it('preserves session and caches smoothly on same-user JWT refresh', async () => {
@@ -1456,9 +1520,10 @@ describe('P0-1 Zone Isolation: AppShell Cross-Session & Multi-Tab Security (REPR
       );
     });
 
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
     expect(screen.queryByText('REFRESH_ZONE_B_BLOCKED')).not.toBeInTheDocument();
     expect(screen.getByText('REFRESH_ZONE_A_ALLOWED')).toBeInTheDocument();
-    expect(audioConstructedSpy).toHaveBeenCalledTimes(1);
   });
 
   it('evicts stale user and refetches myInfo on in-place opaque non-JWT token switch', async () => {
@@ -1551,9 +1616,10 @@ describe('P0-1 Zone Isolation: AppShell Cross-Session & Multi-Tab Security (REPR
       );
     });
 
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
     expect(screen.queryByText('OPAQUE_ZONE_B_BLOCKED')).not.toBeInTheDocument();
     expect(screen.getByText('OPAQUE_ZONE_A_ALLOWED')).toBeInTheDocument();
-    expect(audioConstructedSpy).toHaveBeenCalledTimes(1);
   });
 
   it('evicts myInfo, alerts, and devices caches when clearSession runs before unmount (standard SPA logout flow)', async () => {

@@ -744,6 +744,22 @@ describe('Hạng mục 8 (F6): Việt hóa đầy đủ thông điệp cảnh b�
     };
     vi.spyOn(authApi, 'getMyInfo').mockResolvedValue(adminUser);
     vi.spyOn(alertsApi, 'getUnreadCount').mockResolvedValue(1);
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 30,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
 
     useAuthStore.setState({
       accessToken: 'token-admin',
@@ -784,6 +800,12 @@ describe('Hạng mục 8 (F6): Việt hóa đầy đủ thông điệp cảnh b�
       );
     });
 
+    // Không tự động nhảy popup toast ở góc dưới
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Nhấn vào icon chuông thông báo -> hiển thị cảnh báo đã Việt hóa đầy đủ ngay tại đó
+    fireEvent.click(screen.getByTestId('alert-bell-button'));
+    expect(await screen.findByTestId('alert-bell-popover')).toBeInTheDocument();
     expect(
       screen.getByText('Tiếng ồn đột biến (88.0 dBA) vượt ngưỡng cho phép (85.0 dBA)')
     ).toBeInTheDocument();
