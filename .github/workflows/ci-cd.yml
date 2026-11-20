@@ -1,0 +1,313 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_deploy:
+        description: "Skip VPS SSH deployment (only run CI + build/push GHCR)"
+        type: boolean
+        default: false
+      enable_simulator:
+        description: "Enable --profile simulator during VPS deployment"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  backend-test:
+    name: Backend Tests (Java 21)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run Maven unit & integration tests
+        run: |
+          sed -i 's/\r$//' mvnw
+          chmod +x mvnw
+          ./mvnw test -B
+
+  frontend-check:
+    name: Frontend Typecheck, Tests & Build (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run Vitest & accessibility tests
+        run: npm test
+
+      - name: Verify Next.js standalone production build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+          NEXT_PUBLIC_WS_URL: ${{ vars.NEXT_PUBLIC_WS_URL }}
+        run: npm run build
+
+  simulator-test:
+    name: IoT Simulator Tests (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/iot-simulator
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tools/iot-simulator/package-lock.json
+
+      - name: Install simulator dependencies
+        run: npm ci
+
+      - name: Run simulator tests
+        run: npm test
+
+  build-and-push:
+    name: Build & Push (${{ matrix.name }})
+    needs: [backend-test, frontend-check, simulator-test]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: backend
+            context: .
+            dockerfile: Dockerfile
+            build_args: ""
+          - name: frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            build_args: |
+              NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+              NEXT_PUBLIC_WS_URL=${{ vars.NEXT_PUBLIC_WS_URL }}
+          - name: simulator
+            context: ./tools/iot-simulator
+            dockerfile: ./tools/iot-simulator/Dockerfile
+            build_args: ""
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          OWNER_LOWER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "owner=${OWNER_LOWER}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${OWNER_LOWER}/aiotlibtqb-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=aiotlibtqb-${{ matrix.name }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy-vps:
+    name: Deploy to VPS via SSH
+    needs: [build-and-push]
+    if: github.event_name != 'pull_request' && inputs.skip_deploy != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check VPS deployment configuration
+        id: check
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ] || [ -z "$VPS_SSH_KEY" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::VPS SSH deploy skipped. Configure VPS_HOST, VPS_USER, and VPS_SSH_KEY in GitHub Secrets/Variables to enable automatic VPS deployment."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure SSH client
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT || vars.VPS_PORT || '22' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS || vars.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          if [ -n "$VPS_SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+            echo "strict_host_key=yes" >> "$GITHUB_OUTPUT"
+          else
+            ssh-keyscan -p "$VPS_PORT" -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+            echo "strict_host_key=accept-new" >> "$GITHUB_OUTPUT"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+        id: ssh_setup
+
+      - name: Sync compose & Mosquitto configs and deploy on VPS
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER || vars.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || vars.VPS_PORT || '22' }}
+          VPS_DEPLOY_PATH: ${{ secrets.VPS_DEPLOY_PATH || vars.VPS_DEPLOY_PATH || '~/aiotlibtqb' }}
+          VPS_ENABLE_SIMULATOR: ${{ inputs.enable_simulator || vars.VPS_ENABLE_SIMULATOR || 'false' }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          OWNER_LOWER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_TAG="sha-${GITHUB_SHA::7}"
+          SSH_OPTS=(
+            -i "$HOME/.ssh/deploy_key"
+            -p "$VPS_PORT"
+            -o "BatchMode=yes"
+            -o "StrictHostKeyChecking=${{ steps.ssh_setup.outputs.strict_host_key }}"
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          )
+          TARGET="${VPS_USER}@${VPS_HOST}"
+
+          DEPLOY_DIR_Q="$(printf '%q' "$VPS_DEPLOY_PATH")"
+          GHCR_USER_Q="$(printf '%q' "$GHCR_USER")"
+
+          # 1. Sync runtime deployment files (never overwrites .env on VPS)
+          tar czf - \
+            docker-compose.yml \
+            docker-compose.prod.yml \
+            .env.example \
+            mosquitto/config/mosquitto.conf \
+            mosquitto/config/acl.conf \
+            | ssh "${SSH_OPTS[@]}" "$TARGET" \
+              "DEPLOY_DIR_RAW=${DEPLOY_DIR_Q} bash -c 'DEPLOY_DIR=\"\${DEPLOY_DIR_RAW/#\\~/\$HOME}\"; mkdir -p \"\$DEPLOY_DIR\" && tar xzf - -C \"\$DEPLOY_DIR\"'"
+
+          # 2. Authenticate Docker on VPS to GHCR via stdin (avoids leaking token in argv)
+          printf '%s' "$GHCR_TOKEN" | ssh "${SSH_OPTS[@]}" "$TARGET" \
+            "docker login ghcr.io -u ${GHCR_USER_Q} --password-stdin"
+
+          # 3. Pull exact commit-tagged images, restart stack, and verify healthchecks
+          ssh "${SSH_OPTS[@]}" "$TARGET" \
+            "GHCR_OWNER='${OWNER_LOWER}' IMAGE_TAG='${IMAGE_TAG}' DEPLOY_DIR_RAW=${DEPLOY_DIR_Q} ENABLE_SIM='${VPS_ENABLE_SIMULATOR}' bash -s" <<'REMOTE_EOF'
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+
+          DEPLOY_DIR="${DEPLOY_DIR_RAW/#\~/$HOME}"
+          cd "$DEPLOY_DIR"
+
+          if [ ! -f .env ]; then
+            echo "::error::Missing $DEPLOY_DIR/.env on VPS. Copy .env.example to .env and configure production secrets before deploying."
+            exit 1
+          fi
+
+          COMPOSE_CMD=(docker compose -f docker-compose.yml -f docker-compose.prod.yml)
+          if [ "$ENABLE_SIM" = "true" ]; then
+            COMPOSE_CMD+=(--profile simulator)
+          fi
+
+          export GHCR_OWNER IMAGE_TAG
+          echo "Deploying GHCR images: owner=${GHCR_OWNER}, tag=${IMAGE_TAG}, simulator=${ENABLE_SIM}"
+
+          "${COMPOSE_CMD[@]}" pull
+          "${COMPOSE_CMD[@]}" up -d --no-build --remove-orphans
+
+          # Wait for core services to report healthy (up to 120s)
+          for SERVICE_CONTAINER in aiot_backend aiot_frontend; do
+            echo "Waiting for ${SERVICE_CONTAINER} to become healthy..."
+            READY=false
+            for _ in $(seq 1 24); do
+              STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$SERVICE_CONTAINER" 2>/dev/null || echo "missing")"
+              if [ "$STATUS" = "healthy" ]; then
+                echo "${SERVICE_CONTAINER} is healthy."
+                READY=true
+                break
+              fi
+              sleep 5
+            done
+            if [ "$READY" != "true" ]; then
+              echo "::error::${SERVICE_CONTAINER} did not become healthy (last status: ${STATUS}). Recent logs:"
+              docker logs --tail 80 "$SERVICE_CONTAINER" || true
+              exit 1
+            fi
+          done
+
+          "${COMPOSE_CMD[@]}" ps
+          docker image prune -f >/dev/null 2>&1 || true
+          REMOTE_EOF
+
+      - name: Clean up temporary SSH key
+        if: always()
+        run: rm -rf "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"

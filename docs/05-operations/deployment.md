@@ -57,7 +57,55 @@
 
 ---
 
-## 4. Hạng Mục Hạ Tầng Production Cần Bổ Sung / Missing Production Governance
+## 4. Pipeline CI/CD Tự Động (GitHub Actions + GHCR + VPS SSH) / Automated CI/CD Pipeline
+
+> **Tệp cấu hình / Workflow Files:** [`.github/workflows/ci-cd.yml`](../../.github/workflows/ci-cd.yml), [`docker-compose.prod.yml`](../../docker-compose.prod.yml).
+
+```text
+[PR / Push main] ─► CI (Backend ./mvnw test │ Frontend typecheck+vitest+build │ Simulator npm test)
+                        │
+                        ▼ (chỉ trên push main hoặc workflow_dispatch)
+                 Build & Push 3 Docker images lên ghcr.io (tag :sha-<7> & :latest)
+                        │
+                        ▼ (tự động bỏ qua nếu chưa khai báo VPS_HOST / VPS_USER / VPS_SSH_KEY)
+                 SSH Deploy lên VPS (sync compose + mosquitto config, docker compose pull & up --no-build, kiểm tra healthcheck)
+```
+
+### Biến & Secrets cần cấu hình trên GitHub (`Settings -> Secrets and variables -> Actions`)
+
+| Tên / Key | Loại / Type | Bắt buộc / Required | Mô tả / Description |
+| :--- | :---: | :---: | :--- |
+| `VPS_SSH_KEY` | **Secret** | Khi bật VPS deploy | Private SSH key (ED25519/RSA) dùng để đăng nhập VPS. |
+| `VPS_HOST` | **Secret / Variable** | Khi bật VPS deploy | Địa chỉ IP hoặc domain của VPS. |
+| `VPS_USER` | **Secret / Variable** | Khi bật VPS deploy | Tài khoản Linux trên VPS (nằm trong group `docker`). |
+| `VPS_PORT` | **Variable / Secret** | Tùy chọn *(mặc định `22`)* | Cổng SSH của VPS. |
+| `VPS_DEPLOY_PATH` | **Variable / Secret** | Tùy chọn *(mặc định `~/aiotlibtqb`)* | Thư mục triển khai chứa `.env` trên VPS. |
+| `VPS_SSH_KNOWN_HOSTS` | **Secret / Variable** | Khuyến nghị | Kết quả `ssh-keyscan -H <VPS_HOST>` để bật `StrictHostKeyChecking=yes`. |
+| `VPS_ENABLE_SIMULATOR` | **Variable** | Tùy chọn *(mặc định `false`)* | Đặt `true` để bật `--profile simulator` trên môi trường demo/staging. |
+| `NEXT_PUBLIC_API_BASE_URL` | **Variable** | Tùy chọn *(mặc định rỗng `""`)* | Để trống nếu dùng Reverse Proxy cùng tên miền; hoặc đặt URL public API (vd `https://api.example.com/api/v1`). |
+| `NEXT_PUBLIC_WS_URL` | **Variable** | Tùy chọn *(mặc định rỗng `""`)* | Để trống nếu dùng Reverse Proxy cùng tên miền; hoặc đặt URL WebSocket (vd `wss://api.example.com/ws-aiot`). |
+
+### Chuẩn bị VPS lần đầu (One-Time Bootstrap)
+1. Cài Docker Engine (`24+`) & Docker Compose plugin (`v2.20+`), thêm user deploy vào group `docker`.
+2. Tạo thư mục triển khai và tệp `.env` chứa secret thật (**CI/CD không bao giờ ghi đè `.env`**):
+   ```bash
+   mkdir -p ~/aiotlibtqb && cd ~/aiotlibtqb
+   # Copy .env.example (hoặc tạo thủ công) rồi đặt JWT_SECRET (>= 64 ký tự), MONGO_ROOT_PASSWORD, MQTT_*, INITIAL_ADMIN_PASSWORD, CORS_ALLOWED_ORIGINS
+   nano .env
+   ```
+3. Thêm public key tương ứng với `VPS_SSH_KEY` vào `~/.ssh/authorized_keys` trên VPS.
+4. Push lên nhánh `main` (hoặc bấm **Run workflow** tại tab Actions) để tự động build, push GHCR và deploy.
+
+### Rollback nhanh trên VPS
+```bash
+cd ~/aiotlibtqb
+IMAGE_TAG=sha-<commit-7-ky-tu> docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+IMAGE_TAG=sha-<commit-7-ky-tu> docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+```
+
+---
+
+## 5. Hạng Mục Hạ Tầng Production Cần Bổ Sung / Missing Production Governance
 
 - `[CẦN BỔ SUNG / TO BE ADDED: Kiến trúc triển khai Production chính thức (tên miền thực tế, Nginx/Traefik Reverse Proxy với chứng chỉ TLS/HTTPS cố định, bật MQTTS :8883 TLS trên Mosquitto).]`
 - `[CẦN BỔ SUNG / TO BE ADDED: Lịch trình Backup / Restore định kỳ cho volume MongoDB (aiot_mongo_data), quy trình nâng cấp không gián đoạn (rolling update) và thông số SLA / RTO / RPO.]`

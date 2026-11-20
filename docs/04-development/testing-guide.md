@@ -5,7 +5,7 @@
 > - **Frontend Typecheck:** `npx tsc --noEmit` — **PASSED (0 errors)**
 > - **Frontend Vitest + A11y (`axe-core`):** `13` test suites / `146` test cases — **PASSED** (`npm test`)
 > - **Frontend Production Build:** `next build` (`output: 'standalone'`, `16` routes) — **PASSED**
-> - **CI/CD Status:** `[CẦN BỔ SUNG / TO BE ADDED: Thiết lập pipeline GitHub Actions chạy tự động toàn bộ các lệnh dưới đây trên mỗi Pull Request.]`
+> - **CI/CD Status:** Đã thiết lập pipeline GitHub Actions tại [`.github/workflows/ci-cd.yml`](../../.github/workflows/ci-cd.yml) — tự động chạy kiểm thử Backend (`./mvnw test`), Frontend (`typecheck`, `vitest`, `next build`) và Simulator (`npm test`) trên mọi Pull Request & push `main`.
 
 ---
 

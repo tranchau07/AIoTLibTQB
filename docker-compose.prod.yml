@@ -1,0 +1,27 @@
+# =============================================================================
+# AIoTLibTQB - Production Docker Compose Override (GHCR Prebuilt Images)
+#
+# Usage on VPS / Production server:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --remove-orphans
+#
+# Optional: enable IoT simulator for demo/staging environments:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile simulator pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile simulator up -d --no-build
+# =============================================================================
+
+services:
+  backend:
+    image: ghcr.io/${GHCR_OWNER:-tranchau07}/aiotlibtqb-backend:${IMAGE_TAG:-latest}
+    environment:
+      - ALERT_EMAIL_ENABLED=${ALERT_EMAIL_ENABLED:-false}
+      - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-noreply@aiotlibtqb.edu.vn}
+      - ALERT_EMAIL_COOLDOWN_MINUTES=${ALERT_EMAIL_COOLDOWN_MINUTES:-30}
+      - ALERT_EMAIL_HIGH_ESCALATION_MINUTES=${ALERT_EMAIL_HIGH_ESCALATION_MINUTES:-10}
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER:-tranchau07}/aiotlibtqb-frontend:${IMAGE_TAG:-latest}
+
+  simulator:
+    image: ghcr.io/${GHCR_OWNER:-tranchau07}/aiotlibtqb-simulator:${IMAGE_TAG:-latest}
+    profiles: ["simulator"]
