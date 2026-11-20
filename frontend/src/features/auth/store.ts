@@ -11,6 +11,7 @@ import type { UserResponse } from '@/types/api';
 const SESSION_REFRESH_KEY = 'aiot_refresh_token';
 const KIOSK_REFRESH_KEY = 'aiot_kiosk_refresh_token';
 const AUTH_CHANNEL_NAME = 'aiot_auth_channel';
+const AUTH_SENDER_ID = `tab-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 
 export interface AuthState {
   accessToken: string | null;
@@ -62,6 +63,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           const bc = new BroadcastChannel(AUTH_CHANNEL_NAME);
           bc.postMessage({
             type: 'TOKENS_UPDATED',
+            senderId: AUTH_SENDER_ID,
             accessToken,
             refreshToken,
             isKioskSession: effectiveKiosk,
@@ -94,7 +96,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         window.localStorage.removeItem(KIOSK_REFRESH_KEY);
         if ('BroadcastChannel' in window) {
           const bc = new BroadcastChannel(AUTH_CHANNEL_NAME);
-          bc.postMessage({ type: 'SESSION_CLEARED' });
+          bc.postMessage({
+            type: 'SESSION_CLEARED',
+            senderId: AUTH_SENDER_ID,
+          });
           bc.close();
         }
       } catch {
@@ -124,6 +129,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         bc.onmessage = (event) => {
           const data = event.data;
           if (!data || typeof data !== 'object') return;
+          if (data.senderId === AUTH_SENDER_ID) return;
           if (
             data.type === 'TOKENS_UPDATED' &&
             typeof data.accessToken === 'string' &&
