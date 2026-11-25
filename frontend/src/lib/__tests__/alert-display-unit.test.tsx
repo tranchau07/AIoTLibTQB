@@ -252,9 +252,12 @@ describe('Hạng mục 5 (P1-1): AlertsCenterPage hiển thị đúng đơn vị
       totalPages: 1,
       last: true,
     });
-    const ackSpy = vi
-      .spyOn(alertsApi, 'acknowledge')
-      .mockResolvedValue({ ...alerts[0], status: 'ACKNOWLEDGED' });
+    const workflowSpy = vi.spyOn(alertsApi, 'updateWorkflow').mockResolvedValue({
+      ...alerts[0],
+      status: 'ACKNOWLEDGED',
+      workflowStatus: 'IN_PROGRESS',
+      assignedTo: 'admin',
+    });
 
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -295,15 +298,15 @@ describe('Hạng mục 5 (P1-1): AlertsCenterPage hiển thị đúng đơn vị
       '/floorplan?floor=2&roomId=room-2&deviceId=dev-2&hardwareId=ESP32-201&layer=wifiRssi&alertId=a-offline',
     ]);
 
-    // Click 'Tiếp nhận' on the TEMPERATURE alert -> routes to layer=temperature
-    const ackButtons = screen.getAllByRole('button', { name: 'Tiếp nhận' });
-    fireEvent.click(ackButtons[0]);
+    // Click Tap 1 ('Nhận xử lý') on the TEMPERATURE alert -> claims in-place without forcing router.push
+    const claimButtons = screen.getAllByRole('button', { name: 'Nhận xử lý' });
+    fireEvent.click(claimButtons[0]);
 
     await waitFor(() => {
-      expect(ackSpy).toHaveBeenCalledWith('a-temp');
-      expect(routerPushSpy).toHaveBeenCalledWith(
-        '/floorplan?floor=3&roomId=room-1&deviceId=dev-1&hardwareId=ESP32-301&layer=temperature&alertId=a-temp'
-      );
+      expect(workflowSpy).toHaveBeenCalledWith('a-temp', {
+        workflowStatus: 'IN_PROGRESS',
+      });
     });
+    expect(routerPushSpy).not.toHaveBeenCalled();
   });
 });

@@ -232,11 +232,21 @@ describe('3. RBAC Scope Parser & Capability Matrix (FE-RBAC-02, FE-RBAC-03)', ()
     expect(mntCap.canManageDevices).toBe(false);
     expect(mntCap.canEditFurniture).toBe(true);
     expect(mntCap.canAcknowledgeAlert).toBe(true);
-    expect(mntCap.canResolveAlert).toBe(false);
+    expect(mntCap.canResolveAlert).toBe(true);
 
-    const zmScope = parseScopeString('ZONE_MANAGER VIEW_ALERTS READ_SENSOR_DATA', 'zm01');
+    const zmScope = parseScopeString(
+      'ZONE_MANAGER VIEW_ALERTS ACKNOWLEDGE_ALERT READ_SENSOR_DATA',
+      'zm01'
+    );
     const zmCap = buildCapabilities(zmScope);
     expect(zmCap.canEditFurniture).toBe(false);
+    expect(zmCap.canAcknowledgeAlert).toBe(true);
+    expect(zmCap.canResolveAlert).toBe(true);
+
+    const viewerScope = parseScopeString('VIEWER VIEW_ALERTS READ_SENSOR_DATA', 'vw01');
+    const viewerCap = buildCapabilities(viewerScope);
+    expect(viewerCap.canViewAlerts).toBe(true);
+    expect(viewerCap.canResolveAlert).toBe(false);
 
     const userScope = parseScopeString('USER', 'student01');
     const userCap = buildCapabilities(userScope);
@@ -244,6 +254,7 @@ describe('3. RBAC Scope Parser & Capability Matrix (FE-RBAC-02, FE-RBAC-03)', ()
     expect(userCap.canEditFurniture).toBe(false);
     expect(userCap.canViewAlerts).toBe(false);
     expect(userCap.canViewDevices).toBe(false);
+    expect(userCap.canResolveAlert).toBe(false);
   });
 
   it('decodes base64url JWT payload safely', () => {

@@ -334,22 +334,12 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
       last: true,
     });
 
-    const ackSpy = vi.spyOn(alertsApi, 'acknowledge').mockResolvedValue({
-      ...alertItem,
-      status: 'ACKNOWLEDGED',
-      workflowStatus: 'ACKNOWLEDGED',
-    });
     const workflowSpy = vi.spyOn(alertsApi, 'updateWorkflow').mockResolvedValue({
       ...alertItem,
       status: 'ACKNOWLEDGED',
       workflowStatus: 'IN_PROGRESS',
       assignedTo: 'Thủ thư T3',
       handlingNote: 'Đang kiểm tra phòng',
-    });
-    const resolveSpy = vi.spyOn(alertsApi, 'resolve').mockResolvedValue({
-      ...alertItem,
-      status: 'RESOLVED',
-      workflowStatus: 'RESOLVED',
     });
 
     renderWithProviders(
@@ -376,14 +366,8 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
     expect(item).toHaveTextContent('55.0 dBA');
     expect(item).toHaveTextContent('Nhắc giữ trật tự tại phòng đọc tầng 3.');
 
-    // Thao tác Tiếp nhận
+    // Tap 1: Nhận xử lý (gộp Tiếp nhận + Đang xử lý + auto-assign)
     fireEvent.click(screen.getByTestId('bell-ack-alert-bell-1'));
-    await waitFor(() => {
-      expect(ackSpy).toHaveBeenCalledWith('alert-bell-1');
-    });
-
-    // Thao tác Đang xử lý
-    fireEvent.click(screen.getByTestId('bell-in-progress-alert-bell-1'));
     await waitFor(() => {
       expect(workflowSpy).toHaveBeenCalledWith('alert-bell-1', {
         workflowStatus: 'IN_PROGRESS',
@@ -412,12 +396,18 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
       expect.stringContaining('/floorplan?')
     );
 
-    // Mở lại chuông và Đóng sự cố
+    // Mở lại chuông và Tap 2: Đã nhắc xong + 1-click Quick-Tag chip
     fireEvent.click(bellBtn);
     await screen.findByTestId('bell-resolve-alert-bell-1');
     fireEvent.click(screen.getByTestId('bell-resolve-alert-bell-1'));
+    await screen.findByTestId('bell-tag-alert-bell-1-REMINDED_QUIET');
+    fireEvent.click(screen.getByTestId('bell-tag-alert-bell-1-REMINDED_QUIET'));
     await waitFor(() => {
-      expect(resolveSpy).toHaveBeenCalledWith('alert-bell-1');
+      expect(workflowSpy).toHaveBeenCalledWith('alert-bell-1', {
+        workflowStatus: 'RESOLVED',
+        resolutionTag: 'REMINDED_QUIET',
+        handlingNote: 'Đang kiểm tra phòng',
+      });
     });
   });
 });

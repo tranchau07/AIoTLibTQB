@@ -702,6 +702,11 @@ export default function FloorplanPage() {
       if (!alert.roomId) continue;
       if (!grouped[alert.roomId]) grouped[alert.roomId] = [];
       grouped[alert.roomId].push(alert);
+
+      if (alert.sensorRecovered) {
+        continue;
+      }
+
       counts[alert.roomId] = (counts[alert.roomId] ?? 0) + 1;
 
       if (isAlertOverdue(alert, nowMs, TIMING_CONFIG.overdueAlertMs)) {
@@ -1323,7 +1328,12 @@ export default function FloorplanPage() {
   const alertingDeviceIds = useMemo(
     () =>
       activeAlerts
-        .flatMap((a) => [a.deviceId, a.hardwareId])
+        .filter((a) => !a.sensorRecovered)
+        .flatMap((a) => [
+          a.deviceId,
+          a.hardwareId,
+          ...(a.affectedNodes ?? []).flatMap((n) => [n.deviceId, n.hardwareId]),
+        ])
         .filter((id): id is string => Boolean(id)),
     [activeAlerts]
   );
@@ -1331,7 +1341,7 @@ export default function FloorplanPage() {
   const firingRoomIds = useMemo(
     () =>
       activeAlerts
-        .filter((a) => a.status === 'FIRING')
+        .filter((a) => a.status === 'FIRING' && !a.sensorRecovered)
         .map((a) => a.roomId)
         .filter((id): id is string => Boolean(id)),
     [activeAlerts]

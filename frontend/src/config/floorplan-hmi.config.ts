@@ -83,12 +83,21 @@ export function isAlertOpen(
   return alert.status !== 'RESOLVED' && wf !== 'RESOLVED';
 }
 
+export function isAlertActivelyBreaching(
+  alert: Pick<AlertResponse, 'status' | 'workflowStatus' | 'sensorRecovered'>
+): boolean {
+  return isAlertOpen(alert) && alert.sensorRecovered !== true;
+}
+
 export function isAlertOverdue(
-  alert: Pick<AlertResponse, 'status' | 'workflowStatus' | 'startedAt' | 'assignedTo'>,
+  alert: Pick<
+    AlertResponse,
+    'status' | 'workflowStatus' | 'startedAt' | 'assignedTo' | 'sensorRecovered'
+  >,
   nowMs: number = Date.now(),
   overdueAlertMs: number = TIMING_CONFIG.overdueAlertMs
 ): boolean {
-  if (!isAlertOpen(alert)) return false;
+  if (!isAlertActivelyBreaching(alert)) return false;
   const wf = resolveEffectiveWorkflowStatus(alert);
   // Tồn đọng khi đang NEW (hoặc đã xác nhận nhưng chưa có người phụ trách và chưa IN_PROGRESS)
   const unhandled =
@@ -104,7 +113,7 @@ export function classifyManagerRoomStatus(
   roomAlerts: readonly AlertResponse[] = [],
   thresholds: { goodMinScore: number; attentionMinScore: number } = SUMMARY_STATUS_THRESHOLDS
 ): ManagerRoomHealthStatus {
-  const openAlerts = roomAlerts.filter(isAlertOpen);
+  const openAlerts = roomAlerts.filter(isAlertActivelyBreaching);
   const hasHighOrCritical = openAlerts.some(
     (a) => a.severity === 'HIGH' || a.severity === 'CRITICAL'
   );

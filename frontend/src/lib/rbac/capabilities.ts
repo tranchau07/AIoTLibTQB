@@ -124,8 +124,9 @@ export function buildCapabilities(scope: ParsedScope): CapabilityMatrix {
         hasAnyAuthority(scope, 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE')),
     canResolveAlert:
       isAdmin ||
-      hasAnyAuthority(scope, 'MANAGE_ALERT_CONFIG') ||
-      (!hasExplicitPermissions && hasAnyAuthority(scope, 'LIBRARIAN')),
+      hasAnyAuthority(scope, 'ACKNOWLEDGE_ALERT', 'MANAGE_ALERT_CONFIG') ||
+      (!hasExplicitPermissions &&
+        hasAnyAuthority(scope, 'LIBRARIAN', 'ZONE_MANAGER', 'MAINTENANCE')),
     canManageUsers: hasAnyAuthority(scope, 'ADMIN', 'MANAGE_USERS'),
     canManageRoles: hasAnyAuthority(scope, 'ADMIN', 'MANAGE_ROLES'),
   };

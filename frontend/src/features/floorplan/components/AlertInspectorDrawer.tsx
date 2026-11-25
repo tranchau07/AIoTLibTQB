@@ -8,6 +8,7 @@ import {
   Clock,
   MapPin,
   ShieldAlert,
+  Tag,
   UserCheck,
 } from 'lucide-react';
 import {
@@ -15,6 +16,11 @@ import {
   isAlertOverdue,
   resolveEffectiveWorkflowStatus,
 } from '@/config/floorplan-hmi.config';
+import {
+  type QuickResolutionTagOption,
+  resolveQuickTagsForAlert,
+  resolveResolutionTagLabelVi,
+} from '@/features/alerts/quickTags';
 import {
   ALERT_SEVERITY_LABEL_VI,
   WORKFLOW_STEPS,
@@ -93,6 +99,7 @@ export function AlertWorkflowCard({
   const [noteInput, setNoteInput] = useState<string>(
     alert.handlingNote ?? ''
   );
+  const [showQuickTagDrawer, setShowQuickTagDrawer] = useState<boolean>(false);
 
   useEffect(() => {
     setDraftStatus(resolveEffectiveWorkflowStatus(alert));
@@ -108,6 +115,15 @@ export function AlertWorkflowCard({
 
   const canOperate = canAcknowledge || canResolve;
   const isClosed = effectiveStatus === 'RESOLVED';
+  const quickTags = useMemo(() => resolveQuickTagsForAlert(alert), [alert]);
+  const tagLabel = resolveResolutionTagLabelVi(alert.resolutionTag);
+  const spreadNodes = useMemo(
+    () =>
+      (alert.affectedNodes ?? []).filter(
+        (n) => n && n.hardwareId && n.hardwareId !== alert.hardwareId
+      ),
+    [alert.affectedNodes, alert.hardwareId]
+  );
 
   const handleSaveWorkflow = () => {
     const trimmedAssignee = assigneeInput.trim();
@@ -124,16 +140,35 @@ export function AlertWorkflowCard({
     });
   };
 
+  const handleSelectQuickTag = (tag: QuickResolutionTagOption) => {
+    const customNote = noteInput.trim();
+    void onUpdateWorkflow(alert.id, {
+      workflowStatus: 'RESOLVED',
+      resolutionTag: tag.code,
+      assignedTo: isClosed ? undefined : assigneeInput.trim() || undefined,
+      handlingNote: customNote || tag.defaultNoteVi,
+    });
+    setShowQuickTagDrawer(false);
+  };
+
+  const showQuickTags =
+    canResolve &&
+    (showQuickTagDrawer ||
+      (!isClosed &&
+        (Boolean(alert.sensorRecovered) || effectiveStatus === 'IN_PROGRESS')));
+
   return (
     <article
       data-testid={`alert-workflow-card-${alert.id}`}
       className={`rounded-lg border p-2.5 text-xs shadow-2xs transition-colors ${
-        overdue
-          ? 'border-red-400 bg-red-50/70 ring-1 ring-red-300'
-          : 'border-rose-200 bg-white'
+        alert.sensorRecovered && !isClosed
+          ? 'border-emerald-300 bg-emerald-50/50'
+          : overdue
+            ? 'border-red-400 bg-red-50/70 ring-1 ring-red-300'
+            : 'border-rose-200 bg-white'
       }`}
     >
-      {/* Top Meta Row: Severity + Overdue Badge + Age */}
+      {/* Top Meta Row: Severity + Status + Sensor Recovered + Overdue + Age */}
       <div className="flex flex-wrap items-center justify-between gap-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           <span
@@ -149,6 +184,14 @@ export function AlertWorkflowCard({
           >
             {txt.workflowLabels[effectiveStatus]}
           </span>
+          {alert.sensorRecovered && !isClosed && (
+            <span
+              data-testid={`alert-recovered-pill-${alert.id}`}
+              className="rounded border border-emerald-400 bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold text-white"
+            >
+              Đã êm — Chờ xác nhận
+            </span>
+          )}
           {overdue && (
             <span
               data-testid={`alert-overdue-badge-${alert.id}`}
@@ -173,9 +216,14 @@ export function AlertWorkflowCard({
       <p className="mt-1.5 font-semibold leading-snug text-slate-900">
         {summary.headlineVi}
       </p>
-      {alert.hardwareId && (
-        <p className="mt-0.5 font-mono text-[10px] text-slate-500">
-          Trạm: {alert.hardwareId}
+      {(alert.hardwareId || spreadNodes.length > 0) && (
+        <p className="mt-0.5 font-mono text-[10px] text-slate-600">
+          {alert.hardwareId ? `Tâm điểm: ${alert.hardwareId}` : ''}
+          {spreadNodes.length > 0
+            ? ` · Lan sang ${spreadNodes.length} trạm khác (${spreadNodes
+                .map((n) => n.hardwareId)
+                .join(', ')})`
+            : ''}
         </p>
       )}
 
@@ -188,54 +236,106 @@ export function AlertWorkflowCard({
         <span>{summary.sopVi}</span>
       </div>
 
-      {/* Current Assignee Display */}
-      {alert.assignedTo && (
-        <div
-          data-testid={`alert-assignee-badge-${alert.id}`}
-          className="mt-2 inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-900"
-        >
-          <UserCheck className="h-3 w-3 text-sky-700" aria-hidden="true" />
-          <span>Phụ trách: {alert.assignedTo}</span>
+      {/* Current Assignee & Resolution Tag Display */}
+      {(alert.assignedTo || tagLabel) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {alert.assignedTo && (
+            <span
+              data-testid={`alert-assignee-badge-${alert.id}`}
+              className="inline-flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-900"
+            >
+              <UserCheck className="h-3 w-3 text-sky-700" aria-hidden="true" />
+              <span>Phụ trách: {alert.assignedTo}</span>
+            </span>
+          )}
+          {tagLabel && (
+            <span
+              data-testid={`alert-resolution-tag-badge-${alert.id}`}
+              className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-900"
+            >
+              <Tag className="h-3 w-3 text-emerald-700" aria-hidden="true" />
+              <span>{tagLabel}</span>
+            </span>
+          )}
         </div>
       )}
 
-      {/* 4-Step Visual Workflow Tracker */}
-      <ol
-        aria-label="Tiến trình 4 bước xử lý cảnh báo"
-        className="mt-2.5 grid grid-cols-4 gap-1"
-      >
-        {WORKFLOW_STEPS.map((step, idx) => {
-          const isCompletedOrCurrent = idx <= currentStepIdx;
-          const isSelectedDraft = idx === WORKFLOW_STEP_INDEX[draftStatus];
-          const isAllowedForward =
-            canOperate &&
-            !isClosed &&
-            idx >= currentStepIdx &&
-            (step.status !== 'RESOLVED' || canResolve);
+      {/* 2-Tap Primary Action Row */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        {effectiveStatus === 'NEW' && canAcknowledge && (
+          <button
+            type="button"
+            disabled={isSubmitting}
+            data-testid={`alert-ack-btn-${alert.id}`}
+            onClick={() => {
+              void onUpdateWorkflow(alert.id, {
+                workflowStatus: 'IN_PROGRESS',
+                assignedTo: assigneeInput.trim() || undefined,
+                handlingNote: noteInput.trim() || undefined,
+              });
+            }}
+            className="inline-flex items-center gap-1 rounded bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            <UserCheck className="h-3 w-3" aria-hidden="true" />
+            <span>Nhận xử lý ({txt.acknowledge})</span>
+          </button>
+        )}
 
-          return (
-            <li key={step.status}>
+        {canResolve && (
+          <button
+            type="button"
+            disabled={isSubmitting}
+            data-testid={`alert-resolve-btn-${alert.id}`}
+            onClick={() => setShowQuickTagDrawer((prev) => !prev)}
+            className={`inline-flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+              isClosed
+                ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                : 'border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800'
+            }`}
+          >
+            <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+            <span>{isClosed ? 'Sửa Tag ca trực' : `Đã nhắc xong · ${txt.resolve}`}</span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          data-testid={`alert-fly-to-btn-${alert.id}`}
+          onClick={() => onFlyToAlert(alert)}
+          className="inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900 hover:bg-rose-100"
+        >
+          <MapPin className="h-3 w-3" aria-hidden="true" />
+          <span>{txt.flyTo}</span>
+        </button>
+      </div>
+
+      {/* CHẠM 2: 1-Click Quick-Tag Preset Chips */}
+      {showQuickTags && (
+        <div
+          data-testid={`alert-quick-tags-${alert.id}`}
+          className="mt-2 space-y-1.5 rounded-lg border border-emerald-300 bg-emerald-50/80 p-2"
+        >
+          <p className="text-[10px] font-bold text-emerald-950">
+            Chạm chọn kết quả để lưu nhật ký ca trực (0 gõ phím):
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {quickTags.map((tag) => (
               <button
+                key={tag.code}
                 type="button"
-                disabled={!isAllowedForward || isSubmitting}
-                aria-current={idx === currentStepIdx ? 'step' : undefined}
-                onClick={() => setDraftStatus(step.status)}
-                className={`w-full rounded border px-1 py-1 text-center text-[10px] font-semibold transition-colors ${
-                  isSelectedDraft
-                    ? 'border-sky-700 bg-sky-700 text-white'
-                    : isCompletedOrCurrent
-                      ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
-                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
-                } disabled:cursor-default disabled:opacity-90`}
+                disabled={isSubmitting}
+                data-testid={`alert-quick-tag-${alert.id}-${tag.code}`}
+                onClick={() => handleSelectQuickTag(tag)}
+                className="rounded-full border border-emerald-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-950 shadow-2xs transition-colors hover:bg-emerald-700 hover:text-white disabled:opacity-50"
               >
-                {step.labelVi}
+                {tag.labelVi}
               </button>
-            </li>
-          );
-        })}
-      </ol>
+            ))}
+          </div>
+        </div>
+      )}
 
-      {/* Assignee, Note & Workflow Status Form */}
+      {/* Optional Detail Form (Assignee / Custom Note / Stepper) */}
       {canOperate && !isClosed && (
         <div className="mt-2.5 space-y-2 border-t border-slate-100 pt-2">
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
@@ -311,73 +411,23 @@ export function AlertWorkflowCard({
               value={noteInput}
               onChange={(e) => setNoteInput(e.target.value)}
               disabled={isSubmitting}
-              className="input min-h-[44px] w-full px-2 py-1 text-[11px]"
+              className="input min-h-[40px] w-full px-2 py-1 text-[11px]"
             />
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              data-testid={`alert-save-workflow-btn-${alert.id}`}
+              onClick={handleSaveWorkflow}
+              className="rounded border border-sky-700 bg-sky-700 px-2 py-1 text-[11px] font-semibold text-white hover:bg-sky-800 disabled:opacity-50"
+            >
+              {txt.saveWorkflow}
+            </button>
           </div>
         </div>
       )}
-
-      {/* Action Buttons Row */}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {effectiveStatus === 'NEW' && canAcknowledge && (
-          <button
-            type="button"
-            disabled={isSubmitting}
-            data-testid={`alert-ack-btn-${alert.id}`}
-            onClick={() => {
-              void onUpdateWorkflow(alert.id, {
-                workflowStatus: 'ACKNOWLEDGED',
-                assignedTo: assigneeInput.trim() || undefined,
-                handlingNote: noteInput.trim() || undefined,
-              });
-            }}
-            className="rounded bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            {txt.acknowledge}
-          </button>
-        )}
-
-        {canOperate && !isClosed && (
-          <button
-            type="button"
-            disabled={isSubmitting}
-            data-testid={`alert-save-workflow-btn-${alert.id}`}
-            onClick={handleSaveWorkflow}
-            className="rounded border border-sky-700 bg-sky-700 px-2 py-1 text-[11px] font-semibold text-white hover:bg-sky-800 disabled:opacity-50"
-          >
-            {txt.saveWorkflow}
-          </button>
-        )}
-
-        <button
-          type="button"
-          data-testid={`alert-fly-to-btn-${alert.id}`}
-          onClick={() => onFlyToAlert(alert)}
-          className="inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-900 hover:bg-rose-100"
-        >
-          <MapPin className="h-3 w-3" aria-hidden="true" />
-          <span>{txt.flyTo}</span>
-        </button>
-
-        {!isClosed && canResolve && (
-          <button
-            type="button"
-            disabled={isSubmitting}
-            data-testid={`alert-resolve-btn-${alert.id}`}
-            onClick={() => {
-              void onUpdateWorkflow(alert.id, {
-                workflowStatus: 'RESOLVED',
-                assignedTo: assigneeInput.trim() || undefined,
-                handlingNote: noteInput.trim() || undefined,
-              });
-            }}
-            className="inline-flex items-center gap-1 rounded border border-emerald-700 bg-white px-2 py-1 text-[11px] font-semibold text-emerald-900 hover:bg-emerald-50 disabled:opacity-50"
-          >
-            <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-            <span>{txt.resolve}</span>
-          </button>
-        )}
-      </div>
     </article>
   );
 }
@@ -445,7 +495,7 @@ export function AlertInspectorDrawer({
               } else {
                 for (const a of unacknowledged) {
                   void onUpdateWorkflow(a.id, {
-                    workflowStatus: 'ACKNOWLEDGED',
+                    workflowStatus: 'IN_PROGRESS',
                   });
                 }
               }
@@ -675,6 +725,11 @@ export function MapAlertQueuePanel({
                               <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-semibold text-slate-800">
                                 {txt.workflowLabels[wf]}
                               </span>
+                              {alert.sensorRecovered && (
+                                <span className="rounded bg-emerald-600 px-1 py-0.5 text-[10px] font-bold text-white">
+                                  Đã êm — Chờ xác nhận
+                                </span>
+                              )}
                               {isItemOverdue && (
                                 <span
                                   data-testid={`queue-item-overdue-${alert.id}`}

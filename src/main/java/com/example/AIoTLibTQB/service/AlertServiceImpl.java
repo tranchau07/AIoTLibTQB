@@ -382,10 +382,48 @@ public class AlertServiceImpl implements AlertService {
             Alert current = alertRepository.findById(id)
                     .orElseThrow(() -> new AppException(ErrorCode.ALERT_NOT_EXISTED));
 
-            // M4: Cảnh báo đã RESOLVED tuyệt đối không bị ghi đè ngược
+            AlertWorkflowStatus requestedWf = safeRequest.getWorkflowStatus();
+
+            // M4: Cảnh báo đã RESOLVED tuyệt đối không bị lùi trạng thái; chỉ cho phép bổ sung/sửa Tag & ghi chú nhật ký ca trực
             if (current.getStatus() == AlertStatus.RESOLVED
                     || current.getWorkflowStatus() == AlertWorkflowStatus.RESOLVED) {
-                return AlertRuleEngine.toAlertResponse(current);
+                if (requestedWf != null && requestedWf != AlertWorkflowStatus.RESOLVED) {
+                    return AlertRuleEngine.toAlertResponse(current);
+                }
+                boolean logChanged = false;
+                if (safeRequest.getResolutionTag() != null) {
+                    String trimmedTag = safeRequest.getResolutionTag().trim();
+                    String nextTag = trimmedTag.isEmpty() ? null : trimmedTag;
+                    if (!Objects.equals(current.getResolutionTag(), nextTag)) {
+                        current.setResolutionTag(nextTag);
+                        logChanged = true;
+                    }
+                }
+                if (safeRequest.getHandlingNote() != null) {
+                    String trimmedNote = safeRequest.getHandlingNote().trim();
+                    String nextNote = trimmedNote.isEmpty() ? null : trimmedNote;
+                    if (!Objects.equals(current.getHandlingNote(), nextNote)) {
+                        current.setHandlingNote(nextNote);
+                        logChanged = true;
+                    }
+                }
+                if (!logChanged) {
+                    return AlertRuleEngine.toAlertResponse(current);
+                }
+                try {
+                    Alert savedLog = alertRepository.save(current);
+                    Alert effectiveSavedLog = savedLog != null ? savedLog : current;
+                    AlertResponse logResponse = AlertRuleEngine.toAlertResponse(effectiveSavedLog);
+                    realtimePublisher.publishAlert(logResponse);
+                    log.info("Updated post-resolve shift log for alertId={}: tag={}, operator={}",
+                            id, effectiveSavedLog.getResolutionTag(), operatorUsername);
+                    return logResponse;
+                } catch (OptimisticLockingFailureException ex) {
+                    if (attempt == OPTIMISTIC_LOCK_MAX_RETRIES - 1) {
+                        throw ex;
+                    }
+                    continue;
+                }
             }
 
             AlertWorkflowStatus currentWf = current.getWorkflowStatus() != null
@@ -393,7 +431,6 @@ public class AlertServiceImpl implements AlertService {
                     : (current.getStatus() == AlertStatus.ACKNOWLEDGED
                             ? AlertWorkflowStatus.ACKNOWLEDGED
                             : AlertWorkflowStatus.NEW);
-            AlertWorkflowStatus requestedWf = safeRequest.getWorkflowStatus();
             AlertWorkflowStatus targetWf = requestedWf != null
                     ? (workflowOrder(requestedWf) >= workflowOrder(currentWf) ? requestedWf : currentWf)
                     : currentWf;
@@ -401,15 +438,25 @@ public class AlertServiceImpl implements AlertService {
             if (safeRequest.getAssignedTo() != null) {
                 String trimmedAssignee = safeRequest.getAssignedTo().trim();
                 current.setAssignedTo(trimmedAssignee.isEmpty() ? null : trimmedAssignee);
+            } else if (targetWf == AlertWorkflowStatus.IN_PROGRESS
+                    && (current.getAssignedTo() == null || current.getAssignedTo().isBlank())
+                    && operatorUsername != null && !operatorUsername.isBlank()) {
+                current.setAssignedTo(operatorUsername);
             }
+
             if (safeRequest.getHandlingNote() != null) {
                 String trimmedNote = safeRequest.getHandlingNote().trim();
                 current.setHandlingNote(trimmedNote.isEmpty() ? null : trimmedNote);
+            }
+            if (safeRequest.getResolutionTag() != null) {
+                String trimmedTag = safeRequest.getResolutionTag().trim();
+                current.setResolutionTag(trimmedTag.isEmpty() ? null : trimmedTag);
             }
 
             java.time.Instant now = clock.instant();
             boolean wasFiring = current.getStatus() == AlertStatus.FIRING;
             boolean becameAcknowledged = false;
+            boolean becameInProgress = false;
             boolean transitionedToResolved = false;
 
             current.setWorkflowStatus(targetWf);
@@ -430,6 +477,7 @@ public class AlertServiceImpl implements AlertService {
                 if (current.getInProgressAt() == null) {
                     current.setInProgressAt(now);
                 }
+                becameInProgress = true;
             } else if (targetWf == AlertWorkflowStatus.RESOLVED) {
                 current.setStatus(AlertStatus.RESOLVED);
                 current.setResolvedAt(now);
@@ -443,6 +491,8 @@ public class AlertServiceImpl implements AlertService {
 
                 if (transitionedToResolved) {
                     alertRuleEngine.onResolve(effectiveSaved, Duration.ofMinutes(effectiveSnoozeMinutes));
+                } else if (becameInProgress) {
+                    alertRuleEngine.onClaimInProgress(effectiveSaved);
                 } else if (becameAcknowledged) {
                     alertRuleEngine.onAcknowledge(id);
                 }
@@ -458,8 +508,9 @@ public class AlertServiceImpl implements AlertService {
                     }
                 }
 
-                log.info("Alert workflow updated: id={}, workflowStatus={}, assignedTo={}, operator={}",
-                        id, effectiveSaved.getWorkflowStatus(), effectiveSaved.getAssignedTo(), operatorUsername);
+                log.info("Alert workflow updated: id={}, workflowStatus={}, assignedTo={}, resolutionTag={}, operator={}",
+                        id, effectiveSaved.getWorkflowStatus(), effectiveSaved.getAssignedTo(),
+                        effectiveSaved.getResolutionTag(), operatorUsername);
                 return response;
             } catch (OptimisticLockingFailureException ex) {
                 log.debug("Optimistic locking conflict on updateAlertWorkflow id={}, attempt={}", id, attempt + 1);

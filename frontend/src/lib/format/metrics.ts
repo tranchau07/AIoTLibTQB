@@ -117,73 +117,99 @@ export function formatBottleneckReasonVi(
   reason: string | null | undefined
 ): string {
   if (!reason) return '';
-  const trimmed = reason.trim();
+  const rawTrimmed = reason.trim();
+  const multiNodeMatch = rawTrimmed.match(/(\s*\[Ghi nhận tại \d+ trạm trong phòng\])$/);
+  const multiNodeSuffix = multiNodeMatch ? multiNodeMatch[1] : '';
+  const trimmed = multiNodeMatch
+    ? rawTrimmed.slice(0, rawTrimmed.length - multiNodeSuffix.length).trim()
+    : rawTrimmed;
+
+  const withSuffix = (text: string) =>
+    multiNodeSuffix ? `${text}${multiNodeSuffix}` : text;
 
   const noiseAvgMatch = trimmed.match(
     /^Average noise level \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
   if (noiseAvgMatch) {
-    return `Độ ồn trung bình (${noiseAvgMatch[1]}) vượt ngưỡng cho phép (${noiseAvgMatch[2]})`;
+    return withSuffix(
+      `Độ ồn trung bình (${noiseAvgMatch[1]}) vượt ngưỡng cho phép (${noiseAvgMatch[2]})`
+    );
   }
 
   const noisePeakMatch = trimmed.match(
     /^Peak noise spike \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
   if (noisePeakMatch) {
-    return `Tiếng ồn đột biến (${noisePeakMatch[1]}) vượt ngưỡng cho phép (${noisePeakMatch[2]})`;
+    return withSuffix(
+      `Tiếng ồn đột biến (${noisePeakMatch[1]}) vượt ngưỡng cho phép (${noisePeakMatch[2]})`
+    );
   }
 
   const pmFineMatch = trimmed.match(
     /^PM2\.5 fine dust \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
   if (pmFineMatch) {
-    return `Bụi mịn PM2.5 (${pmFineMatch[1]}) vượt ngưỡng an toàn (${pmFineMatch[2]})`;
+    return withSuffix(
+      `Bụi mịn PM2.5 (${pmFineMatch[1]}) vượt ngưỡng an toàn (${pmFineMatch[2]})`
+    );
   }
 
   const pmParticulateMatch = trimmed.match(
     /^PM2\.5 particulate level \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
   if (pmParticulateMatch) {
-    return `Nồng độ bụi mịn PM2.5 (${pmParticulateMatch[1]}) vượt ngưỡng cho phép (${pmParticulateMatch[2]})`;
+    return withSuffix(
+      `Nồng độ bụi mịn PM2.5 (${pmParticulateMatch[1]}) vượt ngưỡng cho phép (${pmParticulateMatch[2]})`
+    );
   }
 
   const tempRangeMatch = trimmed.match(
     /^Temperature \(([^)]+)\) out of optimal range \(([^)]+)\)$/i
   );
   if (tempRangeMatch) {
-    return `Nhiệt độ (${tempRangeMatch[1]}) nằm ngoài ngưỡng tối ưu (${tempRangeMatch[2]})`;
+    return withSuffix(
+      `Nhiệt độ (${tempRangeMatch[1]}) nằm ngoài ngưỡng tối ưu (${tempRangeMatch[2]})`
+    );
   }
 
   const tempExceedMatch = trimmed.match(
     /^Temperature \(([^)]+)\) exceeded threshold \(([^)]+)\)$/i
   );
   if (tempExceedMatch) {
-    return `Nhiệt độ (${tempExceedMatch[1]}) vượt ngưỡng cho phép (${tempExceedMatch[2]})`;
+    return withSuffix(
+      `Nhiệt độ (${tempExceedMatch[1]}) vượt ngưỡng cho phép (${tempExceedMatch[2]})`
+    );
   }
 
   const humidityHighMatch = trimmed.match(
     /^(?:Book storage )?humidity \(([^)]+)\) exceeded max threshold \(([^)]+)\)$/i
   );
   if (humidityHighMatch) {
-    return `Độ ẩm kho sách (${humidityHighMatch[1]}) vượt ngưỡng tối đa (${humidityHighMatch[2]})`;
+    return withSuffix(
+      `Độ ẩm kho sách (${humidityHighMatch[1]}) vượt ngưỡng tối đa (${humidityHighMatch[2]})`
+    );
   }
 
   const humidityLowMatch = trimmed.match(
     /^(?:Book storage )?humidity \(([^)]+)\) dropped below min threshold \(([^)]+)\)$/i
   );
   if (humidityLowMatch) {
-    return `Độ ẩm kho sách (${humidityLowMatch[1]}) xuống dưới ngưỡng tối thiểu (${humidityLowMatch[2]})`;
+    return withSuffix(
+      `Độ ẩm kho sách (${humidityLowMatch[1]}) xuống dưới ngưỡng tối thiểu (${humidityLowMatch[2]})`
+    );
   }
 
   const offlineMatch = trimmed.match(
     /^Device is offline:\s*hardwareId=(.+)$/i
   );
   if (offlineMatch) {
-    return `Thiết bị mất kết nối (mã phần cứng: ${offlineMatch[1].trim()})`;
+    return withSuffix(
+      `Thiết bị mất kết nối (mã phần cứng: ${offlineMatch[1].trim()})`
+    );
   }
 
   if (/^Sub-optimal comfort index$/i.test(trimmed)) {
-    return 'Chỉ số tiện nghi tổng hợp dưới mức tối ưu';
+    return withSuffix('Chỉ số tiện nghi tổng hợp dưới mức tối ưu');
   }
-  return trimmed;
+  return rawTrimmed;
 }

@@ -370,12 +370,14 @@ export function appendToastWithStickyProtection(
 
 interface ToastContextValue {
   pushToast: (item: Omit<ToastItem, 'id'>) => void;
+  playAlertChime: () => void;
   audioMuted: boolean;
   setAudioMuted: (muted: boolean) => void;
 }
 
 const ToastContext = createContext<ToastContextValue>({
   pushToast: () => {},
+  playAlertChime: () => {},
   audioMuted: false,
   setAudioMuted: () => {},
 });
@@ -489,7 +491,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <ToastContext.Provider value={{ pushToast, audioMuted, setAudioMuted }}>
+    <ToastContext.Provider
+      value={{ pushToast, playAlertChime, audioMuted, setAudioMuted }}
+    >
       {children}
       <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-full max-w-sm flex-col gap-2">
         {toasts.map((t) => (

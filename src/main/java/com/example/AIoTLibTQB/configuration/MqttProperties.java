@@ -18,4 +18,5 @@ public class MqttProperties {
     String password = "";
     String defaultTelemetryTopic = "devices/+/telemetry";
     String defaultStatusTopic = "devices/+/status";
+    String commandTopicTemplate = "devices/%s/command";
 }

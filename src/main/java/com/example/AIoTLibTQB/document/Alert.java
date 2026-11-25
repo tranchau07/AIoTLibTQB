@@ -15,6 +15,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.List;
 
 @Document(collection = "alerts")
 @CompoundIndexes({
@@ -64,7 +65,15 @@ public class Alert {
 
     String handlingNote;
 
+    String resolutionTag;
+
     Instant inProgressAt;
+
+    Boolean sensorRecovered;
+
+    Instant sensorRecoveredAt;
+
+    List<AffectedNodeSnapshot> affectedNodes;
 
     Double currentValue;
 

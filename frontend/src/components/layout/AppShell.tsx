@@ -42,7 +42,7 @@ import {
   useStompConnectionState,
 } from '@/lib/realtime/use-room-stream';
 import { UI_TEXT_VI } from '@/messages/vi';
-import { Skeleton } from '@/components/ui/primitives';
+import { Skeleton, useToast } from '@/components/ui/primitives';
 import type { AlertResponse, UserResponse } from '@/types/api';
 
 interface NavItem {
@@ -65,9 +65,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
+  const { playAlertChime } = useToast();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
   const [realtimeAlerts, setRealtimeAlerts] = useState<AlertResponse[]>([]);
+  const chimedAlertIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     try {
@@ -141,6 +143,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!accessToken) {
       evictedStaleForTokenRef.current = null;
       evictedScopeCacheForTokenRef.current = null;
+      chimedAlertIdsRef.current.clear();
       setRealtimeAlerts([]);
       queryClient.removeQueries({ queryKey: ['alerts'] });
       queryClient.removeQueries({ queryKey: ['devices'] });
@@ -167,6 +170,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       sessionSwitchedInPlace ||
       (hasMismatchedMyInfo && evictedStaleForTokenRef.current !== accessToken)
     ) {
+      chimedAlertIdsRef.current.clear();
       setRealtimeAlerts([]);
       const shouldResetMyInfo =
         sessionSwitchedInPlace || !myInfoQuery.isFetching;
@@ -237,16 +241,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     Boolean(accessToken && capabilities.canViewAlerts)
   );
 
-  // Không bật popup toast cảnh báo nhảy ở góc dưới; đưa thẳng vào danh sách chuông thông báo
-  const handleIncomingAlert = useCallback((alert: AlertResponse) => {
-    setRealtimeAlerts((prev) =>
-      upsertRealtimeAlertList(prev, alert, {
-        sortBy: 'severity',
-        direction: 'DESC',
-        maxSize: 50,
-      })
-    );
-  }, []);
+  // Đưa thẳng vào chuông thông báo, không bật popup toast góc dưới; chỉ phát 1 tiếng chime nhẹ 0.3s khi có sự cố Tầng 2 mới
+  const handleIncomingAlert = useCallback(
+    (alert: AlertResponse) => {
+      if (
+        alert.id &&
+        alert.status === 'FIRING' &&
+        !alert.sensorRecovered &&
+        !alert.assignedTo &&
+        !chimedAlertIdsRef.current.has(alert.id)
+      ) {
+        chimedAlertIdsRef.current.add(alert.id);
+        playAlertChime();
+      } else if (alert.id && alert.status === 'RESOLVED') {
+        chimedAlertIdsRef.current.delete(alert.id);
+      }
+
+      setRealtimeAlerts((prev) =>
+        upsertRealtimeAlertList(prev, alert, {
+          sortBy: 'severity',
+          direction: 'DESC',
+          maxSize: 50,
+        })
+      );
+    },
+    [playAlertChime]
+  );
 
   const hasMismatchedMyInfo = Boolean(
     myInfoQuery.data && !isMatchingSessionUser(myInfoQuery.data)

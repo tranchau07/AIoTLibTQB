@@ -126,3 +126,37 @@ test('SCENARIOS.NOISE_SPIKE emits instantaneous noise spikes without noise_avg/n
   }
   assert.ok(Math.max(...samples) >= 85.0);
 });
+
+test('[LED-01] handleCommandMessage updates deviceLedStates on SET_LED_STATE commands and ignores malformed JSON', () => {
+  const sim = new IoTCircuitSimulator({ perDeviceAuth: true, devicePassword: '***' });
+
+  sim.handleCommandMessage(
+    'ESP32_ROOM_301_NW',
+    Buffer.from(
+      JSON.stringify({
+        action: 'SET_LED_STATE',
+        led_state: 'WARN_PULSE',
+        reason: 'NOISE_EXCEEDED',
+        duration_sec: 75,
+      })
+    )
+  );
+  assert.equal(sim.deviceLedStates.get('ESP32_ROOM_301_NW'), 'WARN_PULSE');
+
+  sim.handleCommandMessage(
+    'ESP32_ROOM_301_NW',
+    Buffer.from(
+      JSON.stringify({
+        action: 'SET_LED_STATE',
+        led_state: 'STAFF_DISPATCHED',
+        reason: 'STAFF_CLAIM',
+      })
+    )
+  );
+  assert.equal(sim.deviceLedStates.get('ESP32_ROOM_301_NW'), 'STAFF_DISPATCHED');
+
+  // Malformed payload should not throw or corrupt existing LED state
+  sim.handleCommandMessage('ESP32_ROOM_301_NW', Buffer.from('{bad-json'));
+  assert.equal(sim.deviceLedStates.get('ESP32_ROOM_301_NW'), 'STAFF_DISPATCHED');
+});
+

@@ -71,7 +71,7 @@ public class AlertController {
     }
 
     @RequestMapping(value = "/{id}/resolve", method = {RequestMethod.POST, RequestMethod.PATCH})
-    @PreAuthorize("hasAuthority('MANAGE_ALERT_CONFIG')")
+    @PreAuthorize("hasAnyAuthority('ACKNOWLEDGE_ALERT', 'MANAGE_ALERT_CONFIG')")
     public ApiResponse<AlertResponse> resolveAlert(
             @PathVariable String id,
             @RequestParam(required = false) Integer snoozeMinutes

@@ -1,6 +1,7 @@
 package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.configuration.AlertSopCatalog;
+import com.example.AIoTLibTQB.document.AffectedNodeSnapshot;
 import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.document.RoomThresholdConfig;
@@ -27,15 +28,20 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,15 +51,23 @@ import java.util.concurrent.ConcurrentHashMap;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 public class AlertRuleEngine {
 
+    public static final String AUTO_STABILIZED_TAG = "AUTO_STABILIZED";
+
     final AlertRepository alertRepository;
     final RealtimePublisher realtimePublisher;
     final RoomRepository roomRepository;
     final MongoTemplate mongoTemplate;
     final AlertEmailNotificationService alertEmailNotificationService;
+    @Getter
+    @Setter
+    DeviceCommandPublisher deviceCommandPublisher;
     final Clock clock;
 
     static final Duration PENDING_WINDOW = Duration.ofSeconds(30);
+    static final Duration NOISE_TIER1_LED_WINDOW = Duration.ofSeconds(60);
+    static final Duration NOISE_PEAK_CALM_CANCEL_WINDOW = Duration.ofSeconds(20);
     static final Duration HYSTERESIS_WINDOW = Duration.ofSeconds(60);
+    static final Duration CONFIRM_GRACE_WINDOW = Duration.ofMinutes(15);
     static final Duration NOISE_PEAK_PULSE_WINDOW = Duration.ofSeconds(60);
     static final Duration NOISE_PEAK_PULSE_COOLDOWN = Duration.ofSeconds(3);
     static final Duration DEFAULT_SNOOZE_DURATION = Duration.ofMinutes(15);
@@ -84,6 +98,9 @@ public class AlertRuleEngine {
     final Map<String, FsmState> fsmMap = new ConcurrentHashMap<>();
 
     @Getter
+    final Map<String, String> roomIncidentAlertIds = new ConcurrentHashMap<>();
+
+    @Getter
     final Map<String, List<Instant>> noisePeakPulsesMap = new ConcurrentHashMap<>();
 
     @Getter
@@ -94,7 +111,7 @@ public class AlertRuleEngine {
             RealtimePublisher realtimePublisher,
             Clock clock
     ) {
-        this(alertRepository, realtimePublisher, clock, null, null, null);
+        this(alertRepository, realtimePublisher, clock, null, null, null, null);
     }
 
     public AlertRuleEngine(
@@ -103,7 +120,7 @@ public class AlertRuleEngine {
             Clock clock,
             RoomRepository roomRepository
     ) {
-        this(alertRepository, realtimePublisher, clock, roomRepository, null, null);
+        this(alertRepository, realtimePublisher, clock, roomRepository, null, null, null);
     }
 
     public AlertRuleEngine(
@@ -113,7 +130,18 @@ public class AlertRuleEngine {
             RoomRepository roomRepository,
             MongoTemplate mongoTemplate
     ) {
-        this(alertRepository, realtimePublisher, clock, roomRepository, mongoTemplate, null);
+        this(alertRepository, realtimePublisher, clock, roomRepository, mongoTemplate, null, null);
+    }
+
+    public AlertRuleEngine(
+            AlertRepository alertRepository,
+            RealtimePublisher realtimePublisher,
+            Clock clock,
+            RoomRepository roomRepository,
+            MongoTemplate mongoTemplate,
+            AlertEmailNotificationService alertEmailNotificationService
+    ) {
+        this(alertRepository, realtimePublisher, clock, roomRepository, mongoTemplate, alertEmailNotificationService, null);
     }
 
     @Autowired
@@ -123,7 +151,8 @@ public class AlertRuleEngine {
             @Autowired(required = false) Clock clock,
             @Autowired(required = false) RoomRepository roomRepository,
             @Autowired(required = false) MongoTemplate mongoTemplate,
-            @Autowired(required = false) AlertEmailNotificationService alertEmailNotificationService
+            @Autowired(required = false) AlertEmailNotificationService alertEmailNotificationService,
+            @Autowired(required = false) DeviceCommandPublisher deviceCommandPublisher
     ) {
         this.alertRepository = alertRepository;
         this.realtimePublisher = realtimePublisher;
@@ -131,6 +160,9 @@ public class AlertRuleEngine {
         this.roomRepository = roomRepository;
         this.mongoTemplate = mongoTemplate;
         this.alertEmailNotificationService = alertEmailNotificationService;
+        this.deviceCommandPublisher = deviceCommandPublisher != null
+                ? deviceCommandPublisher
+                : new DeviceCommandPublisherImpl(null, null, null, this.clock);
     }
 
     public RoomAlertContext resolveRoomContext(String roomId) {
@@ -158,6 +190,30 @@ public class AlertRuleEngine {
         }
     }
 
+    static String resolveRoomIncidentKey(String roomId, AlertType alertType, String metricType) {
+        if (roomId == null || roomId.isBlank() || alertType == null) {
+            return null;
+        }
+        if (alertType == AlertType.DEVICE_OFFLINE || alertType == AlertType.SENSOR_MALFUNCTION
+                || "DEVICE_OFFLINE".equals(metricType) || "SENSOR_MALFUNCTION".equals(metricType)) {
+            return null;
+        }
+        String normalizedRoom = roomId.trim();
+        if (alertType == AlertType.NOISE_EXCEEDED
+                || "NOISE_AVG".equals(metricType)
+                || "NOISE_PEAK".equals(metricType)) {
+            return "room:" + normalizedRoom + ":NOISE";
+        }
+        String safeMetric = (metricType != null && !metricType.isBlank()) ? metricType.trim() : alertType.name();
+        return "room:" + normalizedRoom + ":" + safeMetric;
+    }
+
+    static boolean supportsLocalLedForAlert(RoomType roomType, AlertType alertType) {
+        RoomType actual = roomType != null ? roomType : RoomType.STUDY_ROOM;
+        return alertType == AlertType.NOISE_EXCEEDED
+                && (actual == RoomType.STUDY_ROOM || actual == RoomType.CIRCULATION_HALL);
+    }
+
     @PostConstruct
     public void rehydrateActiveAlerts() {
         try {
@@ -165,22 +221,61 @@ public class AlertRuleEngine {
             List<Alert> activeAlerts = alertRepository.findByStatusIn(List.of(AlertStatus.FIRING, AlertStatus.ACKNOWLEDGED));
             if (activeAlerts != null) {
                 for (Alert alert : activeAlerts) {
+                    if (alert == null || Boolean.TRUE.equals(alert.getSensorRecovered())) {
+                        continue;
+                    }
+                    String fallbackMetricType = resolveMetricType(alert);
+                    String incidentKey = resolveRoomIncidentKey(alert.getRoomId(), alert.getType(), fallbackMetricType);
+                    if (incidentKey != null && alert.getId() != null) {
+                        roomIncidentAlertIds.put(incidentKey, alert.getId());
+                    }
+
+                    if (alert.getAffectedNodes() != null && !alert.getAffectedNodes().isEmpty()) {
+                        for (AffectedNodeSnapshot snap : alert.getAffectedNodes()) {
+                            if (snap == null) continue;
+                            String nodeTarget = snap.getDeviceId() != null && !snap.getDeviceId().isBlank()
+                                    ? snap.getDeviceId()
+                                    : snap.getHardwareId();
+                            if (nodeTarget == null || nodeTarget.isBlank()) continue;
+                            String nodeMetric = (snap.getMetricType() != null && !snap.getMetricType().isBlank())
+                                    ? snap.getMetricType()
+                                    : fallbackMetricType;
+                            FsmState state = new FsmState();
+                            state.setStatus(alert.getStatus());
+                            state.setFiringSince(alert.getStartedAt() != null ? alert.getStartedAt() : clock.instant());
+                            state.setAlertId(alert.getId());
+                            state.setIncidentKey(incidentKey);
+                            state.setThreshold(snap.getThreshold() != null ? snap.getThreshold() : alert.getThreshold());
+                            state.setLastValue(snap.getCurrentValue() != null ? snap.getCurrentValue() : alert.getCurrentValue());
+                            state.setAlertType(alert.getType());
+                            state.setSeverity(alert.getSeverity() != null ? alert.getSeverity() : AlertSeverity.MEDIUM);
+                            state.setMetricType(nodeMetric);
+                            state.setDeviceId(snap.getDeviceId());
+                            state.setHardwareId(snap.getHardwareId());
+                            state.setRoomId(alert.getRoomId());
+                            state.setZoneId(alert.getZoneId());
+                            state.setLastEvaluatedAt(clock.instant());
+                            fsmMap.put(nodeTarget + ":" + nodeMetric, state);
+                        }
+                        continue;
+                    }
+
                     String targetId = alert.getDeviceId() != null && !alert.getDeviceId().isBlank()
                             ? alert.getDeviceId()
                             : (alert.getRoomId() != null && !alert.getRoomId().isBlank() ? alert.getRoomId() : alert.getHardwareId());
                     if (targetId == null) continue;
-                    String metricType = resolveMetricType(alert);
-                    String key = targetId + ":" + metricType;
+                    String key = targetId + ":" + fallbackMetricType;
 
                     FsmState state = new FsmState();
                     state.setStatus(alert.getStatus());
                     state.setFiringSince(alert.getStartedAt() != null ? alert.getStartedAt() : clock.instant());
                     state.setAlertId(alert.getId());
+                    state.setIncidentKey(incidentKey);
                     state.setThreshold(alert.getThreshold());
                     state.setLastValue(alert.getCurrentValue());
                     state.setAlertType(alert.getType());
                     state.setSeverity(alert.getSeverity() != null ? alert.getSeverity() : AlertSeverity.MEDIUM);
-                    state.setMetricType(metricType);
+                    state.setMetricType(fallbackMetricType);
                     state.setDeviceId(alert.getDeviceId());
                     state.setHardwareId(alert.getHardwareId());
                     state.setRoomId(alert.getRoomId());
@@ -210,7 +305,7 @@ public class AlertRuleEngine {
             return "SENSOR_MALFUNCTION";
         }
         String msg = alert.getMessage() != null ? alert.getMessage() : "";
-        String lower = msg.toLowerCase(java.util.Locale.ROOT);
+        String lower = msg.toLowerCase(Locale.ROOT);
         if (type == AlertType.NOISE_EXCEEDED) {
             if (msg.contains("Peak noise") || lower.contains("peak noise")) {
                 return "NOISE_PEAK";
@@ -316,15 +411,19 @@ public class AlertRuleEngine {
         Instant recoverySince;
         Instant lastEvaluatedAt;
         String alertId;
+        String incidentKey;
         Double lastValue;
         Double threshold;
         AlertType alertType;
         AlertSeverity severity;
         String metricType;
+        String message;
+        String recommendedAction;
         String deviceId;
         String hardwareId;
         String roomId;
         String zoneId;
+        boolean localLedEnabled;
     }
 
     public void evaluateTelemetry(String deviceId, String hardwareId, String roomId, TelemetryPayload.TelemetryData data) {
@@ -348,7 +447,10 @@ public class AlertRuleEngine {
         double tempMax = cfg.getTempMax() != null ? cfg.getTempMax() : THRESHOLD_TEMP;
         double pm25Max = cfg.getPm25Max() != null ? cfg.getPm25Max() : THRESHOLD_PM25;
 
-        // 1. noiseAvg > noiseAvgMax (with deadband)
+        boolean tier1NoiseRoom = supportsLocalLedForAlert(roomType, AlertType.NOISE_EXCEEDED);
+        Duration noisePendingWindow = tier1NoiseRoom ? NOISE_TIER1_LED_WINDOW : PENDING_WINDOW;
+
+        // 1. noiseAvg > noiseAvgMax (with deadband; 60s Tier-1 LED window in STUDY_ROOM / CIRCULATION_HALL)
         if (data.getAcoustics() != null && data.getAcoustics().getNoiseAvg() != null) {
             double noiseAvg = data.getAcoustics().getNoiseAvg();
             boolean isBreached = noiseAvg > noiseAvgMax;
@@ -356,21 +458,24 @@ public class AlertRuleEngine {
             String sop = AlertSopCatalog.resolveSop("NOISE_AVG", AlertType.NOISE_EXCEEDED, roomType);
             evaluateMetric(targetId, "NOISE_AVG", isBreached, isRecovered, noiseAvg,
                     noiseAvgMax, AlertType.NOISE_EXCEEDED, AlertSeverity.MEDIUM,
-                    String.format("Average noise level (%.1f dBA) exceeded threshold (%.1f dBA)", noiseAvg, noiseAvgMax),
-                    sop, deviceId, hardwareId, roomId, zoneId, false);
+                    String.format(Locale.US, "Average noise level (%.1f dBA) exceeded threshold (%.1f dBA)", noiseAvg, noiseAvgMax),
+                    sop, deviceId, hardwareId, roomId, zoneId, false, noisePendingWindow, tier1NoiseRoom);
         } else {
             resolveStaleMetricIfAbsent(targetId, "NOISE_AVG", now);
         }
 
         // 2. noisePeak dual-threshold:
-        //    - >= noisePeakImmediate (85 dBA): fire immediately (CRITICAL)
-        //    - >= noisePeakMax (75 dBA): record pulse; if >= 3 pulses within 60s -> fire immediately (HIGH)
+        //    - >= noisePeakImmediate (85 dBA): fire immediately (CRITICAL) + CRITICAL_BLINK LED
+        //    - >= noisePeakMax (75/80 dBA) with >= 3 pulses in 60s:
+        //      * STUDY_ROOM / CIRCULATION_HALL: Tier-1 60s LED warning first; cancel if quiet >= 20s; fire HIGH if sustained >= 60s
+        //      * BOOK_STORAGE: fire immediately (HIGH), no LED
         if (data.getAcoustics() != null && data.getAcoustics().getNoisePeak() != null) {
             Double noisePeak = data.getAcoustics().getNoisePeak();
             String pulseKey = targetId + ":NOISE_PEAK_PULSES";
             boolean immediateSevere = noisePeak >= noisePeakImmediate;
             boolean moderatePulse = noisePeak > noisePeakMax;
             int pulseCount = 0;
+            Instant latestPulseAt = null;
 
             if (moderatePulse) {
                 List<Instant> pulses = noisePeakPulsesMap.computeIfAbsent(pulseKey, k -> new ArrayList<>());
@@ -381,6 +486,7 @@ public class AlertRuleEngine {
                         pulses.add(now);
                     }
                     pulseCount = pulses.size();
+                    latestPulseAt = pulses.isEmpty() ? null : pulses.get(pulses.size() - 1);
                 }
             } else if (noisePeak <= (noisePeakMax - DEADBAND_NOISE)) {
                 List<Instant> pulses = noisePeakPulsesMap.get(pulseKey);
@@ -388,25 +494,47 @@ public class AlertRuleEngine {
                     synchronized (pulses) {
                         pulses.removeIf(t -> Duration.between(t, now).compareTo(NOISE_PEAK_PULSE_WINDOW) > 0);
                         pulseCount = pulses.size();
+                        latestPulseAt = pulses.isEmpty() ? null : pulses.get(pulses.size() - 1);
                     }
                 }
             }
 
-            boolean shouldBreachPeak = immediateSevere || (moderatePulse && pulseCount >= NOISE_PEAK_PULSE_REQUIRED);
-            boolean isRecoveredPeak = noisePeak <= (noisePeakMax - DEADBAND_NOISE);
+            FsmState currentPeakState = fsmMap.get(targetId + ":NOISE_PEAK");
+            boolean alreadyInPeakPending = currentPeakState != null && currentPeakState.getStatus() == AlertStatus.PENDING;
+            boolean hasActivePulseCluster = pulseCount >= NOISE_PEAK_PULSE_REQUIRED
+                    && latestPulseAt != null
+                    && Duration.between(latestPulseAt, now).compareTo(NOISE_PEAK_CALM_CANCEL_WINDOW) < 0;
+
+            boolean shouldBreachPeak = immediateSevere
+                    || (moderatePulse && pulseCount >= NOISE_PEAK_PULSE_REQUIRED)
+                    || (tier1NoiseRoom && alreadyInPeakPending && hasActivePulseCluster);
+
+            boolean isRecoveredPeak;
+            if (tier1NoiseRoom && alreadyInPeakPending) {
+                boolean quietForCalmWindow = latestPulseAt == null
+                        || Duration.between(latestPulseAt, now).compareTo(NOISE_PEAK_CALM_CANCEL_WINDOW) >= 0;
+                isRecoveredPeak = noisePeak <= (noisePeakMax - DEADBAND_NOISE) && quietForCalmWindow;
+                if (isRecoveredPeak) {
+                    noisePeakPulsesMap.remove(pulseKey);
+                }
+            } else {
+                isRecoveredPeak = noisePeak <= (noisePeakMax - DEADBAND_NOISE);
+            }
+
+            boolean immediatePeakFire = immediateSevere || !tier1NoiseRoom;
             AlertSeverity peakSeverity = immediateSevere ? AlertSeverity.CRITICAL : AlertSeverity.HIGH;
             double activeThreshold = immediateSevere ? noisePeakImmediate : noisePeakMax;
             String sop = AlertSopCatalog.resolveSop("NOISE_PEAK", AlertType.NOISE_EXCEEDED, roomType);
 
             evaluateMetric(targetId, "NOISE_PEAK", shouldBreachPeak, isRecoveredPeak, noisePeak,
                     activeThreshold, AlertType.NOISE_EXCEEDED, peakSeverity,
-                    String.format("Peak noise spike (%.1f dBA) exceeded threshold (%.1f dBA)", noisePeak, activeThreshold),
-                    sop, deviceId, hardwareId, roomId, zoneId, true);
+                    String.format(Locale.US, "Peak noise spike (%.1f dBA) exceeded threshold (%.1f dBA)", noisePeak, activeThreshold),
+                    sop, deviceId, hardwareId, roomId, zoneId, immediatePeakFire, noisePendingWindow, tier1NoiseRoom);
         } else {
             resolveStaleMetricIfAbsent(targetId, "NOISE_PEAK", now);
         }
 
-        // 3. temp > tempMax (with deadband)
+        // 3. temp > tempMax (30s pending, no student LED)
         if (data.getEnvironment() != null && data.getEnvironment().getTemperature() != null) {
             double temp = data.getEnvironment().getTemperature();
             boolean isBreached = temp > tempMax;
@@ -414,13 +542,13 @@ public class AlertRuleEngine {
             String sop = AlertSopCatalog.resolveSop("TEMPERATURE", AlertType.AIR_UNHEALTHY, roomType);
             evaluateMetric(targetId, "TEMPERATURE", isBreached, isRecovered, temp,
                     tempMax, AlertType.AIR_UNHEALTHY, AlertSeverity.MEDIUM,
-                    String.format("Temperature (%.1f °C) exceeded threshold (%.1f °C)", temp, tempMax),
-                    sop, deviceId, hardwareId, roomId, zoneId, false);
+                    String.format(Locale.US, "Temperature (%.1f °C) exceeded threshold (%.1f °C)", temp, tempMax),
+                    sop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
         } else {
             resolveStaleMetricIfAbsent(targetId, "TEMPERATURE", now);
         }
 
-        // 4. BOOK_STORAGE humidity rules (min / max with deadband)
+        // 4. BOOK_STORAGE humidity rules (min / max with deadband, 30s pending, no LED)
         if (roomType == RoomType.BOOK_STORAGE) {
             if (data.getEnvironment() != null && data.getEnvironment().getHumidity() != null) {
                 double rh = data.getEnvironment().getHumidity();
@@ -432,16 +560,16 @@ public class AlertRuleEngine {
                 String highSop = AlertSopCatalog.resolveSop("HUMIDITY_HIGH", AlertType.AIR_UNHEALTHY, roomType);
                 evaluateMetric(targetId, "HUMIDITY_HIGH", highBreach, highRecovered, rh,
                         rhMax, AlertType.AIR_UNHEALTHY, AlertSeverity.HIGH,
-                        String.format("Book storage humidity (%.1f %%RH) exceeded max threshold (%.1f %%RH)", rh, rhMax),
-                        highSop, deviceId, hardwareId, roomId, zoneId, false);
+                        String.format(Locale.US, "Book storage humidity (%.1f %%RH) exceeded max threshold (%.1f %%RH)", rh, rhMax),
+                        highSop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
 
                 boolean lowBreach = rh < rhMin;
                 boolean lowRecovered = rh >= (rhMin + DEADBAND_HUMIDITY);
                 String lowSop = AlertSopCatalog.resolveSop("HUMIDITY_LOW", AlertType.AIR_UNHEALTHY, roomType);
                 evaluateMetric(targetId, "HUMIDITY_LOW", lowBreach, lowRecovered, rh,
                         rhMin, AlertType.AIR_UNHEALTHY, AlertSeverity.MEDIUM,
-                        String.format("Book storage humidity (%.1f %%RH) dropped below min threshold (%.1f %%RH)", rh, rhMin),
-                        lowSop, deviceId, hardwareId, roomId, zoneId, false);
+                        String.format(Locale.US, "Book storage humidity (%.1f %%RH) dropped below min threshold (%.1f %%RH)", rh, rhMin),
+                        lowSop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
             } else {
                 resolveStaleMetricIfAbsent(targetId, "HUMIDITY_HIGH", now);
                 resolveStaleMetricIfAbsent(targetId, "HUMIDITY_LOW", now);
@@ -451,7 +579,7 @@ public class AlertRuleEngine {
             resolveMetricByKey(targetId, "HUMIDITY_LOW", now, "Room type is no longer BOOK_STORAGE");
         }
 
-        // 5. pm2.5 > pm25Max (with deadband)
+        // 5. pm2.5 > pm25Max (30s pending, no LED)
         if (data.getAirQuality() != null && data.getAirQuality().getPm2_5() != null) {
             double pm25 = data.getAirQuality().getPm2_5();
             boolean isBreached = pm25 > pm25Max;
@@ -459,8 +587,8 @@ public class AlertRuleEngine {
             String sop = AlertSopCatalog.resolveSop("PM2_5", AlertType.AIR_UNHEALTHY, roomType);
             evaluateMetric(targetId, "PM2_5", isBreached, isRecovered, pm25,
                     pm25Max, AlertType.AIR_UNHEALTHY, AlertSeverity.HIGH,
-                    String.format("PM2.5 particulate level (%.1f µg/m³) exceeded threshold (%.1f µg/m³)", pm25, pm25Max),
-                    sop, deviceId, hardwareId, roomId, zoneId, false);
+                    String.format(Locale.US, "PM2.5 particulate level (%.1f µg/m³) exceeded threshold (%.1f µg/m³)", pm25, pm25Max),
+                    sop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
         } else {
             resolveStaleMetricIfAbsent(targetId, "PM2_5", now);
         }
@@ -492,7 +620,6 @@ public class AlertRuleEngine {
         if (targetId == null || targetId.isBlank()) {
             return;
         }
-        // Không kích hoạt lỗi mới cũng như không xác nhận hồi phục khi bản tin hoàn toàn không có mẫu đọc vật lý hợp lệ hay vượt dải
         if (!hasInvalidSensorReading && !allValidReadings) {
             return;
         }
@@ -527,8 +654,45 @@ public class AlertRuleEngine {
                 hardwareId,
                 roomId,
                 zoneId,
+                false,
+                PENDING_WINDOW,
                 false
         );
+    }
+
+    private boolean checkOrClearSnooze(String key, String incidentKey, Instant now, boolean isBreached, boolean isRecovered, AlertSeverity severity) {
+        boolean suppressed = false;
+        for (String snoozeKey : new String[]{key, incidentKey}) {
+            if (snoozeKey == null) continue;
+            Instant snoozedUntil = snoozeUntilMap.get(snoozeKey);
+            if (snoozedUntil == null) continue;
+
+            if (!now.isBefore(snoozedUntil)) {
+                snoozeUntilMap.remove(snoozeKey);
+            } else if (isRecovered && snoozeKey.equals(key)) {
+                snoozeUntilMap.remove(key);
+                if (incidentKey != null && areAllRoomNodesInactive(incidentKey, key)) {
+                    snoozeUntilMap.remove(incidentKey);
+                }
+            } else if (severity == AlertSeverity.CRITICAL && isBreached) {
+                snoozeUntilMap.remove(snoozeKey);
+                log.info("Snooze overridden by CRITICAL alert: snoozeKey={}, valueSeverity=CRITICAL", snoozeKey);
+            } else {
+                suppressed = true;
+            }
+        }
+        return suppressed;
+    }
+
+    private boolean areAllRoomNodesInactive(String incidentKey, String excludeKey) {
+        for (Map.Entry<String, FsmState> entry : fsmMap.entrySet()) {
+            if (entry.getKey().equals(excludeKey)) continue;
+            FsmState st = entry.getValue();
+            if (st != null && incidentKey.equals(st.getIncidentKey())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void evaluateMetric(
@@ -546,86 +710,61 @@ public class AlertRuleEngine {
             String hardwareId,
             String roomId,
             String zoneId,
-            boolean immediateFire
+            boolean immediateFire,
+            Duration pendingWindow,
+            boolean localLedEnabled
     ) {
         String key = targetId + ":" + metricType;
+        String incidentKey = resolveRoomIncidentKey(roomId, alertType, metricType);
         Instant now = clock.instant();
 
-        final boolean[] shouldFire = { false };
-        final boolean[] shouldEscalate = { false };
-        final String[] escalateAlertId = { null };
-        final Alert[] alertToSave = { null };
-        final String[] resolveAlertId = { null };
+        final boolean[] transitionedToFiring = { false };
+        final boolean[] valueOrSeverityChangedInFiring = { false };
+        final boolean[] enteredPendingWithLed = { false };
+        final boolean[] cancelledPendingWithLed = { false };
+        final boolean[] recoveredFromFiring = { false };
+        final String[] priorAlertIdHolder = { null };
 
         fsmMap.compute(key, (k, state) -> {
             if (state == null) {
-                Instant snoozedUntil = snoozeUntilMap.get(key);
-                if (snoozedUntil != null) {
-                    if (!now.isBefore(snoozedUntil) || isRecovered) {
-                        snoozeUntilMap.remove(key);
-                    } else if (severity == AlertSeverity.CRITICAL && isBreached) {
-                        snoozeUntilMap.remove(key);
-                        log.info("Snooze overridden by CRITICAL alert: key={}, value={}", key, currentValue);
-                    } else {
-                        log.debug("Alert suppressed by active snooze until {}: key={}", snoozedUntil, key);
-                        return null;
-                    }
+                if (checkOrClearSnooze(key, incidentKey, now, isBreached, isRecovered, severity)) {
+                    log.debug("Alert suppressed by active snooze: key={}, incidentKey={}", key, incidentKey);
+                    return null;
                 }
 
-                // NORMAL state
                 if (isBreached) {
+                    FsmState newState = new FsmState();
+                    newState.setLastEvaluatedAt(now);
+                    newState.setLastValue(currentValue);
+                    newState.setThreshold(threshold);
+                    newState.setAlertType(alertType);
+                    newState.setSeverity(severity);
+                    newState.setMetricType(metricType);
+                    newState.setMessage(message);
+                    newState.setRecommendedAction(recommendedAction);
+                    newState.setDeviceId(deviceId);
+                    newState.setHardwareId(hardwareId);
+                    newState.setRoomId(roomId);
+                    newState.setZoneId(zoneId);
+                    newState.setIncidentKey(incidentKey);
+                    newState.setLocalLedEnabled(localLedEnabled);
+
                     if (immediateFire) {
-                        FsmState newState = new FsmState();
                         newState.setStatus(AlertStatus.FIRING);
                         newState.setFiringSince(now);
                         newState.setRecoverySince(null);
-                        newState.setLastEvaluatedAt(now);
-                        newState.setLastValue(currentValue);
-                        newState.setThreshold(threshold);
-                        newState.setAlertType(alertType);
-                        newState.setSeverity(severity);
-                        newState.setMetricType(metricType);
-                        newState.setDeviceId(deviceId);
-                        newState.setHardwareId(hardwareId);
-                        newState.setRoomId(roomId);
-                        newState.setZoneId(zoneId);
-
-                        alertToSave[0] = Alert.builder()
-                                .deviceId(deviceId)
-                                .hardwareId(hardwareId)
-                                .roomId(roomId)
-                                .zoneId(zoneId)
-                                .type(alertType)
-                                .metricType(metricType)
-                                .severity(severity)
-                                .severityRank(AlertSeverity.rankOf(severity))
-                                .status(AlertStatus.FIRING)
-                                .currentValue(currentValue)
-                                .threshold(threshold)
-                                .message(message)
-                                .recommendedAction(recommendedAction)
-                                .startedAt(now)
-                                .build();
-                        shouldFire[0] = true;
-                        log.info("Alert FSM entered FIRING immediately (instantaneous metric): key={}, value={}, threshold={}", key, currentValue, threshold);
-                        return newState;
+                        transitionedToFiring[0] = true;
+                        log.info("Alert FSM entered FIRING immediately: key={}, value={}, threshold={}", key, currentValue, threshold);
                     } else {
-                        FsmState newState = new FsmState();
                         newState.setStatus(AlertStatus.PENDING);
                         newState.setPendingSince(now);
-                        newState.setLastEvaluatedAt(now);
-                        newState.setLastValue(currentValue);
-                        newState.setThreshold(threshold);
-                        newState.setAlertType(alertType);
-                        newState.setSeverity(severity);
-                        newState.setMetricType(metricType);
-                        newState.setDeviceId(deviceId);
-                        newState.setHardwareId(hardwareId);
-                        newState.setRoomId(roomId);
-                        newState.setZoneId(zoneId);
-                        log.debug("Alert FSM entered PENDING: key={}, value={}, threshold={}", key, currentValue, threshold);
-                        return newState;
+                        if (localLedEnabled) {
+                            enteredPendingWithLed[0] = true;
+                        }
+                        log.debug("Alert FSM entered PENDING ({}s): key={}, value={}, threshold={}",
+                                pendingWindow.getSeconds(), key, currentValue, threshold);
                     }
+                    return newState;
                 }
                 return null;
             }
@@ -635,12 +774,17 @@ public class AlertRuleEngine {
                 if (isBreached) {
                     state.setLastValue(currentValue);
                     state.setLastEvaluatedAt(now);
+                    state.setMessage(message);
+                    state.setRecommendedAction(recommendedAction);
+                    if (zoneId != null) {
+                        state.setZoneId(zoneId);
+                    }
                     if (AlertSeverity.rankOf(severity) > AlertSeverity.rankOf(state.getSeverity())) {
                         state.setSeverity(severity);
                         state.setThreshold(threshold);
                     }
                     long pendingSeconds = Duration.between(state.getPendingSince(), now).getSeconds();
-                    if (pendingSeconds >= PENDING_WINDOW.getSeconds()) {
+                    if (immediateFire || pendingSeconds >= pendingWindow.getSeconds()) {
                         AlertSeverity effectiveSeverity =
                                 AlertSeverity.rankOf(severity) >= AlertSeverity.rankOf(state.getSeverity())
                                         ? severity
@@ -652,39 +796,18 @@ public class AlertRuleEngine {
                         state.setRecoverySince(null);
                         state.setSeverity(effectiveSeverity);
                         state.setThreshold(effectiveThreshold);
-                        if (zoneId != null) {
-                            state.setZoneId(zoneId);
-                        }
-                        String effectiveZoneId = zoneId != null ? zoneId : state.getZoneId();
-
-                        alertToSave[0] = Alert.builder()
-                                .deviceId(deviceId)
-                                .hardwareId(hardwareId)
-                                .roomId(roomId)
-                                .zoneId(effectiveZoneId)
-                                .type(alertType)
-                                .metricType(metricType)
-                                .severity(effectiveSeverity)
-                                .severityRank(AlertSeverity.rankOf(effectiveSeverity))
-                                .status(AlertStatus.FIRING)
-                                .currentValue(currentValue)
-                                .threshold(effectiveThreshold)
-                                .message(message)
-                                .recommendedAction(recommendedAction)
-                                .startedAt(now)
-                                .build();
-                        shouldFire[0] = true;
+                        transitionedToFiring[0] = true;
                     }
                     return state;
                 } else if (!isRecovered) {
-                    // Dao động nhẹ trong vùng deadband (threshold - deadband < currentValue <= threshold):
-                    // Giữ nguyên trạng thái PENDING và pendingSince, cập nhật lastValue
                     state.setLastValue(currentValue);
                     state.setLastEvaluatedAt(now);
                     return state;
                 } else {
-                    // Đã tụt hẳn xuống vùng an toàn (<= threshold - deadband): Hủy PENDING
-                    log.debug("Alert FSM cancelled PENDING (false alarm filtered): key={}", key);
+                    if (state.isLocalLedEnabled()) {
+                        cancelledPendingWithLed[0] = true;
+                    }
+                    log.debug("Alert FSM cancelled PENDING (resolved locally before escalation): key={}", key);
                     return null;
                 }
             }
@@ -694,13 +817,13 @@ public class AlertRuleEngine {
                 state.setLastEvaluatedAt(now);
                 if (isBreached) {
                     state.setLastValue(currentValue);
+                    state.setMessage(message);
                     int newRank = AlertSeverity.rankOf(severity);
                     int oldRank = AlertSeverity.rankOf(state.getSeverity());
                     if (newRank > oldRank) {
                         state.setSeverity(severity);
                         state.setThreshold(threshold);
-                        shouldEscalate[0] = true;
-                        escalateAlertId[0] = state.getAlertId();
+                        valueOrSeverityChangedInFiring[0] = true;
                     }
                     if (state.getRecoverySince() != null) {
                         state.setRecoverySince(null);
@@ -708,20 +831,17 @@ public class AlertRuleEngine {
                     }
                     return state;
                 } else if (!isRecovered) {
-                    // Deadband zone: between (threshold - deadband) and threshold -> keep current state without resetting recovery timer if already recovering, or do not start recovery yet if not started
                     state.setLastValue(currentValue);
                     if (state.getRecoverySince() != null) {
                         long recoverySeconds = Duration.between(state.getRecoverySince(), now).getSeconds();
                         if (recoverySeconds >= HYSTERESIS_WINDOW.getSeconds()) {
-                            if (state.getAlertId() != null) {
-                                resolveAlertId[0] = state.getAlertId();
-                            }
+                            priorAlertIdHolder[0] = state.getAlertId();
+                            recoveredFromFiring[0] = true;
                             return null;
                         }
                     }
                     return state;
                 } else {
-                    // Metric dropped safely below deadband
                     if (state.getRecoverySince() == null) {
                         state.setRecoverySince(now);
                         log.debug("Alert FSM started recovery hysteresis window: key={}", key);
@@ -729,9 +849,8 @@ public class AlertRuleEngine {
                     } else {
                         long recoverySeconds = Duration.between(state.getRecoverySince(), now).getSeconds();
                         if (recoverySeconds >= HYSTERESIS_WINDOW.getSeconds()) {
-                            if (state.getAlertId() != null) {
-                                resolveAlertId[0] = state.getAlertId();
-                            }
+                            priorAlertIdHolder[0] = state.getAlertId();
+                            recoveredFromFiring[0] = true;
                             return null;
                         }
                         return state;
@@ -742,69 +861,485 @@ public class AlertRuleEngine {
             return state;
         });
 
-        if (shouldFire[0] && alertToSave[0] != null) {
-            Alert savedAlert = alertRepository.save(alertToSave[0]);
-            Alert effectiveSaved = savedAlert != null ? savedAlert : alertToSave[0];
-            FsmState s = fsmMap.get(key);
-            if (s != null && s.getStatus() == AlertStatus.FIRING) {
-                s.setAlertId(effectiveSaved.getId());
+        // Side-effects outside ConcurrentHashMap.compute lock
+        if (enteredPendingWithLed[0] && hardwareId != null) {
+            deviceCommandPublisher.publishLedState(
+                    hardwareId,
+                    DeviceCommandPublisher.LED_WARN_PULSE,
+                    "TIER1_" + metricType + "_PENDING",
+                    currentValue,
+                    threshold
+            );
+        } else if (cancelledPendingWithLed[0] && hardwareId != null) {
+            refreshDeviceLedForHardware(deviceId, hardwareId, metricType, currentValue, threshold);
+        }
+
+        if (transitionedToFiring[0]) {
+            FsmState firedState = fsmMap.get(key);
+            if (firedState != null && firedState.isLocalLedEnabled() && hardwareId != null) {
+                String ledTarget = firedState.getSeverity() == AlertSeverity.CRITICAL
+                        ? DeviceCommandPublisher.LED_CRITICAL_BLINK
+                        : (firedState.getStatus() == AlertStatus.ACKNOWLEDGED
+                                ? DeviceCommandPublisher.LED_STAFF_DISPATCHED
+                                : DeviceCommandPublisher.LED_WARN_PULSE);
+                deviceCommandPublisher.publishLedState(
+                        hardwareId,
+                        ledTarget,
+                        "TIER2_" + metricType + "_FIRING",
+                        currentValue,
+                        firedState.getThreshold()
+                );
             }
-            realtimePublisher.publishAlert(toAlertResponse(effectiveSaved));
-            notifyEmailOnFiredOrEscalated(effectiveSaved);
-            log.info("Alert FSM transitioned to FIRING: key={}, alertId={}, value={}", key, effectiveSaved.getId(), currentValue);
-        } else if (shouldEscalate[0] && escalateAlertId[0] != null) {
-            escalateAlertSeverityInDb(escalateAlertId[0], severity, currentValue, threshold, message, key);
-        } else if (resolveAlertId[0] != null) {
-            resolveAlertByIdInDb(resolveAlertId[0], now);
-            log.info("Alert FSM resolved after 60s hysteresis: key={}, alertId={}", key, resolveAlertId[0]);
+            persistOrMergeFiringState(key, incidentKey, now);
+        } else if (valueOrSeverityChangedInFiring[0]) {
+            FsmState activeState = fsmMap.get(key);
+            if (activeState != null && activeState.isLocalLedEnabled()
+                    && activeState.getSeverity() == AlertSeverity.CRITICAL && hardwareId != null) {
+                deviceCommandPublisher.publishLedState(
+                        hardwareId,
+                        DeviceCommandPublisher.LED_CRITICAL_BLINK,
+                        "TIER2_" + metricType + "_CRITICAL",
+                        currentValue,
+                        activeState.getThreshold()
+                );
+            }
+            syncExistingIncidentInDb(key, incidentKey, now);
+        } else if (recoveredFromFiring[0]) {
+            if (localLedEnabled && hardwareId != null) {
+                refreshDeviceLedForHardware(deviceId, hardwareId, metricType, currentValue, threshold);
+            }
+            handleNodeChannelRecovered(incidentKey, priorAlertIdHolder[0], now);
         }
     }
 
-    private void escalateAlertSeverityInDb(
-            String alertId,
-            AlertSeverity newSeverity,
-            double currentValue,
-            double threshold,
-            String message,
-            String key
+    private void refreshDeviceLedForHardware(
+            String deviceId,
+            String hardwareId,
+            String reasonMetric,
+            Double measuredValue,
+            Double thresholdValue
     ) {
+        if (hardwareId == null || hardwareId.isBlank()) {
+            return;
+        }
+        AlertSeverity maxActiveSev = null;
+        boolean anyAcknowledged = false;
+        boolean anyActiveNoise = false;
+
+        for (FsmState st : fsmMap.values()) {
+            if (st == null || !st.isLocalLedEnabled()) continue;
+            boolean sameHw = hardwareId.equals(st.getHardwareId())
+                    || (deviceId != null && !deviceId.isBlank() && deviceId.equals(st.getDeviceId()));
+            if (!sameHw) continue;
+            anyActiveNoise = true;
+            if (st.getStatus() == AlertStatus.ACKNOWLEDGED) {
+                anyAcknowledged = true;
+            }
+            if (maxActiveSev == null || AlertSeverity.rankOf(st.getSeverity()) > AlertSeverity.rankOf(maxActiveSev)) {
+                maxActiveSev = st.getSeverity();
+            }
+        }
+
+        if (!anyActiveNoise) {
+            deviceCommandPublisher.publishLedState(
+                    hardwareId,
+                    DeviceCommandPublisher.LED_NORMAL,
+                    reasonMetric + "_RECOVERED",
+                    measuredValue,
+                    thresholdValue
+            );
+        } else if (maxActiveSev == AlertSeverity.CRITICAL) {
+            deviceCommandPublisher.publishLedState(
+                    hardwareId,
+                    DeviceCommandPublisher.LED_CRITICAL_BLINK,
+                    reasonMetric + "_STILL_CRITICAL",
+                    measuredValue,
+                    thresholdValue
+            );
+        } else if (anyAcknowledged) {
+            deviceCommandPublisher.publishLedState(
+                    hardwareId,
+                    DeviceCommandPublisher.LED_STAFF_DISPATCHED,
+                    reasonMetric + "_STAFF_DISPATCHED",
+                    measuredValue,
+                    thresholdValue
+            );
+        } else {
+            deviceCommandPublisher.publishLedState(
+                    hardwareId,
+                    DeviceCommandPublisher.LED_WARN_PULSE,
+                    reasonMetric + "_STILL_ACTIVE",
+                    measuredValue,
+                    thresholdValue
+            );
+        }
+    }
+
+    private List<FsmState> findActiveStatesForIncident(String key, String incidentKey) {
+        List<FsmState> list = new ArrayList<>();
+        if (incidentKey != null) {
+            for (FsmState st : fsmMap.values()) {
+                if (st != null && incidentKey.equals(st.getIncidentKey())
+                        && (st.getStatus() == AlertStatus.FIRING || st.getStatus() == AlertStatus.ACKNOWLEDGED)) {
+                    list.add(st);
+                }
+            }
+        } else {
+            FsmState single = fsmMap.get(key);
+            if (single != null && (single.getStatus() == AlertStatus.FIRING || single.getStatus() == AlertStatus.ACKNOWLEDGED)) {
+                list.add(single);
+            }
+        }
+        return list;
+    }
+
+    private static Comparator<FsmState> epicenterComparator() {
+        return Comparator
+                .comparingInt((FsmState s) -> AlertSeverity.rankOf(s.getSeverity()))
+                .thenComparingDouble(s -> {
+                    double v = s.getLastValue() != null ? s.getLastValue() : 0.0;
+                    double t = s.getThreshold() != null ? s.getThreshold() : 0.0;
+                    return "HUMIDITY_LOW".equals(s.getMetricType()) ? (t - v) : (v - t);
+                })
+                .thenComparing((s1, s2) -> {
+                    Instant t1 = s1.getLastEvaluatedAt();
+                    Instant t2 = s2.getLastEvaluatedAt();
+                    if (Objects.equals(t1, t2)) return 0;
+                    if (t1 == null) return -1;
+                    if (t2 == null) return 1;
+                    return t1.compareTo(t2);
+                });
+    }
+
+    private static List<AffectedNodeSnapshot> buildAffectedNodeSnapshots(List<FsmState> activeStates, Instant now) {
+        if (activeStates == null || activeStates.isEmpty()) {
+            return List.of();
+        }
+        Map<String, FsmState> bestPerNode = new LinkedHashMap<>();
+        Comparator<FsmState> cmp = epicenterComparator();
+        for (FsmState st : activeStates) {
+            String nodeKey = (st.getDeviceId() != null && !st.getDeviceId().isBlank())
+                    ? st.getDeviceId()
+                    : (st.getHardwareId() != null ? st.getHardwareId() : st.getMetricType());
+            FsmState prev = bestPerNode.get(nodeKey);
+            if (prev == null || cmp.compare(st, prev) > 0) {
+                bestPerNode.put(nodeKey, st);
+            }
+        }
+        return bestPerNode.values().stream()
+                .sorted(cmp.reversed())
+                .map(st -> AffectedNodeSnapshot.builder()
+                        .deviceId(st.getDeviceId())
+                        .hardwareId(st.getHardwareId())
+                        .metricType(st.getMetricType())
+                        .currentValue(st.getLastValue())
+                        .threshold(st.getThreshold())
+                        .updatedAt(st.getLastEvaluatedAt() != null ? st.getLastEvaluatedAt() : now)
+                        .build())
+                .toList();
+    }
+
+    private String findExistingAlertId(String key, String incidentKey) {
+        if (incidentKey != null) {
+            String mappedId = roomIncidentAlertIds.get(incidentKey);
+            if (mappedId != null) {
+                return mappedId;
+            }
+            for (FsmState st : fsmMap.values()) {
+                if (st != null && incidentKey.equals(st.getIncidentKey()) && st.getAlertId() != null) {
+                    return st.getAlertId();
+                }
+            }
+        }
+        FsmState current = fsmMap.get(key);
+        return current != null ? current.getAlertId() : null;
+    }
+
+    private void persistOrMergeFiringState(String key, String incidentKey, Instant now) {
+        List<FsmState> activeStates = findActiveStatesForIncident(key, incidentKey);
+        if (activeStates.isEmpty()) {
+            return;
+        }
+        FsmState epicenter = activeStates.stream().max(epicenterComparator()).orElse(activeStates.get(0));
+        List<AffectedNodeSnapshot> snapshots = incidentKey != null
+                ? buildAffectedNodeSnapshots(activeStates, now)
+                : null;
+
+        String existingAlertId = findExistingAlertId(key, incidentKey);
+        if (existingAlertId != null) {
+            boolean merged = mergeIntoExistingAlertInDb(existingAlertId, key, incidentKey, epicenter, snapshots);
+            if (merged) {
+                return;
+            }
+        }
+
+        Alert alertToSave = Alert.builder()
+                .deviceId(epicenter.getDeviceId())
+                .hardwareId(epicenter.getHardwareId())
+                .roomId(epicenter.getRoomId())
+                .zoneId(epicenter.getZoneId())
+                .type(epicenter.getAlertType())
+                .metricType(epicenter.getMetricType())
+                .severity(epicenter.getSeverity())
+                .severityRank(AlertSeverity.rankOf(epicenter.getSeverity()))
+                .status(AlertStatus.FIRING)
+                .workflowStatus(AlertWorkflowStatus.NEW)
+                .affectedNodes(snapshots)
+                .currentValue(epicenter.getLastValue())
+                .threshold(epicenter.getThreshold())
+                .message(formatMergedMessage(epicenter, snapshots))
+                .recommendedAction(epicenter.getRecommendedAction())
+                .startedAt(now)
+                .build();
+
+        Alert savedAlert = alertRepository.save(alertToSave);
+        Alert effectiveSaved = savedAlert != null ? savedAlert : alertToSave;
+        String savedId = effectiveSaved.getId();
+
+        if (savedId != null) {
+            if (incidentKey != null) {
+                roomIncidentAlertIds.put(incidentKey, savedId);
+                for (FsmState st : activeStates) {
+                    st.setAlertId(savedId);
+                }
+            } else {
+                FsmState s = fsmMap.get(key);
+                if (s != null) {
+                    s.setAlertId(savedId);
+                }
+            }
+        }
+
+        realtimePublisher.publishAlert(toAlertResponse(effectiveSaved));
+        notifyEmailOnFiredOrEscalated(effectiveSaved);
+        log.info("Alert FSM transitioned to FIRING: key={}, incidentKey={}, alertId={}, value={}",
+                key, incidentKey, savedId, epicenter.getLastValue());
+    }
+
+    private boolean mergeIntoExistingAlertInDb(
+            String alertId,
+            String triggeredKey,
+            String incidentKey,
+            FsmState epicenter,
+            List<AffectedNodeSnapshot> snapshots
+    ) {
+        for (int attempt = 0; attempt < OPTIMISTIC_LOCK_MAX_RETRIES; attempt++) {
+            Optional<Alert> alertOpt = alertRepository.findById(alertId);
+            if (alertOpt == null || alertOpt.isEmpty()) {
+                if (incidentKey != null) {
+                    roomIncidentAlertIds.remove(incidentKey, alertId);
+                }
+                return false;
+            }
+            Alert alert = alertOpt.get();
+            if (alert.getStatus() == AlertStatus.RESOLVED) {
+                if (incidentKey != null) {
+                    roomIncidentAlertIds.remove(incidentKey, alertId);
+                }
+                return false;
+            }
+
+            int oldRank = AlertSeverity.rankOf(alert.getSeverity());
+            int epicenterRank = AlertSeverity.rankOf(epicenter.getSeverity());
+            boolean escalated = epicenterRank > oldRank;
+            if (escalated) {
+                alert.setSeverity(epicenter.getSeverity());
+                alert.setSeverityRank(epicenterRank);
+            }
+
+            alert.setDeviceId(epicenter.getDeviceId());
+            alert.setHardwareId(epicenter.getHardwareId());
+            alert.setMetricType(epicenter.getMetricType());
+            alert.setCurrentValue(epicenter.getLastValue());
+            alert.setThreshold(epicenter.getThreshold());
+            alert.setMessage(formatMergedMessage(epicenter, snapshots));
+            if (snapshots != null) {
+                alert.setAffectedNodes(snapshots);
+            }
+            // Nếu sự cố phòng trước đó đã êm tạm thời nhưng nay bùng phát lại trước khi đóng -> gỡ cờ sensorRecovered
+            if (Boolean.TRUE.equals(alert.getSensorRecovered())) {
+                alert.setSensorRecovered(false);
+                alert.setSensorRecoveredAt(null);
+            }
+
+            try {
+                Alert saved = alertRepository.save(alert);
+                Alert effectiveSaved = saved != null ? saved : alert;
+
+                FsmState joiningState = fsmMap.get(triggeredKey);
+                if (joiningState != null) {
+                    joiningState.setAlertId(alertId);
+                    if (alert.getStatus() == AlertStatus.ACKNOWLEDGED) {
+                        joiningState.setStatus(AlertStatus.ACKNOWLEDGED);
+                        if (joiningState.isLocalLedEnabled()
+                                && joiningState.getSeverity() != AlertSeverity.CRITICAL
+                                && joiningState.getHardwareId() != null) {
+                            deviceCommandPublisher.publishLedState(
+                                    joiningState.getHardwareId(),
+                                    DeviceCommandPublisher.LED_STAFF_DISPATCHED,
+                                    "JOINED_IN_PROGRESS_ROOM_ALERT",
+                                    joiningState.getLastValue(),
+                                    joiningState.getThreshold()
+                            );
+                        }
+                    }
+                }
+
+                realtimePublisher.publishAlert(toAlertResponse(effectiveSaved));
+                if (escalated) {
+                    notifyEmailOnFiredOrEscalated(effectiveSaved);
+                }
+                log.info("Merged/updated active room alert: incidentKey={}, alertId={}, affectedNodes={}, severity={}",
+                        incidentKey, alertId, snapshots != null ? snapshots.size() : 1, effectiveSaved.getSeverity());
+                return true;
+            } catch (OptimisticLockingFailureException ex) {
+                log.debug("Optimistic locking conflict while merging room alertId={}, attempt={}", alertId, attempt + 1);
+            }
+        }
+        return true;
+    }
+
+    private void syncExistingIncidentInDb(String key, String incidentKey, Instant now) {
+        List<FsmState> activeStates = findActiveStatesForIncident(key, incidentKey);
+        if (activeStates.isEmpty()) {
+            return;
+        }
+        String alertId = findExistingAlertId(key, incidentKey);
         if (alertId == null) {
             return;
         }
-        int targetRank = AlertSeverity.rankOf(newSeverity);
+        FsmState epicenter = activeStates.stream().max(epicenterComparator()).orElse(activeStates.get(0));
+        List<AffectedNodeSnapshot> snapshots = incidentKey != null
+                ? buildAffectedNodeSnapshots(activeStates, now)
+                : null;
+        mergeIntoExistingAlertInDb(alertId, key, incidentKey, epicenter, snapshots);
+    }
+
+    private static String formatMergedMessage(FsmState epicenter, List<AffectedNodeSnapshot> snapshots) {
+        String base = epicenter.getMessage();
+        if (snapshots != null && snapshots.size() > 1) {
+            return base + String.format(" [Ghi nhận tại %d trạm trong phòng]", snapshots.size());
+        }
+        return base;
+    }
+
+    private void handleNodeChannelRecovered(String incidentKey, String alertId, Instant now) {
+        if (incidentKey != null) {
+            List<FsmState> remaining = findActiveStatesForIncident(null, incidentKey);
+            if (!remaining.isEmpty()) {
+                String activeAlertId = alertId != null ? alertId : roomIncidentAlertIds.get(incidentKey);
+                if (activeAlertId != null) {
+                    FsmState nextEpicenter = remaining.stream().max(epicenterComparator()).orElse(remaining.get(0));
+                    List<AffectedNodeSnapshot> snapshots = buildAffectedNodeSnapshots(remaining, now);
+                    mergeIntoExistingAlertInDb(activeAlertId, "", incidentKey, nextEpicenter, snapshots);
+                }
+                return;
+            }
+            if (alertId != null) {
+                roomIncidentAlertIds.remove(incidentKey, alertId);
+            } else {
+                roomIncidentAlertIds.remove(incidentKey);
+            }
+        }
+
+        if (alertId != null) {
+            handleIncidentPhysicallyRecovered(alertId, now);
+        }
+    }
+
+    private void handleIncidentPhysicallyRecovered(String alertId, Instant now) {
         for (int attempt = 0; attempt < OPTIMISTIC_LOCK_MAX_RETRIES; attempt++) {
             Optional<Alert> alertOpt = alertRepository.findById(alertId);
             if (alertOpt == null || alertOpt.isEmpty()) {
                 return;
             }
-            Alert alert = alertOpt.get();
-            if (alert.getStatus() == AlertStatus.RESOLVED) {
-                return;
-            }
-            int currentRank = AlertSeverity.rankOf(alert.getSeverity());
-            if (targetRank <= currentRank) {
+            Alert current = alertOpt.get();
+            if (current.getStatus() == AlertStatus.RESOLVED) {
                 return;
             }
 
-            alert.setSeverity(newSeverity);
-            alert.setSeverityRank(targetRank);
-            alert.setCurrentValue(currentValue);
-            alert.setThreshold(threshold);
-            alert.setMessage(message);
+            boolean awaitingLibrarianConfirm = current.getWorkflowStatus() == AlertWorkflowStatus.IN_PROGRESS
+                    || (current.getAssignedTo() != null && !current.getAssignedTo().isBlank());
 
+            if (!awaitingLibrarianConfirm) {
+                resolveAlertEntity(current, now, null);
+                log.info("Alert FSM auto-resolved after 60s hysteresis (unclaimed): alertId={}", alertId);
+                return;
+            }
+
+            current.setSensorRecovered(true);
+            current.setSensorRecoveredAt(now);
             try {
-                Alert saved = alertRepository.save(alert);
-                Alert effectiveSaved = saved != null ? saved : alert;
+                Alert saved = alertRepository.save(current);
+                Alert effectiveSaved = saved != null ? saved : current;
                 realtimePublisher.publishAlert(toAlertResponse(effectiveSaved));
-                notifyEmailOnFiredOrEscalated(effectiveSaved);
-                log.info("Alert escalated in severity: key={}, alertId={}, oldRank={}, newSeverity={}, value={}",
-                        key, effectiveSaved.getId(), currentRank, newSeverity, currentValue);
+                log.info("Alert sensors physically recovered; holding 15m for shift verification by {}: alertId={}",
+                        current.getAssignedTo(), alertId);
                 return;
             } catch (OptimisticLockingFailureException ex) {
-                log.debug("Optimistic locking conflict while escalating alertId={}, attempt={}", alertId, attempt + 1);
+                log.debug("Optimistic locking conflict marking sensorRecovered on alertId={}, attempt={}", alertId, attempt + 1);
             }
         }
-        log.warn("Unable to escalate alertId={} after {} optimistic locking attempts", alertId, OPTIMISTIC_LOCK_MAX_RETRIES);
+    }
+
+    /**
+     * Quét định kỳ mỗi phút: các sự cố đã có thủ thư bấm "Nhận xử lý" và cảm biến đã êm >= 15 phút
+     * nhưng thủ thư bận chưa bấm Chạm 2 ("Đã nhắc xong") sẽ được tự động chốt ca kèm tên người nhận.
+     */
+    @Scheduled(fixedRate = 60000)
+    public int sweepRecoveredUnconfirmedAlerts() {
+        Instant now = clock.instant();
+        List<Alert> active = findActiveAlertsSafe();
+        int closedCount = 0;
+
+        for (Alert alert : active) {
+            if (alert == null || alert.getStatus() == AlertStatus.RESOLVED) {
+                continue;
+            }
+            if (!Boolean.TRUE.equals(alert.getSensorRecovered()) || alert.getSensorRecoveredAt() == null) {
+                continue;
+            }
+            if (Duration.between(alert.getSensorRecoveredAt(), now).compareTo(CONFIRM_GRACE_WINDOW) < 0) {
+                continue;
+            }
+
+            String alertId = alert.getId();
+            for (int attempt = 0; attempt < OPTIMISTIC_LOCK_MAX_RETRIES; attempt++) {
+                Alert current = attempt == 0
+                        ? alert
+                        : (alertId != null ? alertRepository.findById(alertId).orElse(null) : null);
+                if (current == null || current.getStatus() == AlertStatus.RESOLVED
+                        || !Boolean.TRUE.equals(current.getSensorRecovered())) {
+                    break;
+                }
+                current.setStatus(AlertStatus.RESOLVED);
+                current.setWorkflowStatus(AlertWorkflowStatus.RESOLVED);
+                current.setResolvedAt(now);
+                current.setResolvedBy("SYSTEM");
+                if (current.getResolutionTag() == null || current.getResolutionTag().isBlank()) {
+                    current.setResolutionTag(AUTO_STABILIZED_TAG);
+                }
+                if (current.getHandlingNote() == null || current.getHandlingNote().isBlank()) {
+                    String assignee = (current.getAssignedTo() != null && !current.getAssignedTo().isBlank())
+                            ? current.getAssignedTo()
+                            : (current.getAcknowledgedBy() != null ? current.getAcknowledgedBy() : "thủ thư");
+                    current.setHandlingNote("Tự động chốt ca: Môi trường đã ổn định sau khi " + assignee + " tiếp nhận");
+                }
+                try {
+                    Alert saved = alertRepository.save(current);
+                    Alert effectiveSaved = saved != null ? saved : current;
+                    realtimePublisher.publishAlert(toAlertResponse(effectiveSaved));
+                    notifyEmailOnResolved(effectiveSaved);
+                    closedCount++;
+                    log.info("Auto-confirmed recovered alert after 15m grace window: alertId={}, assignedTo={}",
+                            alertId, current.getAssignedTo());
+                    break;
+                } catch (OptimisticLockingFailureException ex) {
+                    log.debug("Optimistic locking conflict sweeping recovered alertId={}, attempt={}", alertId, attempt + 1);
+                }
+            }
+        }
+        return closedCount;
     }
 
     public void triggerDeviceOfflineAlert(String deviceId, String hardwareId, String roomId) {
@@ -813,6 +1348,9 @@ public class AlertRuleEngine {
 
     public void triggerDeviceOfflineAlert(String deviceId, String hardwareId, String roomId, String zoneId) {
         resolveEnvironmentalAlertsOnOffline(deviceId, hardwareId);
+        if (hardwareId != null) {
+            deviceCommandPublisher.clearDeviceState(hardwareId);
+        }
 
         String targetId = deviceId != null && !deviceId.isBlank() ? deviceId : hardwareId;
         String key = targetId + ":DEVICE_OFFLINE";
@@ -838,6 +1376,7 @@ public class AlertRuleEngine {
                         Duration sinceResolved = Duration.between(recent.getResolvedAt(), now);
                         if (!sinceResolved.isNegative() && sinceResolved.compareTo(OFFLINE_FLAP_WINDOW) <= 0) {
                             recent.setStatus(AlertStatus.FIRING);
+                            recent.setWorkflowStatus(AlertWorkflowStatus.NEW);
                             recent.setResolvedAt(null);
                             recent.setResolvedBy(null);
                             if (recent.getSeverity() == null) {
@@ -874,6 +1413,7 @@ public class AlertRuleEngine {
                         .severity(AlertSeverity.HIGH)
                         .severityRank(AlertSeverity.rankOf(AlertSeverity.HIGH))
                         .status(AlertStatus.FIRING)
+                        .workflowStatus(AlertWorkflowStatus.NEW)
                         .currentValue(0.0)
                         .threshold(0.0)
                         .message("Device is offline: hardwareId=" + hardwareId)
@@ -932,6 +1472,7 @@ public class AlertRuleEngine {
                 }
                 if (attempt > 0) {
                     target.setStatus(AlertStatus.FIRING);
+                    target.setWorkflowStatus(AlertWorkflowStatus.NEW);
                     target.setResolvedAt(null);
                     target.setResolvedBy(null);
                     if ((target.getZoneId() == null || target.getZoneId().isBlank()) && zoneId != null) {
@@ -957,22 +1498,25 @@ public class AlertRuleEngine {
             return;
         }
         Instant now = clock.instant();
-        List<String> fsmAlertIds = new ArrayList<>();
+        List<FsmState> removedStates = new ArrayList<>();
 
         fsmMap.entrySet().removeIf(entry -> {
             FsmState state = entry.getValue();
             if (state != null && matchesDevice(state.getDeviceId(), state.getHardwareId(), deviceId, hardwareId, entry.getKey())) {
-                if (state.getAlertId() != null) {
-                    fsmAlertIds.add(state.getAlertId());
-                }
+                removedStates.add(state);
                 return true;
             }
             return false;
         });
 
+        if (hardwareId != null) {
+            deviceCommandPublisher.publishLedState(hardwareId, DeviceCommandPublisher.LED_NORMAL, "DEVICE_DEACTIVATED", null, null);
+        }
         clearPulseAndSnoozeStateForDevice(deviceId, hardwareId);
 
-        Set<String> resolvedIds = resolveFsmAlertIdsInDb(fsmAlertIds, now);
+        List<String> alertIdsToResolve = filterAlertIdsWithNoRemainingRoomNodes(removedStates, now);
+        Set<String> resolvedIds = resolveFsmAlertIdsInDb(alertIdsToResolve, now);
+
         for (Alert alert : findActiveAlertsSafe()) {
             if (alert == null || alert.getStatus() == AlertStatus.RESOLVED) {
                 continue;
@@ -981,6 +1525,13 @@ public class AlertRuleEngine {
                 continue;
             }
             if (matchesDevice(alert.getDeviceId(), alert.getHardwareId(), deviceId, hardwareId, null)) {
+                String incKey = resolveRoomIncidentKey(alert.getRoomId(), alert.getType(), resolveMetricType(alert));
+                if (incKey != null && !findActiveStatesForIncident(null, incKey).isEmpty()) {
+                    continue;
+                }
+                if (incKey != null && alert.getId() != null) {
+                    roomIncidentAlertIds.remove(incKey, alert.getId());
+                }
                 resolveAlertEntity(alert, now, resolvedIds);
             }
         }
@@ -993,7 +1544,7 @@ public class AlertRuleEngine {
             return;
         }
         Instant now = clock.instant();
-        List<String> fsmAlertIds = new ArrayList<>();
+        List<FsmState> removedStates = new ArrayList<>();
 
         fsmMap.entrySet().removeIf(entry -> {
             FsmState state = entry.getValue();
@@ -1003,15 +1554,15 @@ public class AlertRuleEngine {
             boolean isOfflineType = state.getAlertType() == AlertType.DEVICE_OFFLINE
                     || "DEVICE_OFFLINE".equals(state.getMetricType());
             if (!isOfflineType && matchesDevice(state.getDeviceId(), state.getHardwareId(), deviceId, hardwareId, entry.getKey())) {
-                if (state.getAlertId() != null) {
-                    fsmAlertIds.add(state.getAlertId());
-                }
+                removedStates.add(state);
                 return true;
             }
             return false;
         });
 
-        Set<String> resolvedIds = resolveFsmAlertIdsInDb(fsmAlertIds, now);
+        List<String> alertIdsToResolve = filterAlertIdsWithNoRemainingRoomNodes(removedStates, now);
+        Set<String> resolvedIds = resolveFsmAlertIdsInDb(alertIdsToResolve, now);
+
         for (Alert alert : findActiveAlertsSafe()) {
             if (alert == null || alert.getStatus() == AlertStatus.RESOLVED) {
                 continue;
@@ -1022,6 +1573,13 @@ public class AlertRuleEngine {
             if (alert.getType() != AlertType.DEVICE_OFFLINE
                     && !"DEVICE_OFFLINE".equals(alert.getMetricType())
                     && matchesDevice(alert.getDeviceId(), alert.getHardwareId(), deviceId, hardwareId, null)) {
+                String incKey = resolveRoomIncidentKey(alert.getRoomId(), alert.getType(), resolveMetricType(alert));
+                if (incKey != null && !findActiveStatesForIncident(null, incKey).isEmpty()) {
+                    continue;
+                }
+                if (incKey != null && alert.getId() != null) {
+                    roomIncidentAlertIds.remove(incKey, alert.getId());
+                }
                 resolveAlertEntity(alert, now, resolvedIds);
             }
         }
@@ -1031,6 +1589,33 @@ public class AlertRuleEngine {
         }
     }
 
+    private List<String> filterAlertIdsWithNoRemainingRoomNodes(List<FsmState> removedStates, Instant now) {
+        List<String> alertIdsToResolve = new ArrayList<>();
+        Set<String> checkedIncidentKeys = new HashSet<>();
+
+        for (FsmState st : removedStates) {
+            if (st == null || st.getAlertId() == null) continue;
+            String incKey = st.getIncidentKey();
+            if (incKey == null) {
+                alertIdsToResolve.add(st.getAlertId());
+                continue;
+            }
+            if (!checkedIncidentKeys.add(incKey)) {
+                continue;
+            }
+            List<FsmState> remaining = findActiveStatesForIncident(null, incKey);
+            if (remaining.isEmpty()) {
+                roomIncidentAlertIds.remove(incKey, st.getAlertId());
+                alertIdsToResolve.add(st.getAlertId());
+            } else {
+                FsmState nextEpicenter = remaining.stream().max(epicenterComparator()).orElse(remaining.get(0));
+                List<AffectedNodeSnapshot> snapshots = buildAffectedNodeSnapshots(remaining, now);
+                mergeIntoExistingAlertInDb(st.getAlertId(), "", incKey, nextEpicenter, snapshots);
+            }
+        }
+        return alertIdsToResolve;
+    }
+
     public void onRoomTypeChanged(String roomId, RoomType newType) {
         if (roomId == null || roomId.isBlank() || newType == RoomType.BOOK_STORAGE) {
             return;
@@ -1038,6 +1623,9 @@ public class AlertRuleEngine {
         invalidateRoomCache(roomId);
         Instant now = clock.instant();
         List<String> fsmAlertIds = new ArrayList<>();
+
+        roomIncidentAlertIds.remove("room:" + roomId.trim() + ":HUMIDITY_HIGH");
+        roomIncidentAlertIds.remove("room:" + roomId.trim() + ":HUMIDITY_LOW");
 
         fsmMap.entrySet().removeIf(entry -> {
             FsmState state = entry.getValue();
@@ -1085,13 +1673,11 @@ public class AlertRuleEngine {
             return;
         }
 
-        final String[] resolveAlertId = { null };
+        final FsmState[] removedHolder = { null };
         fsmMap.computeIfPresent(key, (k, state) -> {
             if (state.getLastEvaluatedAt() != null
                     && Duration.between(state.getLastEvaluatedAt(), now).compareTo(STALE_METRIC_RESOLVE_WINDOW) > 0) {
-                if (state.getAlertId() != null) {
-                    resolveAlertId[0] = state.getAlertId();
-                }
+                removedHolder[0] = state;
                 log.info("Auto-resolving stale metric alert after missing sensor reading > {}: key={}",
                         STALE_METRIC_RESOLVE_WINDOW, key);
                 return null;
@@ -1099,8 +1685,17 @@ public class AlertRuleEngine {
             return state;
         });
 
-        if (resolveAlertId[0] != null) {
-            resolveAlertByIdInDb(resolveAlertId[0], now);
+        if (removedHolder[0] != null) {
+            FsmState st = removedHolder[0];
+            if (st.isLocalLedEnabled() && st.getHardwareId() != null) {
+                refreshDeviceLedForHardware(st.getDeviceId(), st.getHardwareId(), metricType, null, st.getThreshold());
+            }
+            if (st.getAlertId() != null) {
+                List<String> toResolve = filterAlertIdsWithNoRemainingRoomNodes(List.of(st), now);
+                for (String id : toResolve) {
+                    resolveAlertByIdInDb(id, now);
+                }
+            }
         }
     }
 
@@ -1112,16 +1707,17 @@ public class AlertRuleEngine {
         if (!fsmMap.containsKey(key)) {
             return;
         }
-        final String[] resolveAlertId = { null };
+        final FsmState[] removedHolder = { null };
         fsmMap.computeIfPresent(key, (k, state) -> {
-            if (state.getAlertId() != null) {
-                resolveAlertId[0] = state.getAlertId();
-            }
+            removedHolder[0] = state;
             log.info("Auto-resolving FSM metric state ({}): key={}", reason, key);
             return null;
         });
-        if (resolveAlertId[0] != null) {
-            resolveAlertByIdInDb(resolveAlertId[0], now);
+        if (removedHolder[0] != null && removedHolder[0].getAlertId() != null) {
+            List<String> toResolve = filterAlertIdsWithNoRemainingRoomNodes(List.of(removedHolder[0]), now);
+            for (String id : toResolve) {
+                resolveAlertByIdInDb(id, now);
+            }
         }
     }
 
@@ -1180,7 +1776,6 @@ public class AlertRuleEngine {
                 }
             }
 
-            // M4: Chỉ chuyển RESOLVED khi chưa phải RESOLVED; giữ nguyên acknowledgedAt và acknowledgedBy
             current.setStatus(AlertStatus.RESOLVED);
             current.setWorkflowStatus(AlertWorkflowStatus.RESOLVED);
             current.setResolvedAt(now);
@@ -1298,7 +1893,57 @@ public class AlertRuleEngine {
             if (alertId.equals(state.getAlertId())) {
                 state.setStatus(AlertStatus.ACKNOWLEDGED);
                 log.debug("Updated FSM state to ACKNOWLEDGED for alertId={}", alertId);
-                break;
+            }
+        }
+    }
+
+    public void onClaimInProgress(Alert alert) {
+        if (alert == null || alert.getId() == null) return;
+        String alertId = alert.getId();
+        Set<String> notifiedHw = new HashSet<>();
+
+        for (FsmState state : fsmMap.values()) {
+            if (alertId.equals(state.getAlertId())) {
+                state.setStatus(AlertStatus.ACKNOWLEDGED);
+                if (state.isLocalLedEnabled()
+                        && state.getSeverity() != AlertSeverity.CRITICAL
+                        && state.getHardwareId() != null
+                        && notifiedHw.add(state.getHardwareId())) {
+                    deviceCommandPublisher.publishLedState(
+                            state.getHardwareId(),
+                            DeviceCommandPublisher.LED_STAFF_DISPATCHED,
+                            "STAFF_CLAIMED_ALERT",
+                            state.getLastValue(),
+                            state.getThreshold()
+                    );
+                }
+            }
+        }
+
+        if (alert.getType() == AlertType.NOISE_EXCEEDED) {
+            RoomAlertContext ctx = resolveRoomContext(alert.getRoomId());
+            if (supportsLocalLedForAlert(ctx.roomType(), AlertType.NOISE_EXCEEDED)) {
+                if (alert.getAffectedNodes() != null) {
+                    for (AffectedNodeSnapshot snap : alert.getAffectedNodes()) {
+                        if (snap != null && snap.getHardwareId() != null && notifiedHw.add(snap.getHardwareId())) {
+                            deviceCommandPublisher.publishLedState(
+                                    snap.getHardwareId(),
+                                    DeviceCommandPublisher.LED_STAFF_DISPATCHED,
+                                    "STAFF_CLAIMED_ALERT",
+                                    snap.getCurrentValue(),
+                                    snap.getThreshold()
+                            );
+                        }
+                    }
+                } else if (alert.getHardwareId() != null && notifiedHw.add(alert.getHardwareId())) {
+                    deviceCommandPublisher.publishLedState(
+                            alert.getHardwareId(),
+                            DeviceCommandPublisher.LED_STAFF_DISPATCHED,
+                            "STAFF_CLAIMED_ALERT",
+                            alert.getCurrentValue(),
+                            alert.getThreshold()
+                    );
+                }
             }
         }
     }
@@ -1313,18 +1958,28 @@ public class AlertRuleEngine {
                 ? snoozeDuration
                 : DEFAULT_SNOOZE_DURATION;
         Instant snoozeUntil = clock.instant().plus(effectiveSnooze);
+        Set<String> resetHardwareIds = new HashSet<>();
+
+        roomIncidentAlertIds.entrySet().removeIf(e -> alertId.equals(e.getValue()));
+
         fsmMap.entrySet().removeIf(entry -> {
             FsmState state = entry.getValue();
             if (state != null && alertId.equals(state.getAlertId())) {
-                if (!effectiveSnooze.isZero()) {
-                    snoozeUntilMap.put(entry.getKey(), snoozeUntil);
-                } else {
-                    snoozeUntilMap.remove(entry.getKey());
+                applySnoozeKey(entry.getKey(), effectiveSnooze, snoozeUntil);
+                if (state.getIncidentKey() != null) {
+                    applySnoozeKey(state.getIncidentKey(), effectiveSnooze, snoozeUntil);
+                }
+                if (state.isLocalLedEnabled() && state.getHardwareId() != null) {
+                    resetHardwareIds.add(state.getHardwareId());
                 }
                 return true;
             }
             return false;
         });
+
+        for (String hw : resetHardwareIds) {
+            deviceCommandPublisher.publishLedState(hw, DeviceCommandPublisher.LED_NORMAL, "ALERT_RESOLVED", null, null);
+        }
         log.debug("Removed FSM state and applied snooze ({}) for resolved alertId={}", effectiveSnooze, alertId);
     }
 
@@ -1334,46 +1989,82 @@ public class AlertRuleEngine {
                 ? snoozeDuration
                 : DEFAULT_SNOOZE_DURATION;
         Instant snoozeUntil = clock.instant().plus(effectiveSnooze);
+        String resolvedMetric = resolveMetricType(alert);
+        String incidentKey = resolveRoomIncidentKey(alert.getRoomId(), alert.getType(), resolvedMetric);
+        Set<String> resetHardwareIds = new HashSet<>();
+
+        if (incidentKey != null) {
+            roomIncidentAlertIds.remove(incidentKey);
+            applySnoozeKey(incidentKey, effectiveSnooze, snoozeUntil);
+        }
 
         final boolean[] removedFromFsm = { false };
-        if (alert.getId() != null) {
-            fsmMap.entrySet().removeIf(entry -> {
-                FsmState state = entry.getValue();
-                if (state != null && alert.getId().equals(state.getAlertId())) {
-                    if (!effectiveSnooze.isZero()) {
-                        snoozeUntilMap.put(entry.getKey(), snoozeUntil);
-                    } else {
-                        snoozeUntilMap.remove(entry.getKey());
-                    }
-                    removedFromFsm[0] = true;
-                    return true;
+        fsmMap.entrySet().removeIf(entry -> {
+            FsmState state = entry.getValue();
+            if (state == null) return false;
+            boolean matchesAlert = (alert.getId() != null && alert.getId().equals(state.getAlertId()))
+                    || (incidentKey != null && incidentKey.equals(state.getIncidentKey()));
+            if (matchesAlert) {
+                applySnoozeKey(entry.getKey(), effectiveSnooze, snoozeUntil);
+                if (state.isLocalLedEnabled() && state.getHardwareId() != null) {
+                    resetHardwareIds.add(state.getHardwareId());
                 }
-                return false;
-            });
-        }
+                if (state.getDeviceId() != null) {
+                    noisePeakPulsesMap.remove(state.getDeviceId() + ":NOISE_PEAK_PULSES");
+                }
+                removedFromFsm[0] = true;
+                return true;
+            }
+            return false;
+        });
 
         if (!removedFromFsm[0]) {
             String targetId = alert.getDeviceId() != null && !alert.getDeviceId().isBlank()
                     ? alert.getDeviceId()
                     : (alert.getRoomId() != null && !alert.getRoomId().isBlank() ? alert.getRoomId() : alert.getHardwareId());
             if (targetId != null && !targetId.isBlank()) {
-                String key = targetId + ":" + resolveMetricType(alert);
+                String key = targetId + ":" + resolvedMetric;
                 fsmMap.remove(key);
-                if (!effectiveSnooze.isZero()) {
-                    snoozeUntilMap.put(key, snoozeUntil);
-                } else {
-                    snoozeUntilMap.remove(key);
+                applySnoozeKey(key, effectiveSnooze, snoozeUntil);
+                noisePeakPulsesMap.remove(targetId + ":NOISE_PEAK_PULSES");
+            }
+        }
+
+        if (alert.getAffectedNodes() != null) {
+            for (AffectedNodeSnapshot snap : alert.getAffectedNodes()) {
+                if (snap != null && snap.getHardwareId() != null) {
+                    resetHardwareIds.add(snap.getHardwareId());
                 }
             }
         }
+        if (alert.getHardwareId() != null) {
+            resetHardwareIds.add(alert.getHardwareId());
+        }
+        for (String hw : resetHardwareIds) {
+            deviceCommandPublisher.publishLedState(hw, DeviceCommandPublisher.LED_NORMAL, "ALERT_RESOLVED", null, null);
+        }
+
         log.debug("Removed FSM state and applied snooze ({}) for resolved alertId={}", effectiveSnooze, alert.getId());
+    }
+
+    private void applySnoozeKey(String key, Duration snoozeDuration, Instant snoozeUntil) {
+        if (key == null) return;
+        if (!snoozeDuration.isZero()) {
+            snoozeUntilMap.put(key, snoozeUntil);
+        } else {
+            snoozeUntilMap.remove(key);
+        }
     }
 
     public void reset() {
         fsmMap.clear();
+        roomIncidentAlertIds.clear();
         noisePeakPulsesMap.clear();
         snoozeUntilMap.clear();
         roomContextCache.invalidateAll();
+        if (deviceCommandPublisher != null) {
+            deviceCommandPublisher.reset();
+        }
     }
 
     static String resolveUnit(String metricType, AlertType type) {
@@ -1434,7 +2125,11 @@ public class AlertRuleEngine {
                 .workflowStatus(workflowStatus)
                 .assignedTo(alert.getAssignedTo())
                 .handlingNote(alert.getHandlingNote())
+                .resolutionTag(alert.getResolutionTag())
                 .inProgressAt(alert.getInProgressAt())
+                .sensorRecovered(alert.getSensorRecovered())
+                .sensorRecoveredAt(alert.getSensorRecoveredAt())
+                .affectedNodes(alert.getAffectedNodes())
                 .currentValue(alert.getCurrentValue())
                 .threshold(alert.getThreshold())
                 .message(alert.getMessage())

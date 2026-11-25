@@ -176,7 +176,7 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("FSM: Vượt ngưỡng liên tục >= 30s -> Chuyển FIRING, lưu MongoDB và publish STOMP")
+    @DisplayName("FSM: Độ ồn phòng đọc vượt ngưỡng liên tục -> 0..59s bật LED Tầng 1 (PENDING), đủ 60s chuyển FIRING")
     void evaluate_continuousBreach30s_transitionsToFiring() {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> {
             Alert a = invocation.getArgument(0);
@@ -184,16 +184,16 @@ class AlertServiceTest {
             return a;
         });
 
-        // t = 0s: Vượt ngưỡng -> PENDING
+        // t = 0s: Vượt ngưỡng -> PENDING + bật LED WARN_PULSE
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(68.0, null));
 
-        // t = 20s: Vẫn vượt ngưỡng -> Vẫn PENDING
-        mutableClock.advance(Duration.ofSeconds(20));
+        // t = 30s: Đang trong pha LED Tầng 1 (60s) -> Vẫn PENDING, chưa làm phiền thủ thư
+        mutableClock.advance(Duration.ofSeconds(30));
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(69.0, null));
         verify(alertRepository, never()).save(any());
 
-        // t = 30s: Đủ 30s liên tục -> Chuyển FIRING
-        mutableClock.advance(Duration.ofSeconds(10));
+        // t = 60s: Đủ 60s liên tục sinh viên không giảm ồn -> Chuyển FIRING
+        mutableClock.advance(Duration.ofSeconds(30));
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(71.0, null));
 
         ArgumentCaptor<Alert> alertCaptor = ArgumentCaptor.forClass(Alert.class);
@@ -408,7 +408,7 @@ class AlertServiceTest {
     }
 
     @Test
-    @DisplayName("FSM: 3 xung âm (noisePeak >= 75 dBA) trong 60s kích hoạt FIRING ngay với severity HIGH, duy trì qua hysteresis")
+    @DisplayName("FSM: 3 xung âm (noisePeak >= 75 dBA) kích hoạt PENDING + LED Tầng 1, tiếp tục ồn đủ 60s chuyển FIRING HIGH và hồi phục qua hysteresis")
     void evaluate_noisePeakSpike_transitionsToFiringWithout30sContinuousBreach() {
         when(alertRepository.save(any(Alert.class))).thenAnswer(invocation -> {
             Alert a = invocation.getArgument(0);
@@ -416,16 +416,24 @@ class AlertServiceTest {
             return a;
         });
 
-        // Xung 1 & 2 (82.0 dBA): chưa đủ 3 xung -> chưa báo
+        // Xung 1 & 2 (82.0 dBA): chưa đủ 3 xung -> chưa vào PENDING
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 82.0));
         mutableClock.advance(Duration.ofSeconds(10));
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(50.0, 81.0));
         verify(alertRepository, never()).save(any());
 
-        // Xung 3 trong vòng 60s -> FIRING ngay lập tức
+        // Xung 3 trong vòng 60s -> Vào PENDING Tầng 1 (bật LED WARN_PULSE nhắc sinh viên tại bàn)
         mutableClock.advance(Duration.ofSeconds(10));
         TelemetryPayload.TelemetryData spikeData = createAcousticsData(50.0, 82.0);
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", spikeData);
+        assertThat(alertRuleEngine.getFsmMap().get("dev-1:NOISE_PEAK").getStatus()).isEqualTo(AlertStatus.PENDING);
+        verify(alertRepository, never()).save(any());
+
+        // Nhóm sinh viên phớt lờ đèn LED, tiếp tục phát xung ồn xuyên suốt 60s kế tiếp -> Nâng lên FIRING HIGH
+        for (int i = 0; i < 4; i++) {
+            mutableClock.advance(Duration.ofSeconds(15));
+            alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", spikeData);
+        }
 
         ArgumentCaptor<Alert> alertCaptor = ArgumentCaptor.forClass(Alert.class);
         verify(alertRepository, times(1)).save(alertCaptor.capture());
@@ -587,9 +595,9 @@ class AlertServiceTest {
             return a;
         });
 
-        // Vượt ngưỡng 66.0 dBA trong 30s -> FIRING
+        // Vượt ngưỡng 66.0 dBA trong 60s (pha LED Tầng 1 phòng đọc) -> FIRING
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(66.0, null));
-        mutableClock.advance(Duration.ofSeconds(30));
+        mutableClock.advance(Duration.ofSeconds(60));
         alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", createAcousticsData(66.5, null));
 
         AlertRuleEngine.FsmState state = alertRuleEngine.getFsmMap().get("dev-1:NOISE_AVG");
@@ -1086,7 +1094,7 @@ class AlertServiceTest {
         }
 
         @Test
-        @DisplayName("Test 2 (3 xung cách nhau >= 3s nổ HIGH): t=0s, 4s, 8s và biên chính xác t=0s, 3s, 6s kích hoạt FIRING HIGH")
+        @DisplayName("Test 2 (3 xung cách nhau >= 3s kích hoạt PENDING LED Tầng 1, duy trì 60s nổ HIGH): t=0s, 4s, 8s và biên t=0s, 3s, 6s")
         void noisePeak_threePulsesSpacedAtLeast3Seconds_firesHighAlert() {
             when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
                 Alert a = inv.getArgument(0);
@@ -1104,11 +1112,18 @@ class AlertServiceTest {
             assertThat(alertRuleEngine.getNoisePeakPulsesMap().get("dev-1:NOISE_PEAK_PULSES")).hasSize(2);
             verify(alertRepository, never()).save(any());
 
-            // t = 8s -> Xung 3 -> FIRING (HIGH)
+            // t = 8s -> Xung 3 -> Vào PENDING Tầng 1 (bật LED WARN_PULSE)
             mutableClock.advance(Duration.ofSeconds(4));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
-
             assertThat(alertRuleEngine.getNoisePeakPulsesMap().get("dev-1:NOISE_PEAK_PULSES")).hasSize(3);
+            assertThat(alertRuleEngine.getFsmMap().get("dev-1:NOISE_PEAK").getStatus()).isEqualTo(AlertStatus.PENDING);
+
+            // Tiếp tục có xung ồn suốt 60s -> Nâng lên FIRING (HIGH)
+            for (int i = 0; i < 4; i++) {
+                mutableClock.advance(Duration.ofSeconds(15));
+                alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
+            }
+
             ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
             verify(alertRepository, times(1)).save(captor.capture());
             Alert saved = captor.getValue();
@@ -1118,7 +1133,7 @@ class AlertServiceTest {
             assertThat(saved.getCurrentValue()).isEqualTo(78.0);
             verify(realtimePublisher, times(1)).publishAlert(any(AlertResponse.class));
 
-            // Kiểm tra biên chính xác 3s (t=0s, 3s, 6s) trên thiết bị khác
+            // Kiểm tra biên chính xác 3s (t=0s, 3s, 6s) trên thiết bị khác rồi duy trì 60s
             alertRuleEngine.reset();
             alertService.evaluateTelemetry("dev-2", "HW-2", "room-1", "ZONE_A", createAcousticsData(50.0, 77.5));
             mutableClock.advance(Duration.ofSeconds(3));
@@ -1127,17 +1142,24 @@ class AlertServiceTest {
             alertService.evaluateTelemetry("dev-2", "HW-2", "room-1", "ZONE_A", createAcousticsData(50.0, 77.5));
 
             assertThat(alertRuleEngine.getNoisePeakPulsesMap().get("dev-2:NOISE_PEAK_PULSES")).hasSize(3);
+            for (int i = 0; i < 4; i++) {
+                mutableClock.advance(Duration.ofSeconds(15));
+                alertService.evaluateTelemetry("dev-2", "HW-2", "room-1", "ZONE_A", createAcousticsData(50.0, 77.5));
+            }
             verify(alertRepository, times(2)).save(any(Alert.class));
         }
 
         @Test
         @DisplayName("Test 3 (NOISE_PEAK >= 85 dBA nổ CRITICAL tức thì bất chấp cooldown)")
         void noisePeak_severeSpike_firesCriticalImmediatelyEvenDuringCooldown() {
+            Alert[] room1Alert = new Alert[1];
             when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
                 Alert a = inv.getArgument(0);
                 if (a.getId() == null) a.setId("alert-crit-" + a.getDeviceId());
+                room1Alert[0] = a;
                 return a;
             });
+            lenient().when(alertRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(room1Alert[0]));
 
             // Trường hợp 3a: 1 gói duy nhất >= 85 dBA ở t = 0s
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 86.0));
@@ -1148,7 +1170,7 @@ class AlertServiceTest {
             assertThat(captor.getValue().getStatus()).isEqualTo(AlertStatus.FIRING);
             assertThat(captor.getValue().getCurrentValue()).isEqualTo(86.0);
 
-            // Trường hợp 3b: Thiết bị khác có xung 78.0 dBA ở t = 0s, sau 0.5s (đang trong cooldown 3s) vọt 86.0 dBA -> Vẫn nổ CRITICAL ngay
+            // Trường hợp 3b: Thiết bị khác có xung 78.0 dBA ở t = 0s, sau 0.5s (đang trong cooldown 3s) vọt 86.0 dBA -> Vẫn nổ CRITICAL ngay & trở thành tâm chấn mới
             alertService.evaluateTelemetry("dev-2", "HW-2", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofMillis(500));
             alertService.evaluateTelemetry("dev-2", "HW-2", "room-1", "ZONE_A", createAcousticsData(50.0, 86.0));
@@ -1158,10 +1180,11 @@ class AlertServiceTest {
             assertThat(secondSaved.getDeviceId()).isEqualTo("dev-2");
             assertThat(secondSaved.getSeverity()).isEqualTo(AlertSeverity.CRITICAL);
             assertThat(secondSaved.getStatus()).isEqualTo(AlertStatus.FIRING);
+            assertThat(secondSaved.getAffectedNodes()).hasSize(2);
         }
 
         @Test
-        @DisplayName("Test 4a (Giữ PENDING trong vùng Deadband): Dao động nhẹ (63.0, 65.0] giữ nguyên pendingSince và nổ FIRING đúng mốc 30s")
+        @DisplayName("Test 4a (Giữ PENDING trong vùng Deadband): Dao động nhẹ (63.0, 65.0] giữ nguyên pendingSince và nổ FIRING đúng mốc 60s")
         void pending_fluctuationInDeadband_retainsPendingAndFiresAt30s() {
             when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
                 Alert a = inv.getArgument(0);
@@ -1177,8 +1200,8 @@ class AlertServiceTest {
             assertThat(pendingState.getStatus()).isEqualTo(AlertStatus.PENDING);
             assertThat(pendingState.getPendingSince()).isEqualTo(t0);
 
-            // t = 15s: tụt nhẹ xuống 64.2 dBA (trong vùng deadband (63.0, 65.0]) -> vẫn giữ PENDING và pendingSince gốc
-            mutableClock.advance(Duration.ofSeconds(15));
+            // t = 30s: tụt nhẹ xuống 64.2 dBA (trong vùng deadband (63.0, 65.0]) -> vẫn giữ PENDING và pendingSince gốc
+            mutableClock.advance(Duration.ofSeconds(30));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(64.2, null));
             pendingState = alertRuleEngine.getFsmMap().get("dev-1:NOISE_AVG");
             assertThat(pendingState).isNotNull();
@@ -1187,13 +1210,13 @@ class AlertServiceTest {
             assertThat(pendingState.getLastValue()).isEqualTo(64.2);
             verify(alertRepository, never()).save(any());
 
-            // t = 30s: Nếu vẫn đứng ở mức deadband 65.0 dBA (chưa vượt ngưỡng) -> vẫn PENDING, không bắn giả
-            mutableClock.advance(Duration.ofSeconds(15));
+            // t = 60s: Nếu vẫn đứng ở mức deadband 65.0 dBA (chưa vượt ngưỡng) -> vẫn PENDING, không bắn giả
+            mutableClock.advance(Duration.ofSeconds(30));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(65.0, null));
             assertThat(alertRuleEngine.getFsmMap().get("dev-1:NOISE_AVG").getStatus()).isEqualTo(AlertStatus.PENDING);
             verify(alertRepository, never()).save(any());
 
-            // t = 30.5s: Vọt lại 66.5 dBA -> Đủ 30s tính từ t0 -> Nổ FIRING
+            // t = 60.5s: Vọt lại 66.5 dBA -> Đủ 60s tính từ t0 -> Nổ FIRING
             mutableClock.advance(Duration.ofMillis(500));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(66.5, null));
 
@@ -1361,7 +1384,7 @@ class AlertServiceTest {
         }
 
         @Test
-        @DisplayName("Test 4: Mức CRITICAL (NOISE_PEAK >= 85 dBA) phá vỡ Snooze ngay lập tức")
+        @DisplayName("Test 4: Mức CRITICAL (NOISE_PEAK >= 85 dBA) phá vỡ Snooze ngay lập tức (cả khóa thiết bị và khóa phòng)")
         void snooze_overriddenImmediatelyByCriticalAlert() {
             when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
                 Alert a = inv.getArgument(0);
@@ -1371,27 +1394,31 @@ class AlertServiceTest {
                 return a;
             });
 
-            // 3 xung 78.0 dBA cách nhau 4s -> Nổ NOISE_PEAK (HIGH)
+            // 3 xung 78.0 dBA cách nhau 4s -> PENDING Tầng 1, tiếp tục duy trì đủ 60s -> Nổ NOISE_PEAK (HIGH)
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
+            for (int i = 0; i < 4; i++) {
+                mutableClock.advance(Duration.ofSeconds(15));
+                alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
+            }
 
             ArgumentCaptor<Alert> captor = ArgumentCaptor.forClass(Alert.class);
             verify(alertRepository, times(1)).save(captor.capture());
             Alert highAlert = captor.getValue();
             when(alertRepository.findById("alert-peak-high")).thenReturn(Optional.of(highAlert));
 
-            // Đóng sự cố -> Snooze 15 phút cho dev-1:NOISE_PEAK
+            // Đóng sự cố -> Snooze 15 phút cho cả trạm và cả phòng room:room-1:NOISE
             alertService.resolveAlert("alert-peak-high", "librarian_a");
-            assertThat(alertRuleEngine.getSnoozeUntilMap()).containsKey("dev-1:NOISE_PEAK");
+            assertThat(alertRuleEngine.getSnoozeUntilMap()).containsKeys("dev-1:NOISE_PEAK", "room:room-1:NOISE");
 
-            // Phút thứ 1: thêm 3 xung 78.0 dBA (HIGH) -> Bị Snooze chặn hoàn toàn
+            // Phút thứ 1: thêm xung 78.0 dBA (kể cả trên trạm khác cùng phòng) -> Bị Snooze chặn hoàn toàn
             mutableClock.advance(Duration.ofMinutes(1));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
-            alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
+            alertService.evaluateTelemetry("dev-2", "HW-2", "room-1", "ZONE_A", createAcousticsData(68.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             verify(alertRepository, times(2)).save(any(Alert.class)); // vẫn chỉ 1 FIRING + 1 RESOLVED
@@ -1401,6 +1428,7 @@ class AlertServiceTest {
             alertService.evaluateTelemetry("dev-1", "HW-1", "room-1", "ZONE_A", createAcousticsData(50.0, 88.0));
 
             assertThat(alertRuleEngine.getSnoozeUntilMap()).doesNotContainKey("dev-1:NOISE_PEAK");
+            assertThat(alertRuleEngine.getSnoozeUntilMap()).doesNotContainKey("room:room-1:NOISE");
             verify(alertRepository, times(3)).save(captor.capture());
             Alert critAlert = captor.getValue();
             assertThat(critAlert.getSeverity()).isEqualTo(AlertSeverity.CRITICAL);
@@ -1914,12 +1942,16 @@ class AlertServiceTest {
             });
             when(alertRepository.findById("alert-peak-esc-1")).thenAnswer(inv -> Optional.ofNullable(dbHolder[0]));
 
-            // 3 xung 78 dBA cách nhau 4s (>= 3s cooldown) -> FIRING ở mức HIGH (threshold 75.0)
+            // 3 xung 78 dBA cách nhau 4s (>= 3s cooldown) -> PENDING Tầng 1, tiếp tục duy trì đủ 60s -> FIRING ở mức HIGH (threshold 75.0)
             alertService.evaluateTelemetry("dev-esc", "HW-ESC", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
             alertService.evaluateTelemetry("dev-esc", "HW-ESC", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
             alertService.evaluateTelemetry("dev-esc", "HW-ESC", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
+            for (int i = 0; i < 4; i++) {
+                mutableClock.advance(Duration.ofSeconds(15));
+                alertService.evaluateTelemetry("dev-esc", "HW-ESC", "room-1", "ZONE_A", createAcousticsData(50.0, 78.0));
+            }
 
             verify(alertRepository, times(1)).save(any(Alert.class));
             assertThat(dbHolder[0].getSeverity()).isEqualTo(AlertSeverity.HIGH);
@@ -2353,6 +2385,10 @@ class AlertServiceTest {
             emailWiredService.evaluateTelemetry("dev-noise-r2", "HW-R2", "room-2", "ZONE_B", createAcousticsData(50.0, 78.0));
             mutableClock.advance(Duration.ofSeconds(4));
             emailWiredService.evaluateTelemetry("dev-noise-r2", "HW-R2", "room-2", "ZONE_B", createAcousticsData(50.0, 78.0));
+            for (int i = 0; i < 4; i++) {
+                mutableClock.advance(Duration.ofSeconds(15));
+                emailWiredService.evaluateTelemetry("dev-noise-r2", "HW-R2", "room-2", "ZONE_B", createAcousticsData(50.0, 78.0));
+            }
 
             // Mới chỉ là HIGH -> chưa gửi mail ngay
             verify(mailSender, times(1)).send(any(SimpleMailMessage.class));
@@ -2964,6 +3000,187 @@ class AlertServiceTest {
             assertThat(res.getAssignedTo()).isEqualTo("ktv.minh");
             assertThat(res.getHandlingNote()).isEqualTo("Phối hợp xử lý");
             verify(realtimePublisher, times(1)).publishAlert(any(AlertResponse.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("Hạng mục 10: Quy trình Tinh gọn 2 Tầng (LED 60s tại chỗ, Gộp >4 Node theo Phòng & 2 Chạm Chờ Chốt Ca 15p)")
+    class TwoTierAndRoomGroupingTests {
+
+        @Test
+        @DisplayName("Tầng 1 LED: Ồn phòng đọc bật WARN_PULSE ngay, tự êm trước 60s trả LED NORMAL & 0 tạo Alert; Nhiệt/Kho sách không nháy LED")
+        void tier1Led_studyRoomNoiseSelfRegulatesUnder60s_whileTempAndBookStorageNeverBlinkLed() {
+            DeviceCommandPublisher cmdPublisher = mock(DeviceCommandPublisher.class);
+            alertRuleEngine.setDeviceCommandPublisher(cmdPublisher);
+
+            // 1. Tiếng ồn phòng đọc 69 dBA -> bật WARN_PULSE ngay giây 0, không ghi DB
+            alertService.evaluateTelemetry("dev-301-a", "ESP32_301_A", "room-301", "ZONE_A", createAcousticsData(69.0, null));
+            verify(cmdPublisher, times(1)).publishLedState(
+                    eq("ESP32_301_A"), eq(DeviceCommandPublisher.LED_WARN_PULSE), anyString(), eq(69.0), eq(65.0));
+            verify(alertRepository, never()).save(any());
+
+            // Sinh viên thấy đèn LED, hạ giọng về 55 dBA ở giây 40 (< 60s) -> trả LED về NORMAL, hủy ngầm
+            mutableClock.advance(Duration.ofSeconds(40));
+            alertService.evaluateTelemetry("dev-301-a", "ESP32_301_A", "room-301", "ZONE_A", createAcousticsData(55.0, null));
+            verify(cmdPublisher, times(1)).publishLedState(
+                    eq("ESP32_301_A"), eq(DeviceCommandPublisher.LED_NORMAL), anyString(), eq(55.0), eq(65.0));
+            verify(alertRepository, never()).save(any());
+            verify(realtimePublisher, never()).publishAlert(any());
+
+            // 2. Nhiệt độ phòng đọc & Tiếng ồn kho sách BOOK_STORAGE -> KHÔNG bao giờ phát lệnh LED làm phân tâm
+            reset(cmdPublisher);
+            Room storage = Room.builder().id("room-storage-led").type(RoomType.BOOK_STORAGE).build();
+            when(roomRepository.findById("room-storage-led")).thenReturn(Optional.of(storage));
+
+            alertService.evaluateTelemetry("dev-301-a", "ESP32_301_A", "room-301", "ZONE_A", createEnvironmentData(35.0));
+            alertService.evaluateTelemetry("dev-st-1", "ESP32_ST_1", "room-storage-led", "ZONE_A", createAcousticsData(74.0, 82.0));
+            verify(cmdPublisher, never()).publishLedState(anyString(), anyString(), anyString(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Gộp phòng 460m² (5 cảm biến): 5 trạm cùng báo NOISE_AVG & NOISE_PEAK chỉ tạo 01 Alert, tự trỏ tâm chấn cao nhất & chỉ êm khi cả 5 trạm êm")
+        void multiSensorRoomGrouping_fiveNodesMergeIntoSingleRoomAlertWithDynamicEpicenter() {
+            Alert[] roomAlert = new Alert[1];
+            AtomicInteger createdCount = new AtomicInteger(0);
+            when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
+                Alert a = inv.getArgument(0);
+                if (a.getId() == null) {
+                    a.setId("room-460-noise-" + createdCount.incrementAndGet());
+                }
+                roomAlert[0] = a;
+                return a;
+            });
+            lenient().when(alertRepository.findById(anyString())).thenAnswer(inv -> Optional.ofNullable(roomAlert[0]));
+
+            // t = 0s..8s: 5 trạm trong phòng room-460 cùng vượt ngưỡng ồn (trạm 4 có cả NOISE_PEAK 3 xung 81 dBA)
+            for (int step = 0; step < 3; step++) {
+                if (step > 0) mutableClock.advance(Duration.ofSeconds(4));
+                alertService.evaluateTelemetry("dev-1", "HW-1", "room-460", "ZONE_A", createAcousticsData(67.0, 55.0));
+                alertService.evaluateTelemetry("dev-2", "HW-2", "room-460", "ZONE_A", createAcousticsData(71.5, 60.0));
+                alertService.evaluateTelemetry("dev-3", "HW-3", "room-460", "ZONE_A", createAcousticsData(68.0, 58.0));
+                alertService.evaluateTelemetry("dev-4", "HW-4", "room-460", "ZONE_A", createAcousticsData(72.0, 81.0));
+                alertService.evaluateTelemetry("dev-5", "HW-5", "room-460", "ZONE_A", createAcousticsData(66.2, 54.0));
+            }
+
+            // Duy trì 60s vượt qua Tầng 1 LED
+            for (int i = 0; i < 4; i++) {
+                mutableClock.advance(Duration.ofSeconds(15));
+                alertService.evaluateTelemetry("dev-1", "HW-1", "room-460", "ZONE_A", createAcousticsData(67.0, 55.0));
+                alertService.evaluateTelemetry("dev-2", "HW-2", "room-460", "ZONE_A", createAcousticsData(71.5, 60.0));
+                alertService.evaluateTelemetry("dev-3", "HW-3", "room-460", "ZONE_A", createAcousticsData(68.0, 58.0));
+                alertService.evaluateTelemetry("dev-4", "HW-4", "room-460", "ZONE_A", createAcousticsData(72.0, 81.0));
+                alertService.evaluateTelemetry("dev-5", "HW-5", "room-460", "ZONE_A", createAcousticsData(66.2, 54.0));
+            }
+
+            // Chỉ tạo DUY NHẤT 01 bản ghi Alert cho cả 5 trạm × 2 kênh âm học!
+            assertThat(createdCount.get()).isEqualTo(1);
+            assertThat(roomAlert[0]).isNotNull();
+            assertThat(roomAlert[0].getId()).isEqualTo("room-460-noise-1");
+            assertThat(roomAlert[0].getDeviceId()).isEqualTo("dev-4");
+            assertThat(roomAlert[0].getHardwareId()).isEqualTo("HW-4");
+            assertThat(roomAlert[0].getSeverity()).isEqualTo(AlertSeverity.HIGH);
+            assertThat(roomAlert[0].getCurrentValue()).isEqualTo(81.0);
+            assertThat(roomAlert[0].getAffectedNodes()).hasSize(5);
+
+            // 4 trạm êm suốt 65s nhưng dev-2 vẫn ồn 70 dBA -> Sự cố phòng CHƯA đóng, tâm chấn tự chuyển sang dev-2
+            mutableClock.advance(Duration.ofSeconds(5));
+            for (int round = 0; round < 2; round++) {
+                if (round == 1) mutableClock.advance(Duration.ofSeconds(65));
+                alertService.evaluateTelemetry("dev-1", "HW-1", "room-460", "ZONE_A", createAcousticsData(48.0, 50.0));
+                alertService.evaluateTelemetry("dev-2", "HW-2", "room-460", "ZONE_A", createAcousticsData(70.0, 58.0));
+                alertService.evaluateTelemetry("dev-3", "HW-3", "room-460", "ZONE_A", createAcousticsData(48.0, 50.0));
+                alertService.evaluateTelemetry("dev-4", "HW-4", "room-460", "ZONE_A", createAcousticsData(48.0, 50.0));
+                alertService.evaluateTelemetry("dev-5", "HW-5", "room-460", "ZONE_A", createAcousticsData(48.0, 50.0));
+            }
+
+            assertThat(roomAlert[0].getStatus()).isEqualTo(AlertStatus.FIRING);
+            assertThat(roomAlert[0].getDeviceId()).isEqualTo("dev-2");
+            assertThat(roomAlert[0].getAffectedNodes()).hasSize(1);
+
+            // Tới khi dev-2 cũng êm đủ 60s -> Tự đóng hoàn toàn
+            mutableClock.advance(Duration.ofSeconds(5));
+            alertService.evaluateTelemetry("dev-2", "HW-2", "room-460", "ZONE_A", createAcousticsData(48.0, 50.0));
+            mutableClock.advance(Duration.ofSeconds(60));
+            alertService.evaluateTelemetry("dev-2", "HW-2", "room-460", "ZONE_A", createAcousticsData(48.0, 50.0));
+
+            assertThat(roomAlert[0].getStatus()).isEqualTo(AlertStatus.RESOLVED);
+        }
+
+        @Test
+        @DisplayName("Quy trình 2 Chạm: Chạm 1 tự gán người nhận + LED STAFF_DISPATCHED -> Êm 60s giữ chờ 15p -> Quá 15p tự chốt & vẫn cho gắn Tag bổ sung")
+        void twoTapWorkflow_claimHolds15MinGraceAfterSensorRecovery_sweepsAndAllowsPostResolveTagging() {
+            DeviceCommandPublisher cmdPublisher = mock(DeviceCommandPublisher.class);
+            alertRuleEngine.setDeviceCommandPublisher(cmdPublisher);
+
+            Alert[] dbHolder = new Alert[1];
+            when(alertRepository.save(any(Alert.class))).thenAnswer(inv -> {
+                Alert a = inv.getArgument(0);
+                if (a.getId() == null) a.setId("alert-2tap-1");
+                dbHolder[0] = a;
+                return a;
+            });
+            when(alertRepository.findById("alert-2tap-1")).thenAnswer(inv -> Optional.ofNullable(dbHolder[0]));
+            when(alertRepository.findByStatusIn(anyList())).thenAnswer(inv ->
+                    dbHolder[0] != null && dbHolder[0].getStatus() != AlertStatus.RESOLVED
+                            ? List.of(dbHolder[0])
+                            : List.of());
+
+            // 1. Nổ cảnh báo ồn sau 60s
+            alertService.evaluateTelemetry("dev-1", "HW-301", "room-301", "ZONE_A", createAcousticsData(70.0, null));
+            mutableClock.advance(Duration.ofSeconds(60));
+            alertService.evaluateTelemetry("dev-1", "HW-301", "room-301", "ZONE_A", createAcousticsData(70.5, null));
+            assertThat(dbHolder[0].getStatus()).isEqualTo(AlertStatus.FIRING);
+
+            // 2. CHẠM 1: Thủ thư bấm [Nhận xử lý] (IN_PROGRESS, không truyền assignedTo) -> Tự gán thuthu_lan & đổi LED STAFF_DISPATCHED
+            AlertResponse claimed = alertService.updateAlertWorkflow(
+                    "alert-2tap-1",
+                    AlertWorkflowUpdateRequest.builder().workflowStatus(AlertWorkflowStatus.IN_PROGRESS).build(),
+                    "thuthu_lan"
+            );
+            assertThat(claimed.getStatus()).isEqualTo(AlertStatus.ACKNOWLEDGED);
+            assertThat(claimed.getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.IN_PROGRESS);
+            assertThat(claimed.getAssignedTo()).isEqualTo("thuthu_lan");
+            verify(cmdPublisher).publishLedState(
+                    eq("HW-301"), eq(DeviceCommandPublisher.LED_STAFF_DISPATCHED), anyString(), any(), any());
+
+            // 3. Sinh viên được nhắc đã im lặng suốt 60s -> Cảm biến hồi phục: KHÔNG đóng cướp sang RESOLVED, bật sensorRecovered = true
+            mutableClock.advance(Duration.ofSeconds(10));
+            alertService.evaluateTelemetry("dev-1", "HW-301", "room-301", "ZONE_A", createAcousticsData(49.0, null));
+            mutableClock.advance(Duration.ofSeconds(60));
+            alertService.evaluateTelemetry("dev-1", "HW-301", "room-301", "ZONE_A", createAcousticsData(49.0, null));
+
+            assertThat(dbHolder[0].getStatus()).isEqualTo(AlertStatus.ACKNOWLEDGED);
+            assertThat(dbHolder[0].getWorkflowStatus()).isEqualTo(AlertWorkflowStatus.IN_PROGRESS);
+            assertThat(dbHolder[0].getSensorRecovered()).isTrue();
+            assertThat(dbHolder[0].getSensorRecoveredAt()).isEqualTo(mutableClock.instant());
+            verify(cmdPublisher).publishLedState(
+                    eq("HW-301"), eq(DeviceCommandPublisher.LED_NORMAL), anyString(), any(), any());
+
+            // 4. Sau 10 phút (< 15 phút): Job quét chưa tự chốt, vẫn đợi thủ thư bấm Chạm 2
+            mutableClock.advance(Duration.ofMinutes(10));
+            assertThat(alertRuleEngine.sweepRecoveredUnconfirmedAlerts()).isZero();
+            assertThat(dbHolder[0].getStatus()).isEqualTo(AlertStatus.ACKNOWLEDGED);
+
+            // 5. Đủ 15 phút thủ thư bận quên bấm -> Tự động chốt kèm AUTO_STABILIZED và tên thuthu_lan
+            mutableClock.advance(Duration.ofMinutes(5));
+            assertThat(alertRuleEngine.sweepRecoveredUnconfirmedAlerts()).isEqualTo(1);
+            assertThat(dbHolder[0].getStatus()).isEqualTo(AlertStatus.RESOLVED);
+            assertThat(dbHolder[0].getResolutionTag()).isEqualTo(AlertRuleEngine.AUTO_STABILIZED_TAG);
+            assertThat(dbHolder[0].getHandlingNote()).contains("thuthu_lan");
+
+            // 6. Sau khi đã RESOLVED, thủ thư quay lại chọn bổ sung Quick-Tag vẫn lưu được vào nhật ký ca trực
+            AlertResponse amended = alertService.updateAlertWorkflow(
+                    "alert-2tap-1",
+                    AlertWorkflowUpdateRequest.builder()
+                            .workflowStatus(AlertWorkflowStatus.RESOLVED)
+                            .resolutionTag("REMINDED_QUIET")
+                            .handlingNote("Đã nhắc giữ trật tự dãy bàn giữa")
+                            .build(),
+                    "thuthu_lan"
+            );
+            assertThat(amended.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+            assertThat(amended.getResolutionTag()).isEqualTo("REMINDED_QUIET");
+            assertThat(amended.getHandlingNote()).isEqualTo("Đã nhắc giữ trật tự dãy bàn giữa");
         }
     }
 }

@@ -41,7 +41,7 @@ interface RoomFormState {
   description: string;
   noiseAvgMax: string;
   noisePeakMax: string;
-  tempMin: string;
+  noisePeakImmediate: string;
   tempMax: string;
   humidityMin: string;
   humidityMax: string;
@@ -58,10 +58,10 @@ const DEFAULT_FORM: RoomFormState = {
   description: '',
   noiseAvgMax: '65',
   noisePeakMax: '75',
-  tempMin: '18',
+  noisePeakImmediate: '85',
   tempMax: '32',
-  humidityMin: '35',
-  humidityMax: '70',
+  humidityMin: '45',
+  humidityMax: '60',
   pm25Max: '50',
 };
 
@@ -124,7 +124,7 @@ export default function AdminRoomsPage() {
       description: room.description ?? '',
       noiseAvgMax: String(th?.noiseAvgMax ?? 65),
       noisePeakMax: String(th?.noisePeakMax ?? 75),
-      tempMin: String(th?.tempMin ?? 18),
+      noisePeakImmediate: String(th?.noisePeakImmediate ?? 85),
       tempMax: String(th?.tempMax ?? 32),
       humidityMin: String(th?.humidityMin ?? 45),
       humidityMax: String(th?.humidityMax ?? 60),
@@ -179,10 +179,16 @@ export default function AdminRoomsPage() {
           body: {
             noiseAvgMax: Number(form.noiseAvgMax) || 65,
             noisePeakMax: Number(form.noisePeakMax) || 75,
-            tempMin: Number(form.tempMin) || 18,
+            noisePeakImmediate: Number(form.noisePeakImmediate) || 85,
             tempMax: Number(form.tempMax) || 32,
-            humidityMin: Number(form.humidityMin) || 40,
-            humidityMax: Number(form.humidityMax) || 60,
+            humidityMin:
+              form.type === 'BOOK_STORAGE'
+                ? Number(form.humidityMin) || 45
+                : editingRoom.thresholds?.humidityMin ?? null,
+            humidityMax:
+              form.type === 'BOOK_STORAGE'
+                ? Number(form.humidityMax) || 60
+                : editingRoom.thresholds?.humidityMax ?? null,
             pm25Max: Number(form.pm25Max) || 50,
           },
         });
@@ -632,7 +638,7 @@ export default function AdminRoomsPage() {
                 <p className="text-xs font-semibold text-slate-800">
                   Ngưỡng cảnh báo vận hành theo phòng (Alert Engine)
                 </p>
-                <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
                   <div>
                     <label htmlFor="th-noise-avg" className="label text-2xs">
                       Ồn TB tối đa (dBA)
@@ -664,6 +670,29 @@ export default function AdminRoomsPage() {
                         setForm((prev) => ({
                           ...prev,
                           noisePeakMax: e.target.value,
+                        }))
+                      }
+                      className="input h-8 text-xs tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="th-noise-peak-immediate"
+                      className="label text-2xs"
+                      title="Vượt mức này sẽ phát cảnh báo CRITICAL tức thì (0s), bỏ qua 60s đèn LED nhắc tại chỗ"
+                    >
+                      Ồn khẩn cấp 0s (dBA)
+                    </label>
+                    <input
+                      id="th-noise-peak-immediate"
+                      data-testid="th-noise-peak-immediate"
+                      type="number"
+                      step="0.5"
+                      value={form.noisePeakImmediate}
+                      onChange={(e) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          noisePeakImmediate: e.target.value,
                         }))
                       }
                       className="input h-8 text-xs tabular-nums"
@@ -705,43 +734,56 @@ export default function AdminRoomsPage() {
                       className="input h-8 text-xs tabular-nums"
                     />
                   </div>
-                  <div>
-                    <label htmlFor="th-hum-min" className="label text-2xs">
-                      Độ ẩm tối thiểu (%RH)
-                    </label>
-                    <input
-                      id="th-hum-min"
-                      type="number"
-                      step="1"
-                      value={form.humidityMin}
-                      onChange={(e) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          humidityMin: e.target.value,
-                        }))
-                      }
-                      className="input h-8 text-xs tabular-nums"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="th-hum-max" className="label text-2xs">
-                      Độ ẩm tối đa (%RH)
-                    </label>
-                    <input
-                      id="th-hum-max"
-                      type="number"
-                      step="1"
-                      value={form.humidityMax}
-                      onChange={(e) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          humidityMax: e.target.value,
-                        }))
-                      }
-                      className="input h-8 text-xs tabular-nums"
-                    />
-                  </div>
                 </div>
+
+                {form.type === 'BOOK_STORAGE' ? (
+                  <div className="mt-2.5 grid grid-cols-2 gap-2.5 border-t border-slate-200/80 pt-2.5">
+                    <div>
+                      <label htmlFor="th-hum-min" className="label text-2xs">
+                        Độ ẩm tối thiểu kho sách (%RH)
+                      </label>
+                      <input
+                        id="th-hum-min"
+                        type="number"
+                        step="1"
+                        value={form.humidityMin}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            humidityMin: e.target.value,
+                          }))
+                        }
+                        className="input h-8 text-xs tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="th-hum-max" className="label text-2xs">
+                        Độ ẩm tối đa kho sách (%RH)
+                      </label>
+                      <input
+                        id="th-hum-max"
+                        type="number"
+                        step="1"
+                        value={form.humidityMax}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            humidityMax: e.target.value,
+                          }))
+                        }
+                        className="input h-8 text-xs tabular-nums"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <p
+                    data-testid="th-humidity-study-room-note"
+                    className="mt-2 rounded border border-slate-200/80 bg-white px-2.5 py-1.5 text-2xs text-slate-500"
+                  >
+                    Lưu ý khí hậu Hà Nội (TQB): Ngưỡng cảnh báo độ ẩm (%RH) chỉ kích hoạt cho{' '}
+                    <strong>Kho lưu trữ sách</strong> có máy hút ẩm chuyên dụng; tại phòng đọc &amp; sảnh mở, độ ẩm chỉ tính vào Điểm tiện nghi (Comfort Score) để tránh báo động giả mùa nồm/mưa.
+                  </p>
+                )}
               </div>
             )}
           </div>

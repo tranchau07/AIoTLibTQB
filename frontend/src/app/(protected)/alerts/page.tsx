@@ -2,11 +2,12 @@
 
 import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import {
+  CheckCircle2,
   MapPin,
   RotateCw,
-  ShieldAlert,
+  Tag,
+  UserCheck,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -19,10 +20,14 @@ import {
 } from '@/components/ui/primitives';
 import { resolveAlertFloorplanTarget } from '@/features/alerts/navigation';
 import {
-  useAcknowledgeAlertMutation,
+  type QuickResolutionTagOption,
+  resolveQuickTagsForAlert,
+  resolveResolutionTagLabelVi,
+} from '@/features/alerts/quickTags';
+import {
   useAlertsQuery,
-  useResolveAlertMutation,
   useUnreadAlertsCountQuery,
+  useUpdateAlertWorkflowMutation,
 } from '@/features/alerts/queries';
 import {
   ALERT_STATUS_META,
@@ -65,7 +70,6 @@ const ALERT_STATUSES: AlertStatus[] = [
 ];
 
 export default function AlertsCenterPage() {
-  const router = useRouter();
   const capabilities = useAuthStore((s) => s.capabilities);
   const { pushToast, audioMuted, setAudioMuted } = useToast();
 
@@ -74,6 +78,9 @@ export default function AlertsCenterPage() {
   const [selectedStatus, setSelectedStatus] = useState<AlertStatus | ''>('');
   const [sortBy, setSortBy] = useState<'startedAt' | 'severity'>('startedAt');
   const [page, setPage] = useState<number>(0);
+  const [pickingTagAlertId, setPickingTagAlertId] = useState<string | null>(
+    null
+  );
 
   const stompConnected = useStompConnectionState();
 
@@ -101,8 +108,7 @@ export default function AlertsCenterPage() {
   );
 
   const alertsQuery = useAlertsQuery(filterParams, capabilities.canViewAlerts);
-  const acknowledgeMutation = useAcknowledgeAlertMutation();
-  const resolveMutation = useResolveAlertMutation();
+  const updateWorkflowMutation = useUpdateAlertWorkflowMutation();
 
   const rooms = useMemo(
     () => roomsQuery.data?.content ?? [],
@@ -126,16 +132,18 @@ export default function AlertsCenterPage() {
     return roomsMap.get(roomId) ?? roomId;
   };
 
-  const handleAcknowledge = async (alert: AlertResponse) => {
+  // CHẠM 1: Nhận xử lý ngay trên bảng, KHÔNG cưỡng bức chuyển trang sang /floorplan
+  const handleClaimAlert = async (alert: AlertResponse) => {
     try {
-      await acknowledgeMutation.mutateAsync(alert.id);
-      const target = resolveAlertFloorplanTarget(alert, rooms, devices);
+      await updateWorkflowMutation.mutateAsync({
+        id: alert.id,
+        body: { workflowStatus: 'IN_PROGRESS' },
+      });
       pushToast({
-        title: 'Đã tiếp nhận & định vị bản đồ nhiệt',
-        message: `Đang chuyển tới ${resolveRoomLabel(target.roomId)} · Node ${target.hardwareId ?? target.deviceId ?? alert.id.slice(0, 8)} trên bản đồ nhiệt.`,
+        title: 'Đã nhận xử lý sự cố',
+        message: `Đã gán phụ trách tại ${resolveRoomLabel(alert.roomId)}. Bấm "Bản đồ nhiệt" nếu cần xem vị trí trạm.`,
         variant: 'success',
       });
-      router.push(target.href);
     } catch (err) {
       const msg =
         err instanceof ApiError
@@ -149,12 +157,24 @@ export default function AlertsCenterPage() {
     }
   };
 
-  const handleResolve = async (alert: AlertResponse) => {
+  // CHẠM 2: Chọn 1 Chip Tag chốt ca trực
+  const handleSelectQuickTag = async (
+    alert: AlertResponse,
+    tag: QuickResolutionTagOption
+  ) => {
     try {
-      await resolveMutation.mutateAsync(alert.id);
+      await updateWorkflowMutation.mutateAsync({
+        id: alert.id,
+        body: {
+          workflowStatus: 'RESOLVED',
+          resolutionTag: tag.code,
+          handlingNote: alert.handlingNote?.trim() || tag.defaultNoteVi,
+        },
+      });
+      setPickingTagAlertId(null);
       pushToast({
-        title: 'Đã đóng sự cố',
-        message: `Sự cố ${alert.id.slice(0, 8)} đã được đóng thành công.`,
+        title: 'Đã lưu nhật ký & đóng sự cố',
+        message: `Kết quả "${tag.labelVi}" tại ${resolveRoomLabel(alert.roomId)} đã được ghi nhận.`,
         variant: 'success',
       });
     } catch (err) {
@@ -289,17 +309,17 @@ export default function AlertsCenterPage() {
         </div>
 
         <div className="card p-4">
-          <span className="metric-label">Quyền vận hành FSM</span>
+          <span className="metric-label">Quy trình 2 chạm ca trực</span>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <span
               className={capabilities.canAcknowledgeAlert ? 'badge-brand' : 'badge-neutral'}
             >
-              Tiếp nhận sự cố
+              1. Nhận xử lý
             </span>
             <span
               className={capabilities.canResolveAlert ? 'badge-success' : 'badge-neutral'}
             >
-              Đóng sự cố
+              2. Đã nhắc xong + Tag
             </span>
           </div>
         </div>
@@ -434,11 +454,11 @@ export default function AlertsCenterPage() {
                   <tr>
                     <th>Trạng thái &amp; Mức độ</th>
                     <th>Loại sự cố</th>
-                    <th>Phòng đọc &amp; Thiết bị</th>
+                    <th>Phòng đọc &amp; Tâm điểm</th>
                     <th>Giá trị / Ngưỡng</th>
-                    <th>Nội dung &amp; Quy trình xử lý (SOP)</th>
+                    <th>Nội dung, SOP &amp; Nhật ký ca trực</th>
                     <th>Thời gian</th>
-                    <th className="text-right">Thao tác FSM</th>
+                    <th className="text-right">Thao tác 2 chạm</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -449,19 +469,30 @@ export default function AlertsCenterPage() {
                       rooms,
                       devices
                     );
-
-                    const canShowAck =
+                    const isResolved = alert.status === 'RESOLVED';
+                    const isClaimed =
+                      !isResolved &&
+                      (alert.workflowStatus === 'IN_PROGRESS' ||
+                        Boolean(alert.assignedTo));
+                    const canShowClaim =
                       capabilities.canAcknowledgeAlert &&
-                      alert.status === 'FIRING';
-                    const canShowResolve =
-                      capabilities.canResolveAlert &&
-                      alert.status !== 'RESOLVED';
-
+                      !isResolved &&
+                      !isClaimed;
+                    const canShowResolve = capabilities.canResolveAlert;
                     const isMutatingThis =
-                      (acknowledgeMutation.isPending &&
-                        acknowledgeMutation.variables === alert.id) ||
-                      (resolveMutation.isPending &&
-                        resolveMutation.variables === alert.id);
+                      updateWorkflowMutation.isPending &&
+                      updateWorkflowMutation.variables?.id === alert.id;
+                    const showQuickTags =
+                      pickingTagAlertId === alert.id ||
+                      (!isResolved && Boolean(alert.sensorRecovered));
+                    const quickTags = resolveQuickTagsForAlert(alert);
+                    const tagLabel = resolveResolutionTagLabelVi(
+                      alert.resolutionTag
+                    );
+                    const spreadCount =
+                      (alert.affectedNodes?.length ?? 0) > 1
+                        ? (alert.affectedNodes?.length ?? 1) - 1
+                        : 0;
 
                     return (
                       <tr key={alert.id}>
@@ -469,6 +500,14 @@ export default function AlertsCenterPage() {
                           <div className="flex flex-col items-start gap-1">
                             <AlertStatusBadge status={alert.status} />
                             <AlertSeverityBadge severity={alert.severity} />
+                            {alert.sensorRecovered && !isResolved && (
+                              <span
+                                data-testid={`alerts-row-recovered-${alert.id}`}
+                                className="inline-flex items-center rounded border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-900"
+                              >
+                                Đã êm — Chờ xác nhận
+                              </span>
+                            )}
                           </div>
                         </td>
 
@@ -480,17 +519,27 @@ export default function AlertsCenterPage() {
                           <Link
                             href={floorplanTarget.href}
                             className="group inline-flex flex-col rounded-md px-1 py-0.5 -mx-1 transition-colors hover:bg-slate-100"
-                            title="Mở đúng phòng & node cảnh báo trên bản đồ nhiệt"
+                            title="Mở đúng phòng & node tâm điểm trên bản đồ nhiệt"
                           >
                             <span className="inline-flex items-center gap-1 font-medium text-slate-900 group-hover:text-brand-600">
                               <MapPin
                                 className="h-3.5 w-3.5 text-rose-500 shrink-0"
                                 aria-hidden="true"
                               />
-                              <span>{resolveRoomLabel(floorplanTarget.roomId ?? alert.roomId)}</span>
+                              <span>
+                                {resolveRoomLabel(
+                                  floorplanTarget.roomId ?? alert.roomId
+                                )}
+                              </span>
                             </span>
                             <span className="font-mono text-2xs text-slate-500 group-hover:text-slate-700">
-                              Node: {floorplanTarget.hardwareId || alert.hardwareId || '--'}
+                              Tâm điểm:{' '}
+                              {floorplanTarget.hardwareId ||
+                                alert.hardwareId ||
+                                '--'}
+                              {spreadCount > 0
+                                ? ` (+${spreadCount} trạm lan)`
+                                : ''}
                             </span>
                           </Link>
                         </td>
@@ -533,10 +582,33 @@ export default function AlertsCenterPage() {
                               formatBottleneckReasonVi(alert.message)) ||
                               '--'}
                           </div>
-                          {alert.recommendedAction && (
+                          {alert.recommendedAction && !isResolved && (
                             <div className="mt-1 rounded border border-amber-200 bg-amber-50/70 px-2 py-1 text-2xs text-amber-900">
                               <strong className="font-semibold">SOP:</strong>{' '}
                               {alert.recommendedAction}
+                            </div>
+                          )}
+                          {(alert.assignedTo ||
+                            tagLabel ||
+                            alert.handlingNote) && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-2xs text-slate-600">
+                              {alert.assignedTo && (
+                                <span className="inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 font-medium text-sky-900 ring-1 ring-inset ring-sky-200">
+                                  <UserCheck className="h-2.5 w-2.5" />
+                                  <span>{alert.assignedTo}</span>
+                                </span>
+                              )}
+                              {tagLabel && (
+                                <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-900 ring-1 ring-inset ring-emerald-200">
+                                  <Tag className="h-2.5 w-2.5" />
+                                  <span>{tagLabel}</span>
+                                </span>
+                              )}
+                              {alert.handlingNote && (
+                                <span className="text-slate-500">
+                                  {alert.handlingNote}
+                                </span>
+                              )}
                             </div>
                           )}
                         </td>
@@ -550,37 +622,83 @@ export default function AlertsCenterPage() {
                           </div>
                         </td>
 
-                        <td className="text-right whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1.5 justify-end">
-                            {canShowAck && (
-                              <button
-                                type="button"
-                                disabled={isMutatingThis}
-                                onClick={() => void handleAcknowledge(alert)}
-                                className="btn-primary btn-sm"
-                                title="Tiếp nhận sự cố và định vị ngay tới phòng & node trên bản đồ nhiệt"
-                              >
-                                <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                                <span>Tiếp nhận</span>
-                              </button>
-                            )}
-                            <Link
-                              href={floorplanTarget.href}
-                              className="btn-secondary btn-sm"
-                              title="Định vị phòng & node cảnh báo trên bản đồ nhiệt 2D"
-                            >
-                              <MapPin className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
-                              <span>Bản đồ nhiệt</span>
-                            </Link>
-                            {canShowResolve && (
-                              <button
-                                type="button"
-                                disabled={isMutatingThis}
-                                onClick={() => void handleResolve(alert)}
+                        <td className="text-right">
+                          <div className="flex flex-col items-end gap-1.5">
+                            <div className="inline-flex flex-wrap items-center gap-1.5 justify-end whitespace-nowrap">
+                              {canShowClaim && (
+                                <button
+                                  type="button"
+                                  data-testid={`alerts-claim-${alert.id}`}
+                                  disabled={isMutatingThis}
+                                  onClick={() => void handleClaimAlert(alert)}
+                                  className="btn-primary btn-sm"
+                                  title="Nhận xử lý ngay tại bảng (không tự nhảy trang)"
+                                >
+                                  <UserCheck
+                                    className="h-3.5 w-3.5"
+                                    aria-hidden="true"
+                                  />
+                                  <span>Nhận xử lý</span>
+                                </button>
+                              )}
+                              {canShowResolve && (
+                                <button
+                                  type="button"
+                                  data-testid={`alerts-resolve-toggle-${alert.id}`}
+                                  disabled={isMutatingThis}
+                                  onClick={() =>
+                                    setPickingTagAlertId((prev) =>
+                                      prev === alert.id ? null : alert.id
+                                    )
+                                  }
+                                  className={
+                                    isResolved
+                                      ? 'btn-secondary btn-sm'
+                                      : 'inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50'
+                                  }
+                                >
+                                  <CheckCircle2
+                                    className="h-3.5 w-3.5"
+                                    aria-hidden="true"
+                                  />
+                                  <span>
+                                    {isResolved ? 'Sửa Tag' : 'Đã nhắc xong'}
+                                  </span>
+                                </button>
+                              )}
+                              <Link
+                                href={floorplanTarget.href}
                                 className="btn-secondary btn-sm"
+                                title="Định vị phòng & node cảnh báo trên bản đồ nhiệt 2D"
                               >
-                                Đóng sự cố
-                              </button>
+                                <MapPin
+                                  className="h-3.5 w-3.5 text-rose-600"
+                                  aria-hidden="true"
+                                />
+                                <span>Bản đồ nhiệt</span>
+                              </Link>
+                            </div>
+
+                            {canShowResolve && showQuickTags && (
+                              <div
+                                data-testid={`alerts-quick-tags-${alert.id}`}
+                                className="flex max-w-xs flex-wrap justify-end gap-1 rounded-lg border border-emerald-200 bg-emerald-50/80 p-1.5"
+                              >
+                                {quickTags.map((tag) => (
+                                  <button
+                                    key={tag.code}
+                                    type="button"
+                                    disabled={isMutatingThis}
+                                    data-testid={`alerts-tag-${alert.id}-${tag.code}`}
+                                    onClick={() =>
+                                      void handleSelectQuickTag(alert, tag)
+                                    }
+                                    className="rounded-full border border-emerald-300 bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-900 hover:bg-emerald-600 hover:text-white disabled:opacity-50"
+                                  >
+                                    {tag.labelVi}
+                                  </button>
+                                ))}
+                              </div>
                             )}
                           </div>
                         </td>

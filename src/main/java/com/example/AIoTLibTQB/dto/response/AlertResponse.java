@@ -1,5 +1,6 @@
 package com.example.AIoTLibTQB.dto.response;
 
+import com.example.AIoTLibTQB.document.AffectedNodeSnapshot;
 import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
@@ -8,6 +9,7 @@ import lombok.*;
 import lombok.experimental.FieldDefaults;
 
 import java.time.Instant;
+import java.util.List;
 
 @Data
 @Builder
@@ -30,7 +32,11 @@ public class AlertResponse {
     AlertWorkflowStatus workflowStatus;
     String assignedTo;
     String handlingNote;
+    String resolutionTag;
     Instant inProgressAt;
+    Boolean sensorRecovered;
+    Instant sensorRecoveredAt;
+    List<AffectedNodeSnapshot> affectedNodes;
     Double currentValue;
     Double threshold;
     String message;

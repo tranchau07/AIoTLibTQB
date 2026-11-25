@@ -22,6 +22,9 @@ public class AlertWorkflowUpdateRequest {
     @Size(max = 1000, message = "INVALID_REQUEST_PAYLOAD")
     String handlingNote;
 
+    @Size(max = 64, message = "INVALID_REQUEST_PAYLOAD")
+    String resolutionTag;
+
     @Min(value = 0, message = "INVALID_REQUEST_PAYLOAD")
     @Max(value = 240, message = "INVALID_REQUEST_PAYLOAD")
     Integer snoozeMinutes;

@@ -441,10 +441,20 @@ export type AlertWorkflowStatus =
   | 'IN_PROGRESS'
   | 'RESOLVED';
 
+export interface AffectedNodeSnapshot {
+  deviceId?: string | null;
+  hardwareId?: string | null;
+  metricType?: string | null;
+  currentValue?: number | null;
+  threshold?: number | null;
+  updatedAt?: string | null;
+}
+
 export interface AlertWorkflowUpdateRequest {
   workflowStatus?: AlertWorkflowStatus | null;
   assignedTo?: string | null;
   handlingNote?: string | null;
+  resolutionTag?: string | null;
   snoozeMinutes?: number | null;
 }
 
@@ -465,7 +475,11 @@ export interface AlertResponse {
   workflowStatus?: AlertWorkflowStatus | null;
   assignedTo?: string | null;
   handlingNote?: string | null;
+  resolutionTag?: string | null;
   inProgressAt?: string | null;
+  sensorRecovered?: boolean | null;
+  sensorRecoveredAt?: string | null;
+  affectedNodes?: AffectedNodeSnapshot[] | null;
   currentValue: number | null;
   threshold: number | null;
   message: string;

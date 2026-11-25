@@ -6,11 +6,15 @@ import lombok.experimental.FieldDefaults;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.integration.annotation.ServiceActivator;
+import org.springframework.integration.channel.DirectChannel;
 import org.springframework.integration.core.MessageProducer;
+import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.support.ExecutorSubscribableChannel;
 import org.springframework.integration.mqtt.core.DefaultMqttPahoClientFactory;
 import org.springframework.integration.mqtt.core.MqttPahoClientFactory;
 import org.springframework.integration.mqtt.inbound.MqttPahoMessageDrivenChannelAdapter;
+import org.springframework.integration.mqtt.outbound.MqttPahoMessageHandler;
 import org.springframework.integration.mqtt.support.DefaultPahoMessageConverter;
 import org.springframework.messaging.MessageChannel;
 
@@ -41,6 +45,27 @@ public class MqttConfig {
     @Bean
     public MessageChannel mqttInboundChannel() {
         return new ExecutorSubscribableChannel(Executors.newVirtualThreadPerTaskExecutor());
+    }
+
+    @Bean
+    public MessageChannel mqttOutboundChannel() {
+        return new DirectChannel();
+    }
+
+    @Bean
+    @ServiceActivator(inputChannel = "mqttOutboundChannel")
+    public MessageHandler mqttOutbound() {
+        String baseClientId = mqttProperties.getClientId() != null && !mqttProperties.getClientId().isBlank()
+                ? mqttProperties.getClientId().trim()
+                : "aiot_backend";
+        MqttPahoMessageHandler handler = new MqttPahoMessageHandler(
+                baseClientId + "_publisher",
+                mqttClientFactory()
+        );
+        handler.setAsync(true);
+        handler.setDefaultQos(1);
+        handler.setDefaultRetained(false);
+        return handler;
     }
 
     @Bean

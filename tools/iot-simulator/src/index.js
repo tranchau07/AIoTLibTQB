@@ -38,6 +38,7 @@ export class IoTCircuitSimulator {
     this.isRunning = false;
     this.devices = [];
     this.clients = new Map(); // hardwareId -> mqtt client
+    this.deviceLedStates = new Map(); // hardwareId -> current LED state (NORMAL, WARN_PULSE, CRITICAL_BLINK, STAFF_DISPATCHED)
     this.timer = null;
     this.durationTimer = null;
     this.startTime = 0;
@@ -122,10 +123,28 @@ export class IoTCircuitSimulator {
     this.tick();
   }
 
+  handleCommandMessage(hardwareId, rawPayload) {
+    try {
+      const cmd = JSON.parse(rawPayload.toString('utf-8'));
+      if (cmd && cmd.action === 'SET_LED_STATE' && cmd.led_state) {
+        this.deviceLedStates.set(hardwareId, cmd.led_state);
+        console.log(
+          `[LED] Device [${hardwareId}] LED -> ${cmd.led_state}` +
+            (cmd.reason ? ` (${cmd.reason})` : '') +
+            (cmd.duration_sec ? ` [${cmd.duration_sec}s]` : '')
+        );
+      }
+    } catch (err) {
+      console.warn(`[LED] Malformed command payload on devices/${hardwareId}/command: ${err.message}`);
+    }
+  }
+
   async connectDevice(device) {
     return new Promise((resolve, reject) => {
       const clientId = `${this.clientPrefix}${device.hardwareId}_${Math.random().toString(16).substring(2, 6)}`;
       const statusTopic = `devices/${device.hardwareId}/status`;
+      const commandTopic = `devices/${device.hardwareId}/command`;
+      this.deviceLedStates.set(device.hardwareId, 'NORMAL');
 
       // Resolve per-device MQTT credentials so Mosquitto %u ACL isolates each device (MQTT-01)
       const mqttUsername = this.perDeviceAuth
@@ -175,6 +194,15 @@ export class IoTCircuitSimulator {
         }
         console.log(`[MQTT] [CONNECTED] Device [${device.hardwareId}] connected as "${mqttUsername || 'anonymous'}" (clientId: ${clientId})`);
 
+        // Subscribe to Tier-1 local LED warning / staff dispatch commands
+        if (typeof client.subscribe === 'function') {
+          client.subscribe(commandTopic, { qos: 1 }, (err) => {
+            if (err) {
+              console.warn(`[MQTT] Failed to subscribe to ${commandTopic}:`, err.message || err);
+            }
+          });
+        }
+
         // Send initial online status
         const onlinePayload = buildStatusPayload(device.hardwareId, 'online', 'power_on', 0, device.firmwareVersion);
         client.publish(statusTopic, JSON.stringify(onlinePayload), { qos: 1 }, (err) => {
@@ -182,6 +210,12 @@ export class IoTCircuitSimulator {
         });
 
         resolve();
+      });
+
+      client.on('message', (topic, payload) => {
+        if (topic === commandTopic) {
+          this.handleCommandMessage(device.hardwareId, payload);
+        }
       });
 
       client.on('error', (err) => {

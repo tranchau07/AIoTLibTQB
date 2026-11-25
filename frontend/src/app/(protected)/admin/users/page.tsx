@@ -36,11 +36,30 @@ import {
 } from '@/components/ui/primitives';
 import type { UserResponse } from '@/types/api';
 
+const PRESET_ZONES = [
+  { id: 'ZONE_A', label: 'ZONE_A · Phòng đọc chính & Cánh Tây' },
+  { id: 'ZONE_B', label: 'ZONE_B · Thảo luận nhóm & Cánh Đông' },
+  { id: 'ZONE_C', label: 'ZONE_C · Kho lưu trữ & Phòng truyền thống' },
+  { id: 'ZONE_HALL', label: 'ZONE_HALL · Sảnh trung tâm & Mượn trả' },
+] as const;
+
 function parseZonesInput(raw: string): string[] {
   return raw
     .split(',')
     .map((z) => z.trim())
     .filter(Boolean);
+}
+
+function isAdminRoleList(roleNames: string[]): boolean {
+  return roleNames.some((r) => r === 'ADMIN' || r === 'ROLE_ADMIN');
+}
+
+function toggleZoneInText(raw: string, zoneId: string): string {
+  const current = parseZonesInput(raw);
+  const next = current.includes(zoneId)
+    ? current.filter((z) => z !== zoneId)
+    : [...current, zoneId];
+  return next.join(', ');
 }
 
 export default function AdminUsersPage() {
@@ -347,8 +366,20 @@ export default function AdminUsersPage() {
                               {zone}
                             </span>
                           ))
+                        ) : isAdminRoleList(
+                            (u.roles ?? []).map((r) => r.name)
+                          ) ? (
+                          <span className="badge-info text-2xs">
+                            Toàn thư viện
+                          </span>
                         ) : (
-                          <span className="text-2xs text-slate-400">Toàn cục</span>
+                          <span
+                            data-testid={`user-empty-zones-warn-${u.username}`}
+                            className="badge-warning text-2xs"
+                            title="Cơ chế Fail-Closed (P0-1): Tài khoản không phải Admin mà để trống assignedZones sẽ không nhận/xử lý được bất kỳ cảnh báo nào."
+                          >
+                            Chưa gán Zone (0 cảnh báo)
+                          </span>
                         )}
                       </div>
                     </td>
@@ -525,20 +556,60 @@ export default function AdminUsersPage() {
           </div>
 
           <div>
-            <label
-              htmlFor="create-zones"
-              className="block text-xs font-medium text-slate-700 dark:text-slate-300"
-            >
-              Phân vùng quản lý (assignedZones, cách nhau bằng dấu phẩy)
-            </label>
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="create-zones"
+                className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+              >
+                Phân vùng quản lý (assignedZones, cách nhau bằng dấu phẩy)
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setNewZonesText(PRESET_ZONES.map((z) => z.id).join(', '))
+                }
+                className="text-2xs font-medium text-brand-600 hover:underline"
+              >
+                Chọn tất cả Zone
+              </button>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {PRESET_ZONES.map((z) => {
+                const selected = parseZonesInput(newZonesText).includes(z.id);
+                return (
+                  <button
+                    key={z.id}
+                    type="button"
+                    data-testid={`create-zone-chip-${z.id}`}
+                    onClick={() =>
+                      setNewZonesText((prev) => toggleZoneInText(prev, z.id))
+                    }
+                    className={`rounded-full border px-2.5 py-0.5 text-2xs font-medium transition-colors ${
+                      selected
+                        ? 'border-brand-600 bg-brand-50 text-brand-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    {z.label}
+                  </button>
+                );
+              })}
+            </div>
             <input
               id="create-zones"
               type="text"
-              placeholder="VD: ZONE_FLOOR_2, ZONE_FLOOR_3"
+              placeholder="VD: ZONE_A, ZONE_B, ZONE_HALL"
               value={newZonesText}
               onChange={(e) => setNewZonesText(e.target.value)}
-              className="input mt-1 font-mono text-xs"
+              className="input mt-1.5 font-mono text-xs"
             />
+            {newRoles.length > 0 &&
+              !isAdminRoleList(newRoles) &&
+              parseZonesInput(newZonesText).length === 0 && (
+                <p className="mt-1 text-2xs text-amber-700">
+                  Lưu ý: Tài khoản không phải ADMIN nếu để trống Zone sẽ không nhận hoặc xử lý được bất kỳ cảnh báo nào (Fail-Closed P0-1).
+                </p>
+              )}
           </div>
 
           <div className="flex justify-end gap-2 pt-3">
@@ -657,19 +728,60 @@ export default function AdminUsersPage() {
           </div>
 
           <div>
-            <label
-              htmlFor="edit-zones"
-              className="block text-xs font-medium text-slate-700 dark:text-slate-300"
-            >
-              Phân vùng quản lý (assignedZones, cách nhau bằng dấu phẩy)
-            </label>
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="edit-zones"
+                className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+              >
+                Phân vùng quản lý (assignedZones, cách nhau bằng dấu phẩy)
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setEditZonesText(PRESET_ZONES.map((z) => z.id).join(', '))
+                }
+                className="text-2xs font-medium text-brand-600 hover:underline"
+              >
+                Chọn tất cả Zone
+              </button>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {PRESET_ZONES.map((z) => {
+                const selected = parseZonesInput(editZonesText).includes(z.id);
+                return (
+                  <button
+                    key={z.id}
+                    type="button"
+                    data-testid={`edit-zone-chip-${z.id}`}
+                    onClick={() =>
+                      setEditZonesText((prev) => toggleZoneInText(prev, z.id))
+                    }
+                    className={`rounded-full border px-2.5 py-0.5 text-2xs font-medium transition-colors ${
+                      selected
+                        ? 'border-brand-600 bg-brand-50 text-brand-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    {z.label}
+                  </button>
+                );
+              })}
+            </div>
             <input
               id="edit-zones"
               type="text"
+              placeholder="VD: ZONE_A, ZONE_B, ZONE_HALL"
               value={editZonesText}
               onChange={(e) => setEditZonesText(e.target.value)}
-              className="input mt-1 font-mono text-xs"
+              className="input mt-1.5 font-mono text-xs"
             />
+            {editRoles.length > 0 &&
+              !isAdminRoleList(editRoles) &&
+              parseZonesInput(editZonesText).length === 0 && (
+                <p className="mt-1 text-2xs text-amber-700">
+                  Lưu ý: Tài khoản không phải ADMIN nếu để trống Zone sẽ không nhận hoặc xử lý được bất kỳ cảnh báo nào (Fail-Closed P0-1).
+                </p>
+              )}
           </div>
 
           <div className="flex justify-end gap-2 pt-3">

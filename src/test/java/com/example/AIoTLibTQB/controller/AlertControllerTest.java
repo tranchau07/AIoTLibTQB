@@ -43,7 +43,7 @@ class AlertControllerTest {
 
     @Test
     @DisplayName("resolveAlert() - Mặc định snoozeMinutes=15 khi null, giữ giá trị hợp lệ và kẹp trong [0, 240]")
-    void resolveAlert_handlesDefaultAndClampsSnoozeMinutes() {
+    void resolveAlert_handlesDefaultAndClampsSnoozeMinutes() throws NoSuchMethodException {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("librarian_tqb", "n/a", List.of())
         );
@@ -69,6 +69,11 @@ class AlertControllerTest {
 
         alertController.resolveAlert("a-1", 600);
         verify(alertService).resolveAlert("a-1", "librarian_tqb", 240);
+
+        Method resolveMethod = AlertController.class.getMethod("resolveAlert", String.class, Integer.class);
+        PreAuthorize resolveAuth = resolveMethod.getAnnotation(PreAuthorize.class);
+        assertThat(resolveAuth).isNotNull();
+        assertThat(resolveAuth.value()).isEqualTo("hasAnyAuthority('ACKNOWLEDGE_ALERT', 'MANAGE_ALERT_CONFIG')");
     }
 
     @Test
