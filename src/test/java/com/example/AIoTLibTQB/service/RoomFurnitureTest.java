@@ -311,4 +311,49 @@ class RoomFurnitureTest {
         assertThat(preAuth).isNotNull();
         assertThat(preAuth.value()).isEqualTo("hasAnyAuthority('ADMIN', 'LIBRARIAN', 'MAINTENANCE', 'MANAGE_ZONES')");
     }
+
+    @Test
+    @DisplayName("Phase 3 (BE): Chặn đặt bàn/giá sách đè lên cột chịu lực BTCT (0.60x0.60m) trong TQB_301 (ErrorCode 5008)")
+    void updateFurnitureLayout_rejectsStructuralColumnOverlap() {
+        Room room301RealBounds = Room.builder()
+                .id("room-301")
+                .code("TQB_301")
+                .name("Phòng Multimedia 301")
+                .floor(3)
+                .type(RoomType.STUDY_ROOM)
+                .boundaryPolygon(List.of(
+                        new Point2D(0.301, 0.008),
+                        new Point2D(0.699, 0.008),
+                        new Point2D(0.699, 0.32),
+                        new Point2D(0.301, 0.32)
+                ))
+                .build();
+        when(roomRepository.findById("room-301")).thenReturn(Optional.of(room301RealBounds));
+
+        // Cột BTCT ở (0.399, 0.032) của TQB_301 -> đặt bàn đè trúng tâm cột phải ném 5008 FURNITURE_OUT_OF_BOUNDS
+        RoomFurnitureUpdateRequest overlapColReq = RoomFurnitureUpdateRequest.builder()
+                .items(List.of(desk("desk-on-col", 0.399, 0.035, 0.0)))
+                .build();
+
+        assertThatThrownBy(() -> roomService.updateFurnitureLayout("room-301", overlapColReq, "admin"))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getErrorCode())
+                .satisfies(ec -> {
+                    assertThat(ec).isEqualTo(ErrorCode.FURNITURE_OUT_OF_BOUNDS);
+                    assertThat(ec.getCode()).isEqualTo(5008);
+                });
+
+        // Kiểm tra hàm validator trực tiếp: IOT_NODE gắn trên cột không bị coi là va chạm lối đi
+        FurnitureItemDoc sensorOnCol = FurnitureItemDoc.builder()
+                .id("sensor-col")
+                .typeId("IOT_NODE")
+                .x(0.399)
+                .y(0.032)
+                .widthM(0.5)
+                .depthM(0.5)
+                .rotationDeg(0.0)
+                .build();
+        assertThat(FurnitureGeometryValidator.doesFurnitureOverlapColumn(
+                sensorOnCol, TqbPresetColumnsRegistry.getColumnsForRoomCode("TQB_301"))).isFalse();
+    }
 }

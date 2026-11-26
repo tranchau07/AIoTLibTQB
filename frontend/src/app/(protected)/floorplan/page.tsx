@@ -283,7 +283,7 @@ export default function FloorplanPage() {
       const vh = window.innerHeight;
       if (!vh || vh <= 0) return;
       setMaxViewportHeightPx(
-        Math.max(380, vh - (isFullscreen ? 110 : 175))
+        Math.max(480, vh - (isFullscreen ? 64 : 96))
       );
     };
     updateMaxH();
@@ -292,6 +292,46 @@ export default function FloorplanPage() {
       window.removeEventListener('resize', updateMaxH);
     };
   }, [isFullscreen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleGlobalEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (furnitureEditMode) {
+        if (selectedFurnitureIds.length > 0) {
+          setSelectedFurnitureIds([]);
+        } else {
+          setFurnitureEditMode(false);
+        }
+        return;
+      }
+      if (zoomedRoomId || selectedRoomId || focusedDeviceId || selectedBayId) {
+        setZoomedRoomId(null);
+        setSelectedRoomId(null);
+        setFocusedDeviceId(null);
+        setSelectedBayId(null);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalEscape);
+    return () => window.removeEventListener('keydown', handleGlobalEscape);
+  }, [
+    furnitureEditMode,
+    selectedFurnitureIds.length,
+    zoomedRoomId,
+    selectedRoomId,
+    focusedDeviceId,
+    selectedBayId,
+  ]);
 
   const handleToggleFullscreen = useCallback(async () => {
     try {
@@ -1160,6 +1200,11 @@ export default function FloorplanPage() {
     [selectedRoom, selectedRoomIdx]
   );
 
+  const selectedRoomColumns = useMemo(
+    () => selectedRoomPreset?.structuralColumns ?? [],
+    [selectedRoomPreset]
+  );
+
   const selectedRoomServerFurniture = selectedRoom
     ? serverFurnitureByRoom[selectedRoom.id]
     : undefined;
@@ -1179,10 +1224,16 @@ export default function FloorplanPage() {
         ? validateFurnitureLayout(
             selectedRoomFurnitureItems,
             selectedRoomPolygon,
-            FURNITURE_CATALOG
+            FURNITURE_CATALOG,
+            selectedRoomColumns
           )
         : undefined,
-    [selectedRoom, selectedRoomFurnitureItems, selectedRoomPolygon]
+    [
+      selectedRoom,
+      selectedRoomFurnitureItems,
+      selectedRoomPolygon,
+      selectedRoomColumns,
+    ]
   );
 
   const invalidFurnitureIds = useMemo(
@@ -1275,30 +1326,84 @@ export default function FloorplanPage() {
 
   const handleSaveFurniture = useCallback(
     async (roomId: string, changeNote?: string) => {
-      if (roomId.startsWith('PRESET_')) return;
       const itemsToSave = getRoomFurnitureItems(roomId);
-      const expectedVersion = serverFurnitureByRoom[roomId]?.version ?? null;
       setFurnitureErrorMsg(null);
       setFurnitureConflictRoomId(null);
+
+      let targetRoomId = roomId;
+      let expectedVersion: number | null =
+        serverFurnitureByRoom[roomId]?.version ?? null;
+
+      if (roomId.startsWith('PRESET_')) {
+        if (!capabilities.canManageRooms) return;
+        const presetCode = roomId.replace(/^PRESET_/, '');
+        const preset =
+          TQB_ROOM_PRESETS.find((p) => p.code === presetCode) ??
+          selectedRoomPreset;
+        if (!preset) return;
+        try {
+          let createdRoom: RoomResponse;
+          try {
+            createdRoom = await roomsApi.create({
+              code: preset.code,
+              name: preset.name,
+              floor: preset.floor,
+              capacity: preset.capacity,
+              type: preset.roomType,
+              boundaryPolygon: preset.boundaryPolygon.map((p) => ({ ...p })),
+            });
+          } catch {
+            createdRoom = await roomsApi.getByCode(preset.code);
+          }
+          targetRoomId = createdRoom.id;
+          expectedVersion = null;
+        } catch (err) {
+          setFurnitureErrorMsg(
+            err instanceof Error
+              ? err.message
+              : 'Không thể khởi tạo phòng đọc trong hệ thống.'
+          );
+          return;
+        }
+      }
+
       try {
         const saved = await updateFurnitureMutation.mutateAsync({
-          id: roomId,
+          id: targetRoomId,
           body: {
             expectedVersion,
             changeNote,
             items: itemsToSave,
           },
         });
-        setFurnitureHistoryByRoom((prev) => ({
-          ...prev,
-          [roomId]: createFurnitureHistory(saved.items ?? itemsToSave),
-        }));
+        setFurnitureDraftByRoom((prev) => {
+          if (!(roomId in prev) && !(targetRoomId in prev)) return prev;
+          const copy = { ...prev };
+          delete copy[roomId];
+          delete copy[targetRoomId];
+          return copy;
+        });
+        setFurnitureHistoryByRoom((prev) => {
+          const next = { ...prev };
+          if (targetRoomId !== roomId) {
+            delete next[roomId];
+          }
+          next[targetRoomId] = createFurnitureHistory(
+            saved.items ?? itemsToSave
+          );
+          return next;
+        });
+        if (targetRoomId !== roomId) {
+          setSelectedRoomId(targetRoomId);
+          setZoomedRoomId(targetRoomId);
+          await queryClient.invalidateQueries({ queryKey: roomKeys.all });
+        }
       } catch (err) {
         if (
           err instanceof ApiError &&
           (err.httpStatus === 409 || err.code === 5007)
         ) {
-          setFurnitureConflictRoomId(roomId);
+          setFurnitureConflictRoomId(targetRoomId);
         } else {
           setFurnitureErrorMsg(
             err instanceof Error
@@ -1308,7 +1413,14 @@ export default function FloorplanPage() {
         }
       }
     },
-    [getRoomFurnitureItems, serverFurnitureByRoom, updateFurnitureMutation]
+    [
+      capabilities.canManageRooms,
+      getRoomFurnitureItems,
+      queryClient,
+      selectedRoomPreset,
+      serverFurnitureByRoom,
+      updateFurnitureMutation,
+    ]
   );
 
   const selectedRoomAlerts: AlertResponse[] = useMemo(() => {
@@ -1985,6 +2097,47 @@ export default function FloorplanPage() {
               </button>
             ))}
           </div>
+
+          {/* Inline Compact Breadcrumb */}
+          <nav
+            aria-label="Đường dẫn vị trí bản đồ"
+            data-testid="floorplan-breadcrumb"
+            className="hidden items-center gap-1 text-xs text-slate-600 xl:flex"
+          >
+            <button
+              type="button"
+              data-testid="breadcrumb-floor-btn"
+              onClick={() => {
+                setSelectedRoomId(null);
+                setZoomedRoomId(null);
+                setFocusedDeviceId(null);
+                setSelectedBayId(null);
+              }}
+              className={`rounded font-semibold transition-colors hover:text-sky-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                !selectedRoom
+                  ? 'text-slate-900'
+                  : 'text-sky-700 underline-offset-2 hover:underline'
+              }`}
+            >
+              {FLOORPLAN_I18N_VI.tree.floorPrefix} {selectedFloor}
+            </button>
+            <span aria-hidden="true" className="text-slate-400">
+              ›
+            </span>
+            {selectedRoom ? (
+              <span
+                data-testid="breadcrumb-room-label"
+                className="max-w-[180px] truncate font-semibold text-slate-900"
+                title={`${selectedRoom.code} — ${selectedRoom.name}`}
+              >
+                {selectedRoom.code} — {selectedRoom.name}
+              </span>
+            ) : (
+              <span className="text-slate-500">
+                {visibleFloorRooms.length} phòng
+              </span>
+            )}
+          </nav>
         </div>
 
         {/* 7-Layer Metric Bar + Architecture Controls */}
@@ -2077,12 +2230,23 @@ export default function FloorplanPage() {
                 setFurnitureEditMode(nextEdit);
                 if (nextEdit) {
                   setShowFurnitureLayer(true);
-                  if (!selectedRoomId) {
-                    const fallbackRoom =
-                      realFloorRooms[0] ?? visibleFloorRooms[0] ?? null;
-                    if (fallbackRoom) {
-                      setSelectedRoomId(fallbackRoom.id);
-                    }
+                  const targetRoomId =
+                    selectedRoomId ??
+                    (realFloorRooms[0] ?? visibleFloorRooms[0])?.id ??
+                    null;
+                  if (targetRoomId) {
+                    setSelectedRoomId(targetRoomId);
+                    setZoomedRoomId(targetRoomId);
+                  }
+                  if (
+                    typeof window !== 'undefined' &&
+                    window.innerWidth < 1440
+                  ) {
+                    window.dispatchEvent(
+                      new CustomEvent('tqb:sidebar-collapse', {
+                        detail: { collapsed: true },
+                      })
+                    );
                   }
                 } else {
                   setSelectedFurnitureIds([]);
@@ -2183,50 +2347,7 @@ export default function FloorplanPage() {
           description="Tầng này chưa có phòng đọc nào thuộc phân khu đang lọc."
         />
       ) : (
-        <div className="space-y-2">
-          {/* Dynamic Navigation Breadcrumb: Tầng X › Phòng Y */}
-          <nav
-            aria-label="Đường dẫn vị trí bản đồ"
-            data-testid="floorplan-breadcrumb"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-white px-3 py-1 text-xs text-slate-600"
-          >
-            <div className="flex min-w-0 items-center gap-1.5">
-              <button
-                type="button"
-                data-testid="breadcrumb-floor-btn"
-                onClick={() => {
-                  setSelectedRoomId(null);
-                  setZoomedRoomId(null);
-                  setFocusedDeviceId(null);
-                  setSelectedBayId(null);
-                }}
-                className={`font-semibold transition-colors hover:text-sky-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded ${
-                  !selectedRoom
-                    ? 'text-slate-900'
-                    : 'text-sky-700 underline-offset-2 hover:underline'
-                }`}
-              >
-                {FLOORPLAN_I18N_VI.tree.floorPrefix} {selectedFloor}
-              </button>
-              <span aria-hidden="true" className="text-slate-400">
-                ›
-              </span>
-              {selectedRoom ? (
-                <span
-                  data-testid="breadcrumb-room-label"
-                  className="truncate font-semibold text-slate-900"
-                >
-                  {selectedRoom.code} — {selectedRoom.name}
-                </span>
-              ) : (
-                <span className="text-slate-600">
-                  {FLOORPLAN_I18N_VI.tree.allFloorSummary} (
-                  {visibleFloorRooms.length} phòng)
-                </span>
-              )}
-            </div>
-          </nav>
-
+        <div className="space-y-1.5">
           <div className="w-full">
             <div
               className={`relative min-w-0 w-full ${
@@ -2297,9 +2418,15 @@ export default function FloorplanPage() {
                   }
                   selectedFurnitureIds={selectedFurnitureIds}
                   invalidFurnitureIds={invalidFurnitureIds}
+                  invalidFurnitureReasons={
+                    furnitureEditMode
+                      ? selectedRoomFurnitureValidation?.errorsByItemId
+                      : undefined
+                  }
                   hideSensitiveFurniture={hideSensitiveFurniture}
                   furnitureCatalog={FURNITURE_CATALOG}
                   snapFurnitureGrid={snapFurnitureGrid}
+                  snapStepM={0.1}
                   onSelectFurnitureIds={setSelectedFurnitureIds}
                   onUpdateFurnitureItems={(nextItems) => {
                     if (!selectedRoom) return;
@@ -2326,7 +2453,7 @@ export default function FloorplanPage() {
                     ? { maxHeight: `${Math.max(460, maxViewportHeightPx + 40)}px` }
                     : undefined
                 }
-                className="card w-full shrink-0 space-y-3.5 overflow-y-auto border-slate-200 bg-white p-4 shadow-sm lg:w-[370px] xl:w-[390px]"
+                className="card w-full shrink-0 space-y-3.5 overflow-y-auto border-slate-200 bg-white p-3.5 shadow-sm lg:w-[332px] xl:w-[352px]"
               >
                 <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
                   <div className="min-w-0">
@@ -2387,6 +2514,17 @@ export default function FloorplanPage() {
                           setFurnitureEditMode(next);
                           if (next) {
                             setShowFurnitureLayer(true);
+                            setZoomedRoomId(selectedRoom.id);
+                            if (
+                              typeof window !== 'undefined' &&
+                              window.innerWidth < 1440
+                            ) {
+                              window.dispatchEvent(
+                                new CustomEvent('tqb:sidebar-collapse', {
+                                  detail: { collapsed: true },
+                                })
+                              );
+                            }
                           } else {
                             setSelectedFurnitureIds([]);
                           }
@@ -2620,6 +2758,7 @@ export default function FloorplanPage() {
                   <FurnitureLayerEditor
                     room={selectedRoom}
                     roomPolygon={selectedRoomPolygon}
+                    structuralColumns={selectedRoomColumns}
                     catalog={FURNITURE_CATALOG}
                     hideSensitive={hideSensitiveFurniture}
                     items={selectedRoomFurnitureItems}
@@ -2638,6 +2777,7 @@ export default function FloorplanPage() {
                     onRedo={() => handleRedoFurniture(selectedRoom.id)}
                     validation={selectedRoomFurnitureValidation}
                     snapEnabled={snapFurnitureGrid}
+                    gridStepM={0.1}
                     onSnapEnabledChange={setSnapFurnitureGrid}
                     showLayer={showFurnitureLayer}
                     onShowLayerChange={setShowFurnitureLayer}
@@ -2652,7 +2792,10 @@ export default function FloorplanPage() {
                     isSaving={updateFurnitureMutation.isPending}
                     hasConflict={furnitureConflictRoomId === selectedRoom.id}
                     errorMessage={furnitureErrorMsg}
-                    isReadOnlyPreset={selectedRoom.id.startsWith('PRESET_')}
+                    isReadOnlyPreset={
+                      selectedRoom.id.startsWith('PRESET_') &&
+                      !capabilities.canManageRooms
+                    }
                     onSave={(note) =>
                       void handleSaveFurniture(selectedRoom.id, note)
                     }

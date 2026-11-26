@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import {
   TQB_BUILDING_ASPECT_RATIO,
+  TQB_BUILDING_DEPTH_M,
+  TQB_BUILDING_WIDTH_M,
   getFloorCadSvgPath,
   getFloorLandmarks,
   resolveRoomPolygon,
@@ -64,6 +66,7 @@ import {
 } from '@/lib/floorplan/clustering';
 import { computePopoverPlacement } from '@/lib/floorplan/popoverPosition';
 import {
+  METRIC_LAYER_META,
   computeRoomBlindspotRatio,
   getContinuousMetricColorCss,
   getMetricStatusSymbol,
@@ -86,8 +89,13 @@ import {
   type FurnitureCatalogEntry,
 } from '@/config/furniture-catalog';
 import {
+  STRUCTURAL_COLUMN_SIZE_M,
+  computeSmartDragPosition,
+  findTopmostFurnitureAtPoint,
+  furnitureMetersToPixelSize,
   getFurnitureObbCornersNorm,
   snapNormalizedPointToGrid,
+  type AlignmentGuide,
 } from '@/lib/floorplan/furnitureGeometry';
 import type {
   OneHourDeltaResult,
@@ -246,8 +254,12 @@ export interface FloorplanCanvasProps {
   hideSensitiveFurniture?: boolean;
   /** Thư viện định nghĩa đối tượng nội thất (mặc định FURNITURE_CATALOG) */
   furnitureCatalog?: readonly FurnitureCatalogEntry[];
-  /** Bật tắt snap lưới 0.25m khi kéo thả nội thất */
+  /** Bật tắt snap lưới khi kéo thả nội thất */
   snapFurnitureGrid?: boolean;
+  /** Bước hút lưới theo mét (mặc định 0.25m, FloorplanPage truyền 0.10m) */
+  snapStepM?: number;
+  /** Danh sách thông báo lỗi theo ID đối tượng (Vượt tường / Đè cột / Chồng đồ) */
+  invalidFurnitureReasons?: Record<string, readonly string[]>;
   onSelectFurnitureIds?: (ids: string[]) => void;
   onUpdateFurnitureItems?: (items: FurnitureItem[]) => void;
   onCommitFurnitureItems?: (items: FurnitureItem[]) => void;
@@ -307,9 +319,11 @@ export function FloorplanCanvas({
   furnitureEditMode = false,
   selectedFurnitureIds = EMPTY_STRING_IDS,
   invalidFurnitureIds,
+  invalidFurnitureReasons,
   hideSensitiveFurniture = false,
   furnitureCatalog = FURNITURE_CATALOG,
   snapFurnitureGrid = true,
+  snapStepM = 0.25,
   onSelectFurnitureIds,
   onUpdateFurnitureItems,
   onCommitFurnitureItems,
@@ -321,6 +335,7 @@ export function FloorplanCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const staticCanvasRef = useRef<HTMLCanvasElement>(null);
   const dynamicCanvasRef = useRef<HTMLCanvasElement>(null);
+  const editOverlayRef = useRef<HTMLDivElement>(null);
 
   const [canvasSize, setCanvasSize] = useState<{
     width: number;
@@ -332,6 +347,24 @@ export function FloorplanCanvas({
   const [hoveredDeviceId, setHoveredDeviceId] = useState<string | null>(null);
   const [hoveredBayId, setHoveredBayId] = useState<string | null>(null);
   const [hoveredRoomId, setHoveredRoomId] = useState<string | null>(null);
+  const [hoveredFurnitureId, setHoveredFurnitureId] = useState<string | null>(
+    null
+  );
+  const [hoveredEditFurnitureId, setHoveredEditFurnitureId] = useState<
+    string | null
+  >(null);
+  const [hoverCursorPx, setHoverCursorPx] = useState<Point2D | null>(null);
+  const [activeAlignGuides, setActiveAlignGuides] = useState<
+    readonly AlignmentGuide[]
+  >([]);
+  const [inlineRenameId, setInlineRenameId] = useState<string | null>(null);
+  const [inlineRenameValue, setInlineRenameValue] = useState<string>('');
+  const [marqueeBoxPx, setMarqueeBoxPx] = useState<{
+    startX: number;
+    startY: number;
+    currX: number;
+    currY: number;
+  } | null>(null);
   const [labelDensity, setLabelDensity] = useState<LabelDensity>(
     defaultLabelDensity ?? 'clean'
   );
@@ -362,6 +395,9 @@ export function FloorplanCanvas({
   );
   const pinchStartRef = useRef<{ dist: number; scale: number } | null>(null);
   const dragMovedDistRef = useRef<number>(0);
+  const lastClickedRoomRef = useRef<{ room: RoomResponse; ts: number } | null>(
+    null
+  );
   const furnitureDragRef = useRef<{
     itemId: string;
     startClientX: number;
@@ -369,6 +405,13 @@ export function FloorplanCanvas({
     startNormX: number;
     startNormY: number;
     latestItems: FurnitureItem[];
+    moved: boolean;
+  } | null>(null);
+  const editPanRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startTx: number;
+    startTy: number;
     moved: boolean;
   } | null>(null);
 
@@ -830,6 +873,21 @@ export function FloorplanCanvas({
     return items;
   }, [enrichedRooms, positionedDevices, zoomedRoomId, selectedRoomId]);
 
+  const roomsWithRealFurnitureSet = useMemo(() => {
+    const set = new Set<string>();
+    if (!showFurnitureLayer || visibleFurnitureItems.length === 0) return set;
+    for (const { room, polygon } of enrichedRooms) {
+      if (
+        visibleFurnitureItems.some((item) =>
+          isPointInPolygon({ x: item.x, y: item.y }, polygon)
+        )
+      ) {
+        set.add(room.id);
+      }
+    }
+    return set;
+  }, [enrichedRooms, showFurnitureLayer, visibleFurnitureItems]);
+
   // Animated smooth values map (TIMING_CONFIG.transitionDurationMs = 450ms, reduced-motion aware)
   const animValuesRef = useRef<Map<string, AnimatedMetricState>>(new Map());
   const prevLayerRef = useRef(layer);
@@ -947,14 +1005,17 @@ export function FloorplanCanvas({
     }
   }, [canvasSize]);
 
-  // Non-passive Wheel listener cho phóng to/thu nhỏ mượt quanh con trỏ chuột
+  // Non-passive Wheel listener cho phóng to/thu nhỏ mượt quanh con trỏ chuột (hoạt động cả khi đang Chỉnh sửa nội thất)
   useEffect(() => {
     const canvas = dynamicCanvasRef.current;
-    if (!canvas) return;
+    const overlay = editOverlayRef.current;
+    if (!canvas && !overlay) return;
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
+      const targetEl = overlay ?? canvas;
+      if (!targetEl) return;
+      const rect = targetEl.getBoundingClientRect();
       const focalPx: Point2D = {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
@@ -973,15 +1034,17 @@ export function FloorplanCanvas({
         canvasSize.height,
         ZOOM_CONFIG.maxScale
       );
-      if (nextVp.scale <= 1.001 && zoomedRoomId) {
+      if (nextVp.scale <= 1.001 && zoomedRoomId && !furnitureEditMode) {
         setZoomedRoomId(null);
       }
       commitViewport(nextVp);
     };
 
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas?.addEventListener('wheel', handleWheel, { passive: false });
+    overlay?.addEventListener('wheel', handleWheel, { passive: false });
     return () => {
-      canvas.removeEventListener('wheel', handleWheel);
+      canvas?.removeEventListener('wheel', handleWheel);
+      overlay?.removeEventListener('wheel', handleWheel);
     };
   }, [
     canvasSize.width,
@@ -989,6 +1052,8 @@ export function FloorplanCanvas({
     commitViewport,
     zoomedRoomId,
     setZoomedRoomId,
+    furnitureEditMode,
+    showFurnitureLayer,
   ]);
 
   // ============================================================================
@@ -1083,11 +1148,7 @@ export function FloorplanCanvas({
     }
 
     // Architectural Furniture Layer (1:100 real-world meters, isolated to Layer 1 StaticBaseCanvas)
-    if (
-      showFurnitureLayer &&
-      (furnitureEditMode || lodConfig.showFurniture) &&
-      visibleFurnitureItems.length > 0
-    ) {
+    if (showFurnitureLayer && visibleFurnitureItems.length > 0) {
       const clampedOpacity = Math.max(0, Math.min(1, furnitureOpacity));
       const detailLevel = furnitureEditMode || lodConfig.showDetailedFurniture;
 
@@ -1126,7 +1187,7 @@ export function FloorplanCanvas({
               : entry.strokeColor;
         ctx.stroke();
 
-        // Architectural detail strokes at Detail zoom / Edit mode
+        // Architectural detail strokes at Detail zoom / Edit mode (không vẽ chữ đè lên mặt bàn ghế)
         if (detailLevel) {
           if (entry.shape === 'bookshelf') {
             const midLeftX = (cornersPx[0].x + cornersPx[3].x) * 0.5;
@@ -1165,18 +1226,6 @@ export function FloorplanCanvas({
             ctx.beginPath();
             ctx.arc(centerPx.x, centerPx.y, rPx, 0, Math.PI * 2);
             ctx.stroke();
-          }
-
-          if (item.label) {
-            const labelFont = Math.max(
-              7,
-              Math.min(11, Math.round(9 / zoomViewport.scale))
-            );
-            ctx.font = `600 ${labelFont}px Inter, system-ui, sans-serif`;
-            ctx.fillStyle = '#F8FAFC';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(item.label, centerPx.x, centerPx.y);
           }
         }
 
@@ -1408,6 +1457,10 @@ export function FloorplanCanvas({
             : FLOORPLAN_INTERACTION_CONFIG.dimmedRoomOpacity;
         }
 
+        ctx.save();
+        if (furnitureEditMode) {
+          ctx.globalAlpha = 0.38;
+        }
         renderWeatherDiffusionHeatmap(
           ctx,
           pixelVertices,
@@ -1429,6 +1482,7 @@ export function FloorplanCanvas({
             roomExceedsThreshold,
           }
         );
+        ctx.restore();
 
         // Draw Measured Direct-Coverage Concentric Rings around ONLINE devices when Reliability Layer is active
         if (showReliabilityLayer && !roomIsStale && onlineDevices.length > 0) {
@@ -1525,20 +1579,63 @@ export function FloorplanCanvas({
           });
         }
 
-        // Structural Columns (BTCT) & Door Opening (CUA)
+        // Structural Columns (BTCT 0.60m × 0.60m) & Door Opening (CUA)
         if (
           preset?.structuralColumns &&
-          (zoomViewport.isZoomed || preset.areaM2 >= 250)
+          (zoomViewport.isZoomed || furnitureEditMode || preset.areaM2 >= 250)
         ) {
+          const colSizeWorld = furnitureMetersToPixelSize(
+            STRUCTURAL_COLUMN_SIZE_M,
+            STRUCTURAL_COLUMN_SIZE_M,
+            width,
+            height,
+            1.0
+          );
+          const colW = Math.max(4, colSizeWorld.widthPx);
+          const colH = Math.max(4, colSizeWorld.heightPx);
+          const halfColW = colW * 0.5;
+          const halfColH = colH * 0.5;
           for (const colPt of preset.structuralColumns) {
             const colPx = normalizedToPixel(colPt, width, height);
+            const left = colPx.x - halfColW;
+            const top = colPx.y - halfColH;
+            ctx.save();
+            if (furnitureEditMode) {
+              const pad = 2 / zoomViewport.scale;
+              ctx.fillStyle = 'rgba(245, 158, 11, 0.14)';
+              ctx.strokeStyle = 'rgba(251, 191, 36, 0.55)';
+              ctx.lineWidth = 1 / zoomViewport.scale;
+              ctx.beginPath();
+              ctx.moveTo(left - pad, top - pad);
+              ctx.lineTo(left + colW + pad, top - pad);
+              ctx.lineTo(left + colW + pad, top + colH + pad);
+              ctx.lineTo(left - pad, top + colH + pad);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+            }
+            ctx.fillStyle = 'rgba(30, 41, 59, 0.92)';
+            ctx.lineWidth = 1.4 / zoomViewport.scale;
+            ctx.strokeStyle = furnitureEditMode ? '#FBBF24' : '#E2E8F0';
             ctx.beginPath();
-            ctx.arc(colPx.x, colPx.y, 4.2, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(226, 232, 240, 0.45)';
+            ctx.moveTo(left, top);
+            ctx.lineTo(left + colW, top);
+            ctx.lineTo(left + colW, top + colH);
+            ctx.lineTo(left, top + colH);
+            ctx.closePath();
             ctx.fill();
-            ctx.lineWidth = 1.2 / zoomViewport.scale;
-            ctx.strokeStyle = '#F8FAFC';
             ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(left, top);
+            ctx.lineTo(left + colW, top + colH);
+            ctx.moveTo(left + colW, top);
+            ctx.lineTo(left, top + colH);
+            ctx.lineWidth = 0.9 / zoomViewport.scale;
+            ctx.strokeStyle = furnitureEditMode
+              ? 'rgba(251, 191, 36, 0.72)'
+              : 'rgba(226, 232, 240, 0.65)';
+            ctx.stroke();
+            ctx.restore();
           }
         }
 
@@ -1648,7 +1745,11 @@ export function FloorplanCanvas({
 
         let effectiveStyle: RoomLabelStyle = lodConfig.roomLabel;
         if (zoomedRoomId) {
-          effectiveStyle = isZoomTarget ? 'rich' : 'code';
+          effectiveStyle = isZoomTarget
+            ? labelDensity === 'clean'
+              ? 'pill'
+              : 'rich'
+            : 'code';
         } else if (isSelected && effectiveStyle === 'code') {
           effectiveStyle = 'pill';
         }
@@ -2109,9 +2210,6 @@ export function FloorplanCanvas({
     selectedRoomId,
     zoomedRoomId,
     selectedBayId,
-    hoveredRoomId,
-    hoveredDeviceId,
-    hoveredBayId,
     labelDensity,
     lodConfig,
     showBlindspots,
@@ -2128,21 +2226,42 @@ export function FloorplanCanvas({
     onlyExceedingThreshold,
     roomDeltaMap,
     playbackRoomStateMap,
+    furnitureEditMode,
   ]);
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = dynamicCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const screenPt: Point2D = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+    setHoverCursorPx(screenPt);
+
     const rawPx: Point2D = {
-      x: (e.clientX - rect.left - zoomViewport.tx) / zoomViewport.scale,
-      y: (e.clientY - rect.top - zoomViewport.ty) / zoomViewport.scale,
+      x: (screenPt.x - zoomViewport.tx) / zoomViewport.scale,
+      y: (screenPt.y - zoomViewport.ty) / zoomViewport.scale,
     };
     const normPt = pixelToNormalized(
       rawPx,
       canvasSize.width,
       canvasSize.height
     );
+
+    if (showFurnitureLayer && !furnitureEditMode && visibleFurnitureItems.length > 0) {
+      const hitFurniture = findTopmostFurnitureAtPoint(
+        normPt,
+        visibleFurnitureItems,
+        0.08
+      );
+      const nextFurnId = hitFurniture?.id ?? null;
+      if (nextFurnId !== hoveredFurnitureId) {
+        setHoveredFurnitureId(nextFurnId);
+      }
+    } else if (hoveredFurnitureId !== null) {
+      setHoveredFurnitureId(null);
+    }
 
     let foundRoom: RoomResponse | null = null;
     for (const { room, polygon } of enrichedRooms) {
@@ -2159,6 +2278,10 @@ export function FloorplanCanvas({
   };
 
   const handleCanvasMouseLeave = () => {
+    setHoverCursorPx(null);
+    if (hoveredFurnitureId !== null) {
+      setHoveredFurnitureId(null);
+    }
     if (hoveredRoomId !== null) {
       setHoveredRoomId(null);
       onHoverRoomChange?.(null);
@@ -2168,6 +2291,9 @@ export function FloorplanCanvas({
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragMovedDistRef.current > 6) {
       dragMovedDistRef.current = 0;
+      return;
+    }
+    if (e.detail >= 2) {
       return;
     }
     const canvas = dynamicCanvasRef.current;
@@ -2185,6 +2311,7 @@ export function FloorplanCanvas({
 
     for (const { room, polygon } of enrichedRooms) {
       if (isPointInPolygon(normPt, polygon)) {
+        lastClickedRoomRef.current = { room, ts: Date.now() };
         onSelectRoom(room);
         return;
       }
@@ -2286,6 +2413,16 @@ export function FloorplanCanvas({
   };
 
   const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const recent = lastClickedRoomRef.current;
+    if (recent && Date.now() - recent.ts < 450) {
+      lastClickedRoomRef.current = null;
+      onSelectRoom(recent.room);
+      setZoomedRoomId(
+        zoomedRoomId === recent.room.id ? null : recent.room.id
+      );
+      return;
+    }
+
     const canvas = dynamicCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -2454,11 +2591,11 @@ export function FloorplanCanvas({
     );
     const pos = computePopoverPlacement(
       targetCluster.centroidScreen,
-      { width: 224, height: 196 },
+      { width: 256, height: 248 },
       canvasSize,
       {
         margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
-        gap: 20,
+        gap: 16,
         preferredPlacement: 'top',
       }
     );
@@ -2477,6 +2614,112 @@ export function FloorplanCanvas({
     devices,
     deviceTelemetryMap,
     roomTelemetryMap,
+    canvasSize,
+  ]);
+
+  const hoveredFurnitureTooltipData = useMemo(() => {
+    if (
+      !hoveredFurnitureId ||
+      !showFurnitureLayer ||
+      furnitureEditMode ||
+      hoveredDeviceId ||
+      hoveredBayId
+    ) {
+      return null;
+    }
+    const item = visibleFurnitureItems.find((it) => it.id === hoveredFurnitureId);
+    if (!item) return null;
+    const entry = resolveFurnitureCatalogEntry(item.typeId, furnitureCatalog);
+    const cornersScreen = getFurnitureObbCornersNorm(item).map(toScreenPx);
+    const anchorPx = hoverCursorPx ?? toScreenPx({ x: item.x, y: item.y });
+    const pos = computePopoverPlacement(
+      anchorPx,
+      { width: 204, height: 68 },
+      canvasSize,
+      {
+        margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
+        gap: 14,
+        preferredPlacement: 'top',
+      }
+    );
+    return {
+      item,
+      entry,
+      cornersPoints: cornersScreen
+        .map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+        .join(' '),
+      ...pos,
+    };
+  }, [
+    hoveredFurnitureId,
+    showFurnitureLayer,
+    furnitureEditMode,
+    hoveredDeviceId,
+    hoveredBayId,
+    visibleFurnitureItems,
+    furnitureCatalog,
+    toScreenPx,
+    hoverCursorPx,
+    canvasSize,
+  ]);
+
+  const hoveredRoomTooltipData = useMemo(() => {
+    if (
+      !hoveredRoomId ||
+      zoomViewport.scale >= 1.6 ||
+      furnitureEditMode ||
+      hoveredDeviceId ||
+      hoveredBayId ||
+      hoveredFurnitureId ||
+      !hoverCursorPx
+    ) {
+      return null;
+    }
+    const found = enrichedRooms.find((er) => er.room.id === hoveredRoomId);
+    if (!found) return null;
+    const { room, preset } = found;
+    const tel = roomTelemetryMap[room.id];
+    const value = extractLayerMetricValue(tel, layer);
+    const effectiveRoomType = preset?.roomType ?? room.type ?? 'STUDY_ROOM';
+    const status = getMetricStatusSymbol(
+      layer,
+      value,
+      effectiveRoomType,
+      room.thresholds
+    );
+    const openAlerts =
+      roomAlertCounts?.[room.id] ?? (firingRoomSet.has(room.id) ? 1 : 0);
+    const pos = computePopoverPlacement(
+      hoverCursorPx,
+      { width: 220, height: 66 },
+      canvasSize,
+      {
+        margin: FLOORPLAN_INTERACTION_CONFIG.viewportMarginPx,
+        gap: 16,
+        preferredPlacement: 'top',
+      }
+    );
+    return {
+      room,
+      preset,
+      value,
+      status,
+      openAlerts,
+      ...pos,
+    };
+  }, [
+    hoveredRoomId,
+    zoomViewport.scale,
+    furnitureEditMode,
+    hoveredDeviceId,
+    hoveredBayId,
+    hoveredFurnitureId,
+    hoverCursorPx,
+    enrichedRooms,
+    roomTelemetryMap,
+    layer,
+    roomAlertCounts,
+    firingRoomSet,
     canvasSize,
   ]);
 
@@ -2504,7 +2747,7 @@ export function FloorplanCanvas({
         className="relative overflow-hidden"
         style={{ width: canvasSize.width, height: canvasSize.height }}
       >
-        {/* Top Floating Controls: CAD Layer Toggle, Clean Density & Zoom Fit */}
+        {/* Top Floating Controls: CAD Layer Toggle & Zoom Fit */}
         <div className="pointer-events-auto absolute left-3 top-3 z-20 flex flex-wrap items-center gap-1.5">
           <button
             type="button"
@@ -2519,22 +2762,6 @@ export function FloorplanCanvas({
           >
             {FLOORPLAN_I18N_VI.controls.cadToggle}
           </button>
-
-          {/* Display Density (Only Tinh gọn mode) */}
-          <div
-            role="group"
-            aria-label="Mật độ hiển thị nhãn bản đồ"
-            className="flex items-center rounded-lg border border-slate-700/90 bg-slate-900/90 p-0.5 text-xs shadow-sm backdrop-blur"
-          >
-            <button
-              type="button"
-              aria-pressed={labelDensity === 'clean'}
-              onClick={() => setLabelDensity('clean')}
-              className="rounded-md bg-sky-500 px-2 py-0.5 text-2xs font-semibold text-slate-950 shadow-xs transition-colors"
-            >
-              Tinh gọn
-            </button>
-          </div>
 
           {zoomViewport.isZoomed ? (
             <button
@@ -2683,6 +2910,284 @@ export function FloorplanCanvas({
           aria-label="Bản đồ không gian mặt bằng và Heatmap 2D Thư viện Tạ Quang Bửu"
         />
 
+        {/* Layer 2.2: Architectural 1:100 Vector Furniture Shapes (5 main furniture types + legacy) */}
+        {showFurnitureLayer && visibleFurnitureItems.length > 0 && (
+          <svg
+            data-testid="furniture-architectural-layer"
+            viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`}
+            width={canvasSize.width}
+            height={canvasSize.height}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-[4]"
+          >
+            {visibleFurnitureItems.map((item) => {
+              const entry = resolveFurnitureCatalogEntry(
+                item.typeId,
+                furnitureCatalog
+              );
+              const centerScreen = toScreenPx({ x: item.x, y: item.y });
+              const sz = furnitureMetersToPixelSize(
+                item.widthM,
+                item.depthM,
+                canvasSize.width,
+                canvasSize.height,
+                zoomViewport.scale
+              );
+              const w = Math.max(4, sz.widthPx);
+              const h = Math.max(4, sz.heightPx);
+              const hw = w * 0.5;
+              const hh = h * 0.5;
+              const isSelected = selectedFurnitureSet.has(item.id);
+              const isInvalid = invalidFurnitureSet.has(item.id);
+              const itemStroke = isInvalid
+                ? '#EF4444'
+                : isSelected
+                  ? '#38BDF8'
+                  : item.locked
+                    ? '#F59E0B'
+                    : entry.strokeColor;
+              const itemFill = isInvalid
+                ? 'rgba(127, 29, 29, 0.72)'
+                : entry.fillColor;
+              const opacityVal = furnitureEditMode
+                ? Math.max(0.75, Math.min(1, furnitureOpacity))
+                : Math.max(0, Math.min(1, furnitureOpacity));
+              const slotCount = Math.max(
+                2,
+                Math.min(14, Math.round(item.widthM / 0.45))
+              );
+              const benchSlots = Math.max(
+                2,
+                Math.min(8, Math.round(item.widthM / 0.6))
+              );
+
+              return (
+                <g
+                  key={`arch-${item.id}`}
+                  data-testid={`furniture-arch-${item.id}`}
+                  data-shape={entry.shape}
+                  transform={`translate(${centerScreen.x.toFixed(1)}, ${centerScreen.y.toFixed(1)}) rotate(${item.rotationDeg ?? 0})`}
+                  opacity={opacityVal}
+                >
+                  {(entry.shape === 'long_desk' ||
+                    entry.shape === 'desk_cluster') && (
+                    <>
+                      <rect
+                        x={-hw}
+                        y={-hh}
+                        width={w}
+                        height={h}
+                        rx={Math.min(4, Math.min(w, h) * 0.14)}
+                        fill={itemFill}
+                        stroke={itemStroke}
+                        strokeWidth={isSelected || isInvalid ? 1.8 : 1.2}
+                      />
+                      {w > 18 && h > 10 && (
+                        <>
+                          <rect
+                            x={-hw + 2.5}
+                            y={-hh + 2.5}
+                            width={Math.max(2, w - 5)}
+                            height={Math.max(2, h - 5)}
+                            rx={1.5}
+                            fill="none"
+                            stroke={itemStroke}
+                            strokeOpacity={0.35}
+                            strokeWidth={0.8}
+                          />
+                          <line
+                            x1={-hw + 3}
+                            y1={0}
+                            x2={hw - 3}
+                            y2={0}
+                            stroke={itemStroke}
+                            strokeOpacity={0.32}
+                            strokeWidth={0.8}
+                            strokeDasharray="3 2"
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {entry.shape === 'single_chair' && (
+                    <>
+                      <rect
+                        x={-hw}
+                        y={-hh}
+                        width={w}
+                        height={h}
+                        rx={Math.min(3.5, Math.min(w, h) * 0.25)}
+                        fill={itemFill}
+                        stroke={itemStroke}
+                        strokeWidth={isSelected || isInvalid ? 1.7 : 1.1}
+                      />
+                      {/* Thanh tựa lưng đậm hơn ở cạnh Bắc để nhận biết hướng xoay */}
+                      <rect
+                        x={-hw + Math.max(0.8, w * 0.1)}
+                        y={-hh}
+                        width={Math.max(2, w * 0.8)}
+                        height={Math.max(2.2, h * 0.24)}
+                        rx={1.2}
+                        fill={itemStroke}
+                        fillOpacity={0.85}
+                      />
+                    </>
+                  )}
+
+                  {entry.shape === 'long_bench' && (
+                    <>
+                      <rect
+                        x={-hw}
+                        y={-hh}
+                        width={w}
+                        height={h}
+                        rx={Math.min(3.5, Math.min(w, h) * 0.2)}
+                        fill={itemFill}
+                        stroke={itemStroke}
+                        strokeWidth={isSelected || isInvalid ? 1.8 : 1.2}
+                      />
+                      <rect
+                        x={-hw + 1}
+                        y={-hh}
+                        width={Math.max(2, w - 2)}
+                        height={Math.max(2.2, h * 0.22)}
+                        rx={1}
+                        fill={itemStroke}
+                        fillOpacity={0.72}
+                      />
+                      {w > 22 &&
+                        Array.from({ length: benchSlots - 1 }).map((_, idx) => {
+                          const lx = -hw + ((idx + 1) * w) / benchSlots;
+                          return (
+                            <line
+                              key={idx}
+                              x1={lx}
+                              y1={-hh + h * 0.24}
+                              x2={lx}
+                              y2={hh - 1}
+                              stroke={itemStroke}
+                              strokeOpacity={0.38}
+                              strokeWidth={0.8}
+                            />
+                          );
+                        })}
+                    </>
+                  )}
+
+                  {entry.shape === 'bookshelf' && (
+                    <>
+                      <rect
+                        x={-hw}
+                        y={-hh}
+                        width={w}
+                        height={h}
+                        rx={1.5}
+                        fill={itemFill}
+                        stroke={itemStroke}
+                        strokeWidth={isSelected || isInvalid ? 1.8 : 1.3}
+                      />
+                      <line
+                        x1={-hw + 1}
+                        y1={0}
+                        x2={hw - 1}
+                        y2={0}
+                        stroke={itemStroke}
+                        strokeOpacity={0.7}
+                        strokeWidth={1.0}
+                      />
+                      {w > 18 &&
+                        Array.from({ length: slotCount - 1 }).map((_, idx) => {
+                          const lx = -hw + ((idx + 1) * w) / slotCount;
+                          return (
+                            <line
+                              key={idx}
+                              x1={lx}
+                              y1={-hh + 1}
+                              x2={lx}
+                              y2={hh - 1}
+                              stroke={itemStroke}
+                              strokeOpacity={0.45}
+                              strokeWidth={0.8}
+                            />
+                          );
+                        })}
+                    </>
+                  )}
+
+                  {entry.shape === 'librarian_desk' && (
+                    <>
+                      <rect
+                        x={-hw}
+                        y={-hh}
+                        width={w}
+                        height={h}
+                        rx={Math.min(5, Math.min(w, h) * 0.2)}
+                        fill={itemFill}
+                        stroke={itemStroke}
+                        strokeWidth={isSelected || isInvalid ? 2.0 : 1.4}
+                      />
+                      {/* Gờ quầy giao dịch phía trước */}
+                      <rect
+                        x={-hw + 1.5}
+                        y={hh - Math.max(3, h * 0.26)}
+                        width={Math.max(4, w - 3)}
+                        height={Math.max(2.5, h * 0.22)}
+                        rx={1.5}
+                        fill={itemStroke}
+                        fillOpacity={0.45}
+                        stroke={itemStroke}
+                        strokeWidth={0.8}
+                      />
+                      {w > 24 && h > 12 && (
+                        <rect
+                          x={-Math.min(8, w * 0.14)}
+                          y={-hh + Math.max(2, h * 0.14)}
+                          width={Math.min(16, w * 0.28)}
+                          height={Math.max(3, h * 0.24)}
+                          rx={1}
+                          fill="#E0F2FE"
+                          fillOpacity={0.5}
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {entry.shape !== 'long_desk' &&
+                    entry.shape !== 'desk_cluster' &&
+                    entry.shape !== 'single_chair' &&
+                    entry.shape !== 'long_bench' &&
+                    entry.shape !== 'bookshelf' &&
+                    entry.shape !== 'librarian_desk' && (
+                      <>
+                        <rect
+                          x={-hw}
+                          y={-hh}
+                          width={w}
+                          height={h}
+                          rx={entry.shape === 'rounded_rect' ? 3 : 1}
+                          fill={itemFill}
+                          stroke={itemStroke}
+                          strokeWidth={isSelected || isInvalid ? 1.8 : 1.1}
+                        />
+                        {entry.shape === 'door_swing' && (
+                          <line
+                            x1={-hw}
+                            y1={-hh}
+                            x2={hw}
+                            y2={hh}
+                            stroke={itemStroke}
+                            strokeWidth={1.1}
+                          />
+                        )}
+                      </>
+                    )}
+                </g>
+              );
+            })}
+          </svg>
+        )}
+
         {/* Layer 2A: Architectural Landmarks (Stairs, Elevators, WC, Entrance) */}
         <div className="pointer-events-none absolute inset-0 z-[5]">
           {floorLandmarks.map((lm) => {
@@ -2717,9 +3222,14 @@ export function FloorplanCanvas({
         {/* Layer 2B: Anonymous Reading Bay Micro-zones (FE-VIZ-09, >= 44x44px hit-box) */}
         <div
           data-testid="reading-bays-layer"
-          className="pointer-events-none absolute inset-0 z-[6]"
+          className={`pointer-events-none absolute inset-0 z-[6] transition-opacity ${
+            furnitureEditMode ? 'opacity-45 [&_*]:!pointer-events-none' : ''
+          }`}
         >
           {visibleAnonymousBays.map(({ bay, room }) => {
+            if (roomsWithRealFurnitureSet.has(room.id)) {
+              return null;
+            }
             const isSelectedBay = bay.bayId === selectedBayId;
             const isHoveredBay = bay.bayId === hoveredBayId;
             if (lodConfig.bayStyle === 'hidden' && !isSelectedBay) {
@@ -2743,8 +3253,14 @@ export function FloorplanCanvas({
             return (
               <div
                 key={bay.bayId}
-                style={{ left: `${px.x}px`, top: `${px.y}px` }}
-                className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
+                style={{
+                  left: `${px.x}px`,
+                  top: `${px.y}px`,
+                  pointerEvents: furnitureEditMode ? 'none' : undefined,
+                }}
+                className={`${
+                  furnitureEditMode ? 'pointer-events-none' : 'pointer-events-auto'
+                } absolute -translate-x-1/2 -translate-y-1/2`}
               >
                 <button
                   type="button"
@@ -2799,7 +3315,9 @@ export function FloorplanCanvas({
         {/* Layer 2C: Clustered & Individual Hardware Device Pins Overlay (>= 44x44px hit-box) */}
         <div
           data-testid="device-pins-layer"
-          className="pointer-events-none absolute inset-0 z-[8]"
+          className={`pointer-events-none absolute inset-0 z-[8] transition-opacity ${
+            furnitureEditMode ? 'opacity-45 [&_*]:!pointer-events-none' : ''
+          }`}
         >
           {deviceClusters.map((cluster) => {
             const px = cluster.centroidScreen;
@@ -2822,8 +3340,8 @@ export function FloorplanCanvas({
                   cluster.highestSeverity === 'LOW' ||
                   cluster.hasAlert);
               const clusterVisualPx = Math.max(
-                24,
-                Math.min(32, lodConfig.nodeVisualSizePx + 8)
+                18,
+                Math.min(22, lodConfig.nodeVisualSizePx + 6)
               );
 
               return (
@@ -2833,16 +3351,19 @@ export function FloorplanCanvas({
                     left: `${px.x}px`,
                     top: `${px.y}px`,
                     zIndex: isSevereCluster ? 28 : isWarningCluster ? 24 : 18,
+                    pointerEvents: furnitureEditMode ? 'none' : undefined,
                   }}
-                  className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
+                  className={`${
+                    furnitureEditMode ? 'pointer-events-none' : 'pointer-events-auto'
+                  } absolute -translate-x-1/2 -translate-y-1/2`}
                 >
                   {cluster.hasAlert && (
                     <span
                       aria-hidden="true"
-                      className={`pointer-events-none absolute inset-1 rounded-full motion-safe:animate-ping ${
+                      className={`pointer-events-none absolute inset-1.5 rounded-full motion-safe:animate-ping ${
                         isSevereCluster
-                          ? 'bg-red-500 opacity-55'
-                          : 'bg-amber-400 opacity-45'
+                          ? 'bg-red-500 opacity-50'
+                          : 'bg-amber-400 opacity-40'
                       }`}
                     />
                   )}
@@ -2867,11 +3388,11 @@ export function FloorplanCanvas({
                         width: `${clusterVisualPx}px`,
                         height: `${clusterVisualPx}px`,
                       }}
-                      className={`flex items-center justify-center rounded-full border-2 font-mono text-xs font-bold shadow-lg transition-transform group-hover:scale-110 ${
+                      className={`flex items-center justify-center rounded-full border-[1.5px] font-mono text-[10px] font-bold shadow-md transition-transform group-hover:scale-110 ${
                         isSevereCluster
-                          ? 'border-red-300 bg-red-900/95 text-white ring-2 ring-red-500/80'
+                          ? 'border-red-300 bg-red-900/95 text-white ring-1 ring-red-500/80'
                           : isWarningCluster
-                            ? 'border-amber-300 bg-amber-900/95 text-amber-50 ring-2 ring-amber-400/75'
+                            ? 'border-amber-300 bg-amber-900/95 text-amber-50 ring-1 ring-amber-400/75'
                             : 'border-sky-300 bg-slate-900/95 text-sky-100 ring-1 ring-sky-400/50'
                       }`}
                     >
@@ -2904,26 +3425,6 @@ export function FloorplanCanvas({
               ? getContinuousMetricColorCss(layer, activeVal)
               : '#64748B';
 
-            const isAbnormal =
-              device.online &&
-              ((layer === 'temperature' &&
-                typeof activeVal === 'number' &&
-                activeVal >= 24.5) ||
-                (layer === 'noiseAvg' &&
-                  typeof activeVal === 'number' &&
-                  activeVal >= 50.0) ||
-                (layer === 'pm2_5' &&
-                  typeof activeVal === 'number' &&
-                  activeVal >= 22.0) ||
-                (layer === 'humidity' &&
-                  typeof activeVal === 'number' &&
-                  activeVal >= 60.0) ||
-                (layer === 'wifiRssi' &&
-                  typeof activeVal === 'number' &&
-                  activeVal <= -75.0));
-
-            const isInZoomedRoom =
-              zoomViewport.isZoomed && device.roomId === zoomedRoomId;
             const isFocusedDevice = Boolean(
               focusedDeviceId &&
                 (device.id === focusedDeviceId ||
@@ -2936,24 +3437,14 @@ export function FloorplanCanvas({
             const usePinStyle =
               isFocusedDevice ||
               isAlertingDevice ||
-              (zoomedRoomId
-                ? isInZoomedRoom
-                : lodConfig.sensorStyle === 'pin');
+              (labelDensity !== 'clean' && lodConfig.sensorStyle === 'pin');
             const showBadge =
               isFocusedDevice ||
-              isAlertingDevice ||
-              (zoomedRoomId
-                ? isInZoomedRoom
-                : lodConfig.showSensorBadge);
+              (labelDensity !== 'clean' && lodConfig.showSensorBadge);
 
             const nodeVisualPx = Math.max(
-              10,
-              Math.min(
-                32,
-                usePinStyle
-                  ? Math.max(20, lodConfig.nodeVisualSizePx)
-                  : lodConfig.nodeVisualSizePx
-              )
+              8,
+              Math.min(14, lodConfig.nodeVisualSizePx)
             );
 
             return (
@@ -2963,29 +3454,25 @@ export function FloorplanCanvas({
                   left: `${px.x}px`,
                   top: `${px.y}px`,
                   zIndex: isFocusedDevice ? 35 : isAlertingDevice ? 25 : undefined,
+                  pointerEvents: furnitureEditMode ? 'none' : undefined,
                 }}
-                className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2"
+                className={`${
+                  furnitureEditMode ? 'pointer-events-none' : 'pointer-events-auto'
+                } absolute -translate-x-1/2 -translate-y-1/2`}
               >
-                {(isFocusedDevice || isAlertingDevice || isAbnormal) && (
+                {(isFocusedDevice || isAlertingDevice) && (
                   <span
                     className={`pointer-events-none absolute rounded-full ${
                       isFocusedDevice
-                        ? 'inset-0 motion-safe:animate-ping bg-rose-500 opacity-75'
-                        : isAlertingDevice
-                          ? 'inset-1 motion-safe:animate-ping bg-rose-500 opacity-60'
-                          : 'inset-2 motion-safe:animate-ping opacity-55'
+                        ? 'inset-1 motion-safe:animate-ping bg-rose-500 opacity-75'
+                        : 'inset-2 motion-safe:animate-ping bg-rose-500 opacity-55'
                     }`}
-                    style={
-                      !isFocusedDevice && !isAlertingDevice
-                        ? { backgroundColor: colorHex }
-                        : undefined
-                    }
                   />
                 )}
                 {isFocusedDevice && (
                   <span
                     aria-hidden="true"
-                    className="pointer-events-none absolute inset-1 rounded-full border-2 border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.9)]"
+                    className="pointer-events-none absolute inset-2 rounded-full border-2 border-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.85)]"
                   />
                 )}
 
@@ -3010,12 +3497,12 @@ export function FloorplanCanvas({
                     <span
                       data-testid={`device-visual-${device.id}`}
                       data-visual-size={nodeVisualPx}
-                      className={`flex items-center justify-center rounded-full text-xs font-bold transition-transform group-hover:scale-125 group-focus:scale-125 ${
+                      className={`flex items-center justify-center rounded-full text-[7px] font-bold leading-none transition-transform group-hover:scale-125 group-focus:scale-125 ${
                         isFocusedDevice
-                          ? 'scale-110 border-2 border-rose-300 ring-2 ring-rose-500 shadow-xl'
+                          ? 'scale-110 border-[1.5px] border-rose-200 ring-2 ring-rose-500 shadow-md'
                           : device.online
-                            ? 'border-2 border-white shadow-lg'
-                            : 'border-2 border-dashed border-slate-400 bg-slate-800/90 text-slate-300 opacity-85'
+                            ? 'border-[1.5px] border-white shadow-sm'
+                            : 'border-[1.5px] border-dashed border-slate-400 bg-slate-800/95 text-slate-300 opacity-85'
                       }`}
                       style={{
                         width: `${nodeVisualPx}px`,
@@ -3027,8 +3514,8 @@ export function FloorplanCanvas({
                                 : colorHex,
                               color: isFocusedDevice ? '#FFFFFF' : '#0F172A',
                               boxShadow: isFocusedDevice
-                                ? '0 0 18px #F43F5E, 0 2px 6px rgba(0,0,0,0.75)'
-                                : `0 0 14px ${colorHex}, 0 2px 4px rgba(0,0,0,0.6)`,
+                                ? '0 0 10px #F43F5E, 0 1px 3px rgba(0,0,0,0.75)'
+                                : `0 0 6px ${colorHex}, 0 1px 2px rgba(0,0,0,0.6)`,
                               transition: pinTransitionCss,
                             }
                           : undefined),
@@ -3042,8 +3529,8 @@ export function FloorplanCanvas({
                       data-visual-size={nodeVisualPx}
                       className={`flex items-center justify-center rounded-full transition-transform group-hover:scale-150 group-focus:scale-150 ${
                         device.online
-                          ? 'border border-white/95 shadow'
-                          : 'border border-dashed border-slate-400 bg-slate-800/90 opacity-85'
+                          ? 'border-[1.5px] border-white/95 shadow-sm'
+                          : 'border-[1.5px] border-dashed border-slate-400 bg-slate-800/95 text-slate-300 opacity-85'
                       }`}
                       style={{
                         width: `${nodeVisualPx}px`,
@@ -3051,16 +3538,18 @@ export function FloorplanCanvas({
                         ...(device.online
                           ? {
                               backgroundColor: colorHex,
-                              boxShadow: `0 0 10px ${colorHex}, 0 1px 3px rgba(0,0,0,0.65)`,
+                              boxShadow: `0 0 6px ${colorHex}, 0 1px 2px rgba(0,0,0,0.65)`,
                               transition: pinTransitionCss,
                             }
                           : undefined),
                       }}
-                    />
+                    >
+                      <span className="sr-only">{device.online ? '●' : '✕'}</span>
+                    </span>
                   )}
                 </button>
 
-                {(showBadge && activeVal !== null) || isFocusedDevice ? (
+                {showBadge && activeVal !== null ? (
                   <div
                     className="pointer-events-none absolute left-1/2 top-full -mt-1 -translate-x-1/2 rounded border px-1.5 py-0.5 text-center font-mono text-2xs font-bold shadow-md"
                     style={{
@@ -3178,62 +3667,170 @@ export function FloorplanCanvas({
         {/* Interactive Furniture Edit Overlay (Visible strictly when furnitureEditMode && showFurnitureLayer) */}
         {furnitureEditMode && showFurnitureLayer && (
           <div
+            ref={editOverlayRef}
             data-testid="furniture-edit-overlay"
-            className="pointer-events-auto absolute inset-0 z-[18] touch-none"
+            className="pointer-events-auto absolute inset-0 z-[18] touch-none cursor-grab active:cursor-grabbing"
+            onPointerDown={(ev) => {
+              setInlineRenameId(null);
+              const rect = ev.currentTarget.getBoundingClientRect();
+              if (ev.shiftKey) {
+                const lx = ev.clientX - rect.left;
+                const ly = ev.clientY - rect.top;
+                setMarqueeBoxPx({
+                  startX: lx,
+                  startY: ly,
+                  currX: lx,
+                  currY: ly,
+                });
+                return;
+              }
+              const currVp = latestViewportRef.current;
+              editPanRef.current = {
+                startClientX: ev.clientX,
+                startClientY: ev.clientY,
+                startTx: currVp.tx,
+                startTy: currVp.ty,
+                moved: false,
+              };
+            }}
             onPointerMove={(ev) => {
               const drag = furnitureDragRef.current;
-              if (!drag) return;
-              const target = furnitureItems.find((i) => i.id === drag.itemId);
-              if (!target || target.locked) return;
+              if (drag) {
+                const target = furnitureItems.find((i) => i.id === drag.itemId);
+                if (!target || target.locked) return;
 
-              const dxPx = ev.clientX - drag.startClientX;
-              const dyPx = ev.clientY - drag.startClientY;
-              if (Math.hypot(dxPx, dyPx) < 1) return;
+                const dxPx = ev.clientX - drag.startClientX;
+                const dyPx = ev.clientY - drag.startClientY;
+                if (Math.hypot(dxPx, dyPx) < 1) return;
 
-              const rawNorm = {
-                x: Math.max(
-                  0.01,
-                  Math.min(
-                    0.99,
-                    drag.startNormX +
-                      dxPx / Math.max(1, canvasSize.width * zoomViewport.scale)
-                  )
-                ),
-                y: Math.max(
-                  0.01,
-                  Math.min(
-                    0.99,
-                    drag.startNormY +
-                      dyPx / Math.max(1, canvasSize.height * zoomViewport.scale)
-                  )
-                ),
-              };
-              const nextPos = snapFurnitureGrid
-                ? snapNormalizedPointToGrid(rawNorm, 0.25)
-                : rawNorm;
+                const rawNorm = {
+                  x: Math.max(
+                    0.01,
+                    Math.min(
+                      0.99,
+                      drag.startNormX +
+                        dxPx / Math.max(1, canvasSize.width * zoomViewport.scale)
+                    )
+                  ),
+                  y: Math.max(
+                    0.01,
+                    Math.min(
+                      0.99,
+                      drag.startNormY +
+                        dyPx / Math.max(1, canvasSize.height * zoomViewport.scale)
+                    )
+                  ),
+                };
+                const smart = computeSmartDragPosition(
+                  target,
+                  rawNorm,
+                  furnitureItems,
+                  snapFurnitureGrid,
+                  snapStepM
+                );
 
-              const nextItems = furnitureItems.map((it) =>
-                it.id === drag.itemId
-                  ? {
-                      ...it,
-                      x: Number(nextPos.x.toFixed(4)),
-                      y: Number(nextPos.y.toFixed(4)),
-                    }
-                  : it
-              );
-              drag.moved = true;
-              drag.latestItems = nextItems;
-              onUpdateFurnitureItems?.(nextItems);
+                const nextItems = furnitureItems.map((it) =>
+                  it.id === drag.itemId
+                    ? {
+                        ...it,
+                        x: smart.x,
+                        y: smart.y,
+                      }
+                    : it
+                );
+                drag.moved = true;
+                drag.latestItems = nextItems;
+                setActiveAlignGuides(smart.guides);
+                onUpdateFurnitureItems?.(nextItems);
+                return;
+              }
+
+              if (marqueeBoxPx) {
+                const rect = ev.currentTarget.getBoundingClientRect();
+                setMarqueeBoxPx((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        currX: ev.clientX - rect.left,
+                        currY: ev.clientY - rect.top,
+                      }
+                    : null
+                );
+                return;
+              }
+
+              const pan = editPanRef.current;
+              if (pan) {
+                const dx = ev.clientX - pan.startClientX;
+                const dy = ev.clientY - pan.startClientY;
+                if (Math.hypot(dx, dy) >= 4) {
+                  pan.moved = true;
+                }
+                if (pan.moved) {
+                  const currVp = latestViewportRef.current;
+                  commitViewport(
+                    clampViewportTransform(
+                      currVp.scale,
+                      pan.startTx + dx,
+                      pan.startTy + dy,
+                      canvasSize.width,
+                      canvasSize.height,
+                      ZOOM_CONFIG.maxScale
+                    )
+                  );
+                }
+              }
             }}
             onPointerUp={() => {
               const drag = furnitureDragRef.current;
-              if (drag?.moved) {
-                onCommitFurnitureItems?.(drag.latestItems);
+              if (drag) {
+                if (drag.moved) {
+                  onCommitFurnitureItems?.(drag.latestItems);
+                }
+                furnitureDragRef.current = null;
+                setActiveAlignGuides([]);
+                return;
               }
-              furnitureDragRef.current = null;
+
+              if (marqueeBoxPx) {
+                const minX = Math.min(marqueeBoxPx.startX, marqueeBoxPx.currX);
+                const maxX = Math.max(marqueeBoxPx.startX, marqueeBoxPx.currX);
+                const minY = Math.min(marqueeBoxPx.startY, marqueeBoxPx.currY);
+                const maxY = Math.max(marqueeBoxPx.startY, marqueeBoxPx.currY);
+                if (maxX - minX >= 6 || maxY - minY >= 6) {
+                  const hitIds = visibleFurnitureItems
+                    .filter((item) => {
+                      const sp = toScreenPx({ x: item.x, y: item.y });
+                      return (
+                        sp.x >= minX &&
+                        sp.x <= maxX &&
+                        sp.y >= minY &&
+                        sp.y <= maxY
+                      );
+                    })
+                    .map((item) => item.id);
+                  onSelectFurnitureIds?.(hitIds);
+                }
+                setMarqueeBoxPx(null);
+                return;
+              }
+
+              const pan = editPanRef.current;
+              if (pan) {
+                if (!pan.moved) {
+                  onSelectFurnitureIds?.([]);
+                }
+                editPanRef.current = null;
+              }
             }}
             onPointerCancel={() => {
               furnitureDragRef.current = null;
+              editPanRef.current = null;
+              setMarqueeBoxPx(null);
+              setActiveAlignGuides([]);
+            }}
+            onMouseLeave={() => {
+              setHoveredEditFurnitureId(null);
             }}
           >
             <svg
@@ -3243,6 +3840,55 @@ export function FloorplanCanvas({
               aria-hidden="true"
               className="pointer-events-none absolute inset-0"
             >
+              {/* Đường gióng căn hàng tự động khi đang kéo */}
+              {activeAlignGuides.map((g, idx) => {
+                const sp = toScreenPx(
+                  g.orientation === 'vertical'
+                    ? { x: g.posNorm, y: 0.5 }
+                    : { x: 0.5, y: g.posNorm }
+                );
+                return g.orientation === 'vertical' ? (
+                  <line
+                    key={`guide-v-${idx}`}
+                    data-testid="furniture-align-guide-v"
+                    x1={sp.x}
+                    y1={0}
+                    x2={sp.x}
+                    y2={canvasSize.height}
+                    stroke="#38BDF8"
+                    strokeWidth={1.3}
+                    strokeDasharray="5 3"
+                  />
+                ) : (
+                  <line
+                    key={`guide-h-${idx}`}
+                    data-testid="furniture-align-guide-h"
+                    x1={0}
+                    y1={sp.y}
+                    x2={canvasSize.width}
+                    y2={sp.y}
+                    stroke="#38BDF8"
+                    strokeWidth={1.3}
+                    strokeDasharray="5 3"
+                  />
+                );
+              })}
+
+              {/* Khung chọn nhiều đối tượng (Shift + Kéo) */}
+              {marqueeBoxPx && (
+                <rect
+                  x={Math.min(marqueeBoxPx.startX, marqueeBoxPx.currX)}
+                  y={Math.min(marqueeBoxPx.startY, marqueeBoxPx.currY)}
+                  width={Math.abs(marqueeBoxPx.currX - marqueeBoxPx.startX)}
+                  height={Math.abs(marqueeBoxPx.currY - marqueeBoxPx.startY)}
+                  fill="rgba(56, 189, 248, 0.14)"
+                  stroke="#38BDF8"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                />
+              )}
+
+              {/* Viền OBB tương tác khi Chọn / Hover / Vi phạm va chạm */}
               {visibleFurnitureItems.map((item) => {
                 const cornersScreen = getFurnitureObbCornersNorm(item).map(toScreenPx);
                 const points = cornersScreen
@@ -3250,27 +3896,33 @@ export function FloorplanCanvas({
                   .join(' ');
                 const isSelected = selectedFurnitureSet.has(item.id);
                 const isInvalid = invalidFurnitureSet.has(item.id);
+                const isHoveredEdit = hoveredEditFurnitureId === item.id;
+                if (!isSelected && !isInvalid && !isHoveredEdit && !item.locked) {
+                  return null;
+                }
                 return (
                   <polygon
                     key={`poly-${item.id}`}
                     points={points}
                     fill={
                       isInvalid
-                        ? 'rgba(239, 68, 68, 0.24)'
+                        ? 'rgba(239, 68, 68, 0.22)'
                         : isSelected
-                          ? 'rgba(56, 189, 248, 0.22)'
-                          : 'rgba(148, 163, 184, 0.14)'
+                          ? 'rgba(56, 189, 248, 0.16)'
+                          : isHoveredEdit
+                            ? 'rgba(125, 211, 252, 0.12)'
+                            : 'none'
                     }
                     stroke={
                       isInvalid
                         ? '#EF4444'
                         : isSelected
                           ? '#38BDF8'
-                          : item.locked
-                            ? '#F59E0B'
-                            : '#CBD5E1'
+                          : isHoveredEdit
+                            ? '#7DD3FC'
+                            : '#F59E0B'
                     }
-                    strokeWidth={isSelected || isInvalid ? 2.2 : 1.2}
+                    strokeWidth={isSelected || isInvalid ? 2.2 : 1.3}
                     strokeDasharray={item.locked ? '3 2' : undefined}
                   />
                 );
@@ -3283,17 +3935,31 @@ export function FloorplanCanvas({
                 item.typeId,
                 furnitureCatalog
               );
+              const sz = furnitureMetersToPixelSize(
+                item.widthM,
+                item.depthM,
+                canvasSize.width,
+                canvasSize.height,
+                zoomViewport.scale
+              );
+              const boxW = Math.max(14, Math.round(sz.widthPx));
+              const boxH = Math.max(14, Math.round(sz.heightPx));
               const isSelected = selectedFurnitureSet.has(item.id);
               const isInvalid = invalidFurnitureSet.has(item.id);
+              const isHoveredEdit = hoveredEditFurnitureId === item.id;
+              const isRenaming = inlineRenameId === item.id;
+              const reasons = invalidFurnitureReasons?.[item.id] ?? [];
+              const invalidTag = reasons.some((r) => r.toLowerCase().includes('cột'))
+                ? 'Đè cột'
+                : reasons.some((r) => r.toLowerCase().includes('tường'))
+                  ? 'Vượt tường'
+                  : reasons.some((r) => r.toLowerCase().includes('chồng'))
+                    ? 'Chồng đồ'
+                    : 'Lỗi vị trí';
+
               return (
-                <div
-                  key={item.id}
-                  style={{
-                    left: `${centerScreen.x}px`,
-                    top: `${centerScreen.y}px`,
-                  }}
-                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                >
+                <React.Fragment key={item.id}>
+                  {/* Hit-box trong suốt xoay khớp chính xác hình học từng món đồ (không vẽ cục chữ đè mặt bàn) */}
                   <button
                     type="button"
                     data-testid={`furniture-gizmo-${item.id}`}
@@ -3305,8 +3971,24 @@ export function FloorplanCanvas({
                     aria-label={`${item.label || entry.shortLabel}${
                       item.locked ? ' (Đã khóa)' : ''
                     }`}
+                    style={{
+                      left: `${centerScreen.x}px`,
+                      top: `${centerScreen.y}px`,
+                      width: `${boxW}px`,
+                      height: `${boxH}px`,
+                      transform: `translate(-50%, -50%) rotate(${item.rotationDeg ?? 0}deg)`,
+                    }}
+                    onMouseEnter={() => setHoveredEditFurnitureId(item.id)}
+                    onMouseLeave={() =>
+                      setHoveredEditFurnitureId((prev) =>
+                        prev === item.id ? null : prev
+                      )
+                    }
                     onPointerDown={(ev) => {
                       ev.stopPropagation();
+                      if (inlineRenameId && inlineRenameId !== item.id) {
+                        setInlineRenameId(null);
+                      }
                       if (ev.shiftKey) {
                         const nextSel = isSelected
                           ? selectedFurnitureIds.filter((id) => id !== item.id)
@@ -3329,25 +4011,38 @@ export function FloorplanCanvas({
                     onClick={(ev) => {
                       ev.stopPropagation();
                     }}
-                    className={`flex min-h-[28px] min-w-[28px] items-center justify-center rounded border px-1 font-mono text-[10px] font-semibold shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
-                      isInvalid
-                        ? 'border-red-400 bg-red-950/90 text-red-100'
-                        : isSelected
-                          ? 'border-sky-300 bg-sky-900/95 text-white'
-                          : 'border-slate-500/80 bg-slate-900/80 text-slate-100'
-                    } ${item.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                    onDoubleClick={(ev) => {
+                      ev.stopPropagation();
+                      if (item.locked) return;
+                      onSelectFurnitureIds?.([item.id]);
+                      setInlineRenameId(item.id);
+                      setInlineRenameValue(item.label || entry.labelVi);
+                    }}
+                    className={`absolute rounded bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                      item.locked
+                        ? 'cursor-not-allowed'
+                        : 'cursor-grab active:cursor-grabbing'
+                    }`}
                   >
-                    <span>{item.label || entry.shortLabel}</span>
-                    {item.locked && <span className="ml-1 text-amber-300">🔒</span>}
+                    <span className="sr-only">
+                      {item.label || entry.shortLabel}
+                    </span>
                   </button>
 
+                  {/* Nút xoay +45° gọn gàng bên trên khi chọn 1 vật thể */}
                   {isSelected &&
                     !item.locked &&
-                    selectedFurnitureIds.length === 1 && (
+                    selectedFurnitureIds.length === 1 &&
+                    !isRenaming && (
                       <button
                         type="button"
                         data-testid={`furniture-gizmo-rotate-${item.id}`}
                         aria-label={`Xoay ${item.label || entry.shortLabel} +45 độ`}
+                        style={{
+                          left: `${centerScreen.x}px`,
+                          top: `${Math.max(16, centerScreen.y - boxH * 0.5 - 16)}px`,
+                        }}
+                        onPointerDown={(ev) => ev.stopPropagation()}
                         onClick={(ev) => {
                           ev.stopPropagation();
                           const nextItems = furnitureItems.map((it) =>
@@ -3358,12 +4053,88 @@ export function FloorplanCanvas({
                           onUpdateFurnitureItems?.(nextItems);
                           onCommitFurnitureItems?.(nextItems);
                         }}
-                        className="mt-1 block rounded border border-sky-400 bg-slate-900/95 px-1.5 py-0.5 text-[9px] font-bold text-sky-200 shadow hover:bg-sky-900"
+                        className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-sky-400 bg-slate-950/95 px-2 py-0.5 font-mono text-[9px] font-bold text-sky-200 shadow-md hover:bg-sky-900"
                       >
                         ↻ 45°
                       </button>
                     )}
-                </div>
+
+                  {/* Nhãn báo lỗi va chạm gọn (Vượt tường / Đè cột / Chồng đồ) */}
+                  {isInvalid && !isRenaming && (
+                    <div
+                      data-testid={`furniture-invalid-badge-${item.id}`}
+                      style={{
+                        left: `${centerScreen.x}px`,
+                        top: `${Math.min(canvasSize.height - 14, centerScreen.y + boxH * 0.5 + 14)}px`,
+                      }}
+                      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-red-400 bg-red-950/95 px-1.5 py-0.5 text-[9px] font-semibold text-red-100 shadow"
+                    >
+                      {invalidTag}
+                    </div>
+                  )}
+
+                  {/* Tooltip tên nổi khi hover trong chế độ sửa */}
+                  {isHoveredEdit && !isRenaming && !furnitureDragRef.current && (
+                    <div
+                      style={{
+                        left: `${centerScreen.x}px`,
+                        top: `${Math.max(16, centerScreen.y - boxH * 0.5 - (isSelected && !item.locked ? 36 : 16))}px`,
+                      }}
+                      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border border-sky-300/70 bg-slate-950/95 px-2 py-0.5 text-[10px] font-semibold text-white shadow-lg"
+                    >
+                      {item.label || entry.labelVi}
+                      {item.locked ? ' 🔒' : ''}
+                    </div>
+                  )}
+
+                  {/* Hộp đổi tên trực tiếp tại chỗ khi Double-click (Enter lưu, Escape hủy) */}
+                  {isRenaming && (
+                    <input
+                      type="text"
+                      autoFocus
+                      data-testid="furniture-inline-rename-input"
+                      aria-label="Đổi tên đối tượng nội thất"
+                      value={inlineRenameValue}
+                      style={{
+                        left: `${Math.max(96, Math.min(canvasSize.width - 96, centerScreen.x))}px`,
+                        top: `${Math.max(20, centerScreen.y - boxH * 0.5 - 18)}px`,
+                      }}
+                      onPointerDown={(ev) => ev.stopPropagation()}
+                      onClick={(ev) => ev.stopPropagation()}
+                      onChange={(ev) => setInlineRenameValue(ev.target.value)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === 'Enter') {
+                          ev.preventDefault();
+                          const trimmed = inlineRenameValue.trim();
+                          if (trimmed) {
+                            const nextItems = furnitureItems.map((it) =>
+                              it.id === item.id ? { ...it, label: trimmed } : it
+                            );
+                            onUpdateFurnitureItems?.(nextItems);
+                            onCommitFurnitureItems?.(nextItems);
+                          }
+                          setInlineRenameId(null);
+                        } else if (ev.key === 'Escape') {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          setInlineRenameId(null);
+                        }
+                      }}
+                      onBlur={() => {
+                        const trimmed = inlineRenameValue.trim();
+                        if (trimmed && trimmed !== (item.label ?? '').trim()) {
+                          const nextItems = furnitureItems.map((it) =>
+                            it.id === item.id ? { ...it, label: trimmed } : it
+                          );
+                          onUpdateFurnitureItems?.(nextItems);
+                          onCommitFurnitureItems?.(nextItems);
+                        }
+                        setInlineRenameId(null);
+                      }}
+                      className="absolute z-40 h-7 w-44 -translate-x-1/2 -translate-y-1/2 rounded-md border-2 border-sky-400 bg-slate-950 px-2 text-xs font-medium text-white shadow-xl focus:outline-none"
+                    />
+                  )}
+                </React.Fragment>
               );
             })}
           </div>
@@ -3399,7 +4170,25 @@ export function FloorplanCanvas({
           </div>
         )}
 
-        {/* Edge-flipped Device Tooltip */}
+        {/* Hovered Furniture OBB Highlight Overlay */}
+        {hoveredFurnitureTooltipData && (
+          <svg
+            viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`}
+            width={canvasSize.width}
+            height={canvasSize.height}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-[14]"
+          >
+            <polygon
+              points={hoveredFurnitureTooltipData.cornersPoints}
+              fill="rgba(56, 189, 248, 0.16)"
+              stroke="#38BDF8"
+              strokeWidth={2}
+            />
+          </svg>
+        )}
+
+        {/* Edge-flipped Device Tooltip (Hover-to-Reveal: Tên + Vị trí cấu hình + Bảng thông số môi trường) */}
         {hoveredDeviceTooltipData && (
           <div
             role="tooltip"
@@ -3410,7 +4199,7 @@ export function FloorplanCanvas({
               left: `${hoveredDeviceTooltipData.left}px`,
               top: `${hoveredDeviceTooltipData.top}px`,
             }}
-            className={`pointer-events-none absolute z-30 w-56 rounded-lg border bg-white p-2.5 text-xs text-slate-800 shadow-lg ${
+            className={`pointer-events-none absolute z-30 w-64 rounded-lg border bg-white p-2.5 text-xs text-slate-800 shadow-xl ${
               hoveredDeviceTooltipData.isFocusedDevice
                 ? 'border-rose-400 ring-2 ring-rose-500/30'
                 : 'border-slate-200'
@@ -3426,7 +4215,7 @@ export function FloorplanCanvas({
                 {hoveredDeviceTooltipData.device.name}
               </span>
               <span
-                className={`badge ${
+                className={`badge shrink-0 ${
                   hoveredDeviceTooltipData.device.online
                     ? 'badge-success'
                     : 'badge-neutral'
@@ -3437,55 +4226,148 @@ export function FloorplanCanvas({
                   : 'Mất kết nối'}
               </span>
             </div>
-            <p className="mt-0.5 font-mono text-2xs text-slate-400">
+            <p className="mt-0.5 font-mono text-[10px] text-slate-400">
               {hoveredDeviceTooltipData.device.hardwareId}
             </p>
-            {hoveredDeviceTooltipData.room && (
-              <p className="mt-0.5 truncate text-2xs text-slate-500">
-                {hoveredDeviceTooltipData.room.code} —{' '}
-                {hoveredDeviceTooltipData.room.name}
+
+            <div
+              data-testid="device-tooltip-location"
+              className="mt-1.5 rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px]"
+            >
+              <p className="font-medium text-slate-800">
+                <span className="text-slate-500">Vị trí đặt: </span>
+                {hoveredDeviceTooltipData.device.location?.trim() ||
+                  'Chưa cấu hình vị trí đặt'}
               </p>
-            )}
-            <div className="mt-2 grid grid-cols-2 gap-1 border-t border-slate-100 pt-1.5 font-mono text-2xs text-slate-600">
-              <span>
-                Điểm:{' '}
-                {formatMetrics.comfortScore(
-                  hoveredDeviceTooltipData.devTel?.comfortScore?.overall
-                )}
-              </span>
-              <span>
-                Ồn:{' '}
-                {formatMetrics.noise(
-                  hoveredDeviceTooltipData.devTel?.acoustics?.noiseAvg
-                )}
-              </span>
-              <span>
-                PM2.5:{' '}
-                {formatMetrics.pm(
-                  hoveredDeviceTooltipData.devTel?.airQuality?.pm2_5
-                )}
-              </span>
-              <span>
-                Nhiệt:{' '}
-                {formatMetrics.temperature(
-                  hoveredDeviceTooltipData.devTel?.environment?.temperature
-                )}
-              </span>
-              <span>
-                Ẩm:{' '}
-                {formatMetrics.humidity(
-                  hoveredDeviceTooltipData.devTel?.environment?.humidity
-                )}
-              </span>
-              <span>
-                Sáng:{' '}
-                {formatMetrics.lux(hoveredDeviceTooltipData.devTel?.environment?.lux)}
-              </span>
-              <span className="col-span-2">
-                Wi-Fi RSSI:{' '}
-                {formatMetrics.rssi(hoveredDeviceTooltipData.devTel?.wifiRssi)}
-              </span>
+              <p className="mt-0.5 truncate text-[10px] text-slate-500 tabular-nums">
+                {hoveredDeviceTooltipData.room
+                  ? `${hoveredDeviceTooltipData.room.code} — ${hoveredDeviceTooltipData.room.name}`
+                  : hoveredDeviceTooltipData.device.zoneId}
+                {typeof hoveredDeviceTooltipData.device.posX === 'number' &&
+                  typeof hoveredDeviceTooltipData.device.posY === 'number' &&
+                  ` · (${(hoveredDeviceTooltipData.device.posX * TQB_BUILDING_WIDTH_M).toFixed(1)}m, ${(hoveredDeviceTooltipData.device.posY * TQB_BUILDING_DEPTH_M).toFixed(1)}m)`}
+              </p>
             </div>
+
+            <div
+              data-testid="device-tooltip-metrics"
+              className="mt-1.5 border-t border-slate-100 pt-1.5"
+            >
+              <div className="mb-1.5 flex items-center justify-between rounded bg-sky-50 px-2 py-1 text-[11px]">
+                <span className="font-medium text-sky-900">
+                  {METRIC_LAYER_META[layer].shortLabel}
+                </span>
+                <span className="font-mono font-bold text-sky-700 tabular-nums">
+                  {formatLayerMetricValue(
+                    extractLayerMetricValue(hoveredDeviceTooltipData.devTel, layer),
+                    layer
+                  )}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-1 font-mono text-[10px] text-slate-600 tabular-nums">
+                <span>
+                  Nhiệt:{' '}
+                  {formatMetrics.temperature(
+                    hoveredDeviceTooltipData.devTel?.environment?.temperature
+                  )}
+                </span>
+                <span>
+                  Ẩm:{' '}
+                  {formatMetrics.humidity(
+                    hoveredDeviceTooltipData.devTel?.environment?.humidity
+                  )}
+                </span>
+                <span>
+                  Ồn:{' '}
+                  {formatMetrics.noise(
+                    hoveredDeviceTooltipData.devTel?.acoustics?.noiseAvg
+                  )}
+                </span>
+                <span>
+                  Sáng:{' '}
+                  {formatMetrics.lux(
+                    hoveredDeviceTooltipData.devTel?.environment?.lux
+                  )}
+                </span>
+                <span>
+                  PM2.5:{' '}
+                  {formatMetrics.pm(
+                    hoveredDeviceTooltipData.devTel?.airQuality?.pm2_5
+                  )}
+                </span>
+                <span>
+                  LCS:{' '}
+                  {formatMetrics.comfortScore(
+                    hoveredDeviceTooltipData.devTel?.comfortScore?.overall
+                  )}
+                </span>
+                <span className="col-span-2">
+                  Wi-Fi:{' '}
+                  {formatMetrics.rssi(hoveredDeviceTooltipData.devTel?.wifiRssi)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edge-flipped Furniture Tooltip (Hover-to-Reveal: Tên cấu hình + Loại + Kích thước) */}
+        {hoveredFurnitureTooltipData && (
+          <div
+            role="tooltip"
+            data-testid="furniture-hover-tooltip"
+            data-placement={hoveredFurnitureTooltipData.placement}
+            data-align={hoveredFurnitureTooltipData.align}
+            style={{
+              left: `${hoveredFurnitureTooltipData.left}px`,
+              top: `${hoveredFurnitureTooltipData.top}px`,
+            }}
+            className="pointer-events-none absolute z-30 min-w-[164px] max-w-[220px] rounded-lg border border-sky-300 bg-slate-950/95 px-2.5 py-1.5 text-xs text-slate-50 shadow-xl backdrop-blur"
+          >
+            <p className="truncate font-semibold text-white">
+              {hoveredFurnitureTooltipData.item.label?.trim() ||
+                hoveredFurnitureTooltipData.entry.labelVi}
+            </p>
+            <p className="mt-0.5 font-mono text-[10px] text-sky-200 tabular-nums">
+              {hoveredFurnitureTooltipData.entry.labelVi} ·{' '}
+              {hoveredFurnitureTooltipData.item.widthM.toFixed(1)}×
+              {hoveredFurnitureTooltipData.item.depthM.toFixed(1)}m
+            </p>
+          </div>
+        )}
+
+        {/* Edge-flipped Room Compact Tooltip (Hover-to-Reveal khi scale < 1.6) */}
+        {hoveredRoomTooltipData && (
+          <div
+            role="tooltip"
+            data-testid="room-hover-tooltip"
+            data-placement={hoveredRoomTooltipData.placement}
+            data-align={hoveredRoomTooltipData.align}
+            style={{
+              left: `${hoveredRoomTooltipData.left}px`,
+              top: `${hoveredRoomTooltipData.top}px`,
+            }}
+            className="pointer-events-none absolute z-30 w-56 rounded-lg border border-slate-700 bg-slate-950/95 px-2.5 py-1.5 text-xs text-slate-50 shadow-xl backdrop-blur"
+          >
+            <div className="flex items-center justify-between gap-1.5">
+              <p className="truncate font-semibold text-white">
+                {hoveredRoomTooltipData.room.code} —{' '}
+                {hoveredRoomTooltipData.room.name}
+              </p>
+              {hoveredRoomTooltipData.openAlerts > 0 && (
+                <span className="shrink-0 rounded bg-rose-600 px-1 py-0.5 font-mono text-[9px] font-bold text-white">
+                  !{hoveredRoomTooltipData.openAlerts}
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 flex items-center gap-1.5 font-mono text-[11px] text-sky-300 tabular-nums">
+              <span aria-hidden="true">{hoveredRoomTooltipData.status.symbol}</span>
+              <span>
+                {formatLayerMetricValue(hoveredRoomTooltipData.value, layer)}
+              </span>
+              <span className="font-sans text-[10px] text-slate-300">
+                · {hoveredRoomTooltipData.status.labelVi}
+              </span>
+            </p>
           </div>
         )}
 

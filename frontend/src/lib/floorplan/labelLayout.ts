@@ -74,8 +74,8 @@ const VIEWPORT_MARGIN_PX = 4;
 const MIN_FONT_SIZE_PX = 10;
 const MAX_FONT_SIZE_PX = 14;
 const BASE_FONT_SIZE_PX = 10.5;
-const MIN_NODE_SIZE_PX = 10;
-const MAX_NODE_SIZE_PX = 32;
+const MIN_NODE_SIZE_PX = 8;
+const MAX_NODE_SIZE_PX = 14;
 
 /**
  * Co giãn cỡ chữ theo mức zoom nhưng luôn kẹp chặt trong [10px, 14px] để dễ đọc (Mục B.4).
@@ -96,13 +96,13 @@ export function computeScaledFontSizePx(scale: number): number {
 }
 
 /**
- * Co giãn kích thước hiển thị node cảm biến theo mức zoom, kẹp chặt trong [10px, 32px].
+ * Co giãn kích thước hiển thị node cảm biến theo mức zoom, kẹp chặt trong [8px, 14px] để không lấn át bàn ghế.
  */
 export function computeScaledNodeSizePx(
   scale: number,
   density: LabelDensity = 'balanced'
 ): number {
-  if (!Number.isFinite(scale)) return density === 'clean' ? 10 : 12;
+  if (!Number.isFinite(scale)) return density === 'clean' ? 8 : 9;
   const clampedScale = Math.max(
     ZOOM_CONFIG.minScale,
     Math.min(ZOOM_CONFIG.maxScale, scale)
@@ -110,16 +110,10 @@ export function computeScaledNodeSizePx(
 
   let raw: number;
   if (clampedScale < ZOOM_CONFIG.overviewMaxScale) {
-    if (density === 'detailed') {
-      raw = 24;
-    } else if (density === 'clean') {
-      raw = 10;
-    } else {
-      const t =
-        (clampedScale - ZOOM_CONFIG.minScale) /
-        Math.max(0.01, ZOOM_CONFIG.overviewMaxScale - ZOOM_CONFIG.minScale);
-      raw = 12 + t * 2;
-    }
+    const t =
+      (clampedScale - ZOOM_CONFIG.minScale) /
+      Math.max(0.01, ZOOM_CONFIG.overviewMaxScale - ZOOM_CONFIG.minScale);
+    raw = (density === 'clean' ? 8 : 9) + t * 1;
   } else if (clampedScale < ZOOM_CONFIG.intermediateMaxScale) {
     const t =
       (clampedScale - ZOOM_CONFIG.overviewMaxScale) /
@@ -127,12 +121,12 @@ export function computeScaledNodeSizePx(
         0.01,
         ZOOM_CONFIG.intermediateMaxScale - ZOOM_CONFIG.overviewMaxScale
       );
-    raw = density === 'detailed' ? 24 + t * 4 : 16 + t * 6;
+    raw = 9 + t * 2;
   } else {
     const t =
       (clampedScale - ZOOM_CONFIG.intermediateMaxScale) /
       Math.max(0.01, ZOOM_CONFIG.maxScale - ZOOM_CONFIG.intermediateMaxScale);
-    raw = 24 + t * 8;
+    raw = 11 + t * 3;
   }
 
   return Math.round(Math.max(MIN_NODE_SIZE_PX, Math.min(MAX_NODE_SIZE_PX, raw)));
@@ -278,18 +272,19 @@ export function getLodConfig(
 
   // Cấp 3 — Chi tiết (scale >= 1.85)
   if (scale >= ZOOM_CONFIG.intermediateMaxScale) {
+    const isClean = density === 'clean';
     return {
       zoomLevel: 'detail',
-      roomLabel: 'rich',
+      roomLabel: isClean ? 'pill' : 'rich',
       hideSmallRoomsUnderM2: 0,
-      sensorStyle: 'pin',
+      sensorStyle: isClean ? 'dot' : 'pin',
       sensorDotSizePx: nodeVisualSizePx,
       nodeVisualSizePx,
       fontSizePx,
       fontScale,
       showSensors: true,
       clusterSensors: false,
-      showSensorBadge: true,
+      showSensorBadge: !isClean,
       bayStyle: 'pill',
       showFurniture: true,
       showDetailedFurniture: true,
@@ -307,7 +302,7 @@ export function getLodConfig(
       zoomLevel: 'intermediate',
       roomLabel: isDetailed ? 'rich' : 'pill',
       hideSmallRoomsUnderM2: 0,
-      sensorStyle: 'pin',
+      sensorStyle: isClean ? 'dot' : 'pin',
       sensorDotSizePx: nodeVisualSizePx,
       nodeVisualSizePx,
       fontSizePx,
@@ -316,7 +311,7 @@ export function getLodConfig(
       clusterSensors,
       showSensorBadge: !isClean,
       bayStyle: isDetailed ? 'pill' : 'dot',
-      showFurniture: !isClean,
+      showFurniture: true,
       showDetailedFurniture: isDetailed,
       showLandmarkText: isDetailed,
       showAtriumText: true,
@@ -360,7 +355,7 @@ export function getLodConfig(
     clusterSensors: true,
     showSensorBadge: false,
     bayStyle: 'hidden',
-    showFurniture: false,
+    showFurniture: density === 'clean' ? scale >= 1.15 : false,
     showDetailedFurniture: false,
     showLandmarkText: false,
     showAtriumText: density !== 'clean',

@@ -573,7 +573,7 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
           canvasWrapper.getAttribute('data-canvas-height')
         );
         expect(canvasHeight).toBeGreaterThanOrEqual(340);
-        expect(canvasHeight).toBeLessThanOrEqual(vp.height - 170);
+        expect(canvasHeight).toBeLessThanOrEqual(vp.height - 90);
 
         const badge302 = await screen.findByTestId(
           'room-alert-badge-ROOM_TQB_302'
@@ -1393,7 +1393,8 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
         'ESP32_LWT_01',
         room301.id,
         'ZONE_A',
-        true
+        true,
+        { x: 0.5, y: 0.15 }
       );
 
       const relOnline = evaluateRoomReliability({

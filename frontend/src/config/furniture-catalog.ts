@@ -5,7 +5,11 @@ export type FurnitureShape =
   | 'rounded_rect'
   | 'circle'
   | 'desk_cluster'
+  | 'long_desk'
+  | 'single_chair'
+  | 'long_bench'
   | 'bookshelf'
+  | 'librarian_desk'
   | 'sensor_node'
   | 'door_swing'
   | 'custom_pod';
@@ -29,52 +33,68 @@ export interface FurnitureCatalogEntry {
 }
 
 /**
- * Thư viện định nghĩa nội thất chuẩn tỉ lệ thực 1:100 cho Thư viện TQB.
- * Để mở rộng loại đối tượng mới (VD: SMART_LOCKER / SMART_POD), chỉ cần thêm phần tử vào mảng này
- * mà không cần sửa logic vẽ hoặc kiểm tra hình học.
+ * Thư viện chuẩn 5 loại nội thất chính tỷ lệ thực 1:100 cho Thư viện TQB:
+ * Bàn dài, Ghế đơn, Ghế dài, Giá sách, Bàn thủ thư.
  */
 export const FURNITURE_CATALOG: readonly FurnitureCatalogEntry[] = [
   {
     typeId: 'DESK',
-    labelVi: 'Bàn đọc (2/4/6 chỗ)',
-    shortLabel: 'Bàn',
+    labelVi: 'Bàn dài',
+    shortLabel: 'Bàn dài',
     category: 'SEATING',
     defaultWidthM: 2.4,
-    defaultDepthM: 1.2,
+    defaultDepthM: 1.0,
     minWidthM: 0.8,
     maxWidthM: 4.0,
     minDepthM: 0.6,
-    maxDepthM: 2.4,
+    maxDepthM: 2.0,
     blocksWalkway: true,
     sensitiveHardware: false,
     fillColor: '#1E293B',
     strokeColor: '#94A3B8',
-    shape: 'desk_cluster',
+    shape: 'long_desk',
   },
   {
     typeId: 'CHAIR',
-    labelVi: 'Ghế đơn / Ghế chờ',
-    shortLabel: 'Ghế',
+    labelVi: 'Ghế đơn',
+    shortLabel: 'Ghế đơn',
     category: 'SEATING',
-    defaultWidthM: 0.6,
-    defaultDepthM: 0.6,
+    defaultWidthM: 0.55,
+    defaultDepthM: 0.55,
     minWidthM: 0.4,
-    maxWidthM: 2.5,
+    maxWidthM: 1.2,
     minDepthM: 0.4,
     maxDepthM: 1.2,
     blocksWalkway: true,
     sensitiveHardware: false,
     fillColor: '#334155',
     strokeColor: '#CBD5E1',
-    shape: 'rounded_rect',
+    shape: 'single_chair',
+  },
+  {
+    typeId: 'BENCH',
+    labelVi: 'Ghế dài',
+    shortLabel: 'Ghế dài',
+    category: 'SEATING',
+    defaultWidthM: 1.8,
+    defaultDepthM: 0.5,
+    minWidthM: 1.0,
+    maxWidthM: 3.6,
+    minDepthM: 0.4,
+    maxDepthM: 1.0,
+    blocksWalkway: true,
+    sensitiveHardware: false,
+    fillColor: '#1E3A5F',
+    strokeColor: '#7DD3FC',
+    shape: 'long_bench',
   },
   {
     typeId: 'BOOKSHELF',
-    labelVi: 'Giá sách đơn / đôi',
+    labelVi: 'Giá sách',
     shortLabel: 'Giá sách',
     category: 'STORAGE',
     defaultWidthM: 2.0,
-    defaultDepthM: 0.8,
+    defaultDepthM: 0.6,
     minWidthM: 0.8,
     maxWidthM: 6.0,
     minDepthM: 0.35,
@@ -82,16 +102,16 @@ export const FURNITURE_CATALOG: readonly FurnitureCatalogEntry[] = [
     blocksWalkway: true,
     sensitiveHardware: false,
     fillColor: '#3F2E21',
-    strokeColor: '#D97706',
+    strokeColor: '#F59E0B',
     shape: 'bookshelf',
   },
   {
     typeId: 'COUNTER',
-    labelVi: 'Quầy thủ thư / Tiếp nhận',
-    shortLabel: 'Quầy',
+    labelVi: 'Bàn thủ thư',
+    shortLabel: 'Bàn thủ thư',
     category: 'SERVICE',
-    defaultWidthM: 3.0,
-    defaultDepthM: 1.0,
+    defaultWidthM: 2.4,
+    defaultDepthM: 0.85,
     minWidthM: 1.2,
     maxWidthM: 6.0,
     minDepthM: 0.6,
@@ -100,8 +120,14 @@ export const FURNITURE_CATALOG: readonly FurnitureCatalogEntry[] = [
     sensitiveHardware: false,
     fillColor: '#0F3B57',
     strokeColor: '#38BDF8',
-    shape: 'rounded_rect',
+    shape: 'librarian_desk',
   },
+];
+
+/**
+ * Các loại phần tử kế thừa (từ bản ghi cũ trong DB) vẫn được nhận dạng chính xác khi vẽ & kiểm tra va chạm.
+ */
+const LEGACY_FURNITURE_ENTRIES: readonly FurnitureCatalogEntry[] = [
   {
     typeId: 'PC_TERMINAL',
     labelVi: 'Cụm máy tính Multimedia',
@@ -164,6 +190,11 @@ export function resolveFurnitureCatalogEntry(
     (entry) => entry.typeId.trim().toUpperCase() === normalized
   );
   if (found) return found;
+
+  const legacyFound = LEGACY_FURNITURE_ENTRIES.find(
+    (entry) => entry.typeId.trim().toUpperCase() === normalized
+  );
+  if (legacyFound) return legacyFound;
 
   return {
     typeId: normalized || 'CUSTOM_ITEM',

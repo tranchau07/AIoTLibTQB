@@ -30,12 +30,15 @@ import {
   clampFurnitureDimensions,
   createFurnitureHistory,
   doFurnitureItemsOverlap,
+  doesFurnitureOverlapColumn,
+  duplicateFurnitureItemsSmartly,
   furnitureMetersToPixelSize,
   isFurnitureInsideRoom,
   pushFurnitureHistory,
   redoFurnitureHistory,
   snapToGridMeters,
   undoFurnitureHistory,
+  validateFurnitureLayout,
 } from '@/lib/floorplan/furnitureGeometry';
 import { ApiError } from '@/lib/http/error-mapper';
 import { buildCapabilities } from '@/lib/rbac/capabilities';
@@ -1059,24 +1062,41 @@ describe('Phase 8: Lớp Nội Thất 1:100, Chỉnh Sửa Theo Quyền & Optimi
       auditHistory: [],
     });
 
-    // 1. USER -> không có nút chỉnh sửa nội thất, IOT_NODE bị lọc hoàn toàn khỏi StaticBaseCanvas
+    // 1. USER -> không có nút chỉnh sửa nội thất, không vẽ chữ đè lên bàn, hover bàn hiện 'Bàn 1' và IOT_NODE bị lọc hoàn toàn
     setupAuthRole('USER', 'ROLE_USER');
     renderWithProviders(<FloorplanPage />);
-    await screen.findByTestId('floorplan-canvas-wrapper');
-    // Zoom lên mức Detail (>= 1.85x qua 3 click) để vẽ nhãn nội thất, xác nhận IOT_NODE vẫn bị lọc tuyệt đối
-    fireEvent.click(screen.getByTestId('zoom-in-btn'));
-    fireEvent.click(screen.getByTestId('zoom-in-btn'));
-    fireEvent.click(screen.getByTestId('zoom-in-btn'));
+    const wrapper = await screen.findByTestId('floorplan-canvas-wrapper');
+    const cw = Number(wrapper.getAttribute('data-canvas-width')) || 960;
+    const ch = Number(wrapper.getAttribute('data-canvas-height')) || 722;
+    const dynCanvas = screen.getByTestId('dynamic-heatmap-canvas');
+
     await waitFor(() => {
-      const texts = statsByCanvas.get('static-base-canvas')?.fillTextArgs ?? [];
-      expect(texts).toContain('Bàn 1');
+      const staticTexts =
+        statsByCanvas.get('static-base-canvas')?.fillTextArgs ?? [];
+      expect(staticTexts).not.toContain('Bàn 1');
+      expect(staticTexts).not.toContain('ESP32_RAW_SECRET');
     });
+
+    // Rê chuột lên vị trí bàn (0.45, 0.14) -> hiện furniture-hover-tooltip có 'Bàn 1'
+    fireEvent.mouseMove(dynCanvas, {
+      clientX: Math.round(0.45 * cw),
+      clientY: Math.round(0.14 * ch),
+    });
+    expect(screen.getByTestId('furniture-hover-tooltip')).toHaveTextContent(
+      'Bàn 1'
+    );
+
+    // Rê chuột qua vị trí IOT_NODE (0.55, 0.14) -> tuyệt đối không lộ node cảm biến nhạy cảm
+    fireEvent.mouseMove(dynCanvas, {
+      clientX: Math.round(0.55 * cw),
+      clientY: Math.round(0.14 * ch),
+    });
+    expect(
+      screen.queryByTestId('furniture-hover-tooltip')
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByTestId('furniture-edit-toggle-btn')
     ).not.toBeInTheDocument();
-    const userStaticTexts =
-      statsByCanvas.get('static-base-canvas')?.fillTextArgs ?? [];
-    expect(userStaticTexts).not.toContain('ESP32_RAW_SECRET');
 
     cleanup();
 
@@ -1142,7 +1162,19 @@ describe('Phase 8: Lớp Nội Thất 1:100, Chỉnh Sửa Theo Quyền & Optimi
       screen.getByTestId('furniture-list-item-iot-secret')
     ).toBeInTheDocument();
     expect(
-      screen.getByTestId('furniture-catalog-add-IOT_NODE')
+      screen.getByTestId('furniture-catalog-add-DESK')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('furniture-catalog-add-CHAIR')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('furniture-catalog-add-BENCH')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('furniture-catalog-add-BOOKSHELF')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('furniture-catalog-add-COUNTER')
     ).toBeInTheDocument();
 
     // Bấm lưu lần 1 -> dính 409 Conflict -> hiện banner & nút tải lại
@@ -1162,5 +1194,341 @@ describe('Phase 8: Lớp Nội Thất 1:100, Chỉnh Sửa Theo Quyền & Optimi
       fireEvent.click(screen.getByTestId('furniture-save-btn'));
     });
     await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(2));
+  });
+
+  it('Phase 3-1: Quy chuẩn 5 nội thất chính (Bàn dài, Ghế đơn, Ghế dài, Giá sách, Bàn thủ thư) và tự đánh số tên', () => {
+    const p301 = TQB_ROOM_PRESETS.find((p) => p.code === 'TQB_301')!;
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+
+    function FiveCatalogHarness() {
+      const [items, setItems] = useState<FurnitureItem[]>([]);
+      const [selectedIds, setSelectedIds] = useState<string[]>([]);
+      return (
+        <FurnitureLayerEditor
+          room={room301}
+          roomPolygon={room301.boundaryPolygon ?? []}
+          structuralColumns={p301.structuralColumns}
+          items={items}
+          canUndo={false}
+          canRedo={false}
+          selectedIds={selectedIds}
+          onSelectIds={setSelectedIds}
+          onCommitItems={setItems}
+          onUndo={vi.fn()}
+          onRedo={vi.fn()}
+          snapEnabled={true}
+          gridStepM={0.1}
+          onSnapEnabledChange={vi.fn()}
+          showLayer={true}
+          onShowLayerChange={vi.fn()}
+          opacity={0.65}
+          onOpacityChange={vi.fn()}
+          version={1}
+          auditHistory={[]}
+          onSave={vi.fn()}
+          onReload={vi.fn()}
+        />
+      );
+    }
+
+    render(<FiveCatalogHarness />);
+
+    expect(FURNITURE_CATALOG.map((c) => c.typeId)).toEqual([
+      'DESK',
+      'CHAIR',
+      'BENCH',
+      'BOOKSHELF',
+      'COUNTER',
+    ]);
+
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-DESK'));
+    expect(screen.getByTestId('furniture-input-label')).toHaveValue(
+      'Bàn dài số 1'
+    );
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-DESK'));
+    expect(screen.getByTestId('furniture-input-label')).toHaveValue(
+      'Bàn dài số 2'
+    );
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-CHAIR'));
+    expect(screen.getByTestId('furniture-input-label')).toHaveValue(
+      'Ghế đơn số 1'
+    );
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-BENCH'));
+    expect(screen.getByTestId('furniture-input-label')).toHaveValue(
+      'Ghế dài số 1'
+    );
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-BOOKSHELF'));
+    expect(screen.getByTestId('furniture-input-label')).toHaveValue(
+      'Giá sách số 1'
+    );
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-COUNTER'));
+    expect(screen.getByTestId('furniture-input-label')).toHaveValue(
+      'Bàn thủ thư số 1'
+    );
+  });
+
+  it('Phase 3-2: Chống đè Cột chịu lực BTCT (0.60×0.60m) — đánh dấu lỗi và khóa nút Lưu bố cục', () => {
+    const p301 = TQB_ROOM_PRESETS.find((p) => p.code === 'TQB_301')!;
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+
+    const deskOnColumn: FurnitureItem = {
+      id: 'desk-col',
+      typeId: 'DESK',
+      label: 'Bàn đè cột',
+      x: 0.399,
+      y: 0.032,
+      widthM: 2.4,
+      depthM: 1.0,
+      rotationDeg: 0,
+      locked: false,
+    };
+    expect(
+      doesFurnitureOverlapColumn(deskOnColumn, p301.structuralColumns)
+    ).toBe(true);
+
+    const validation = validateFurnitureLayout(
+      [deskOnColumn],
+      p301.boundaryPolygon,
+      FURNITURE_CATALOG,
+      p301.structuralColumns
+    );
+    expect(validation.valid).toBe(false);
+    expect(validation.columnConflictIds.has('desk-col')).toBe(true);
+
+    render(
+      <FurnitureLayerEditor
+        room={room301}
+        roomPolygon={p301.boundaryPolygon}
+        structuralColumns={p301.structuralColumns}
+        items={[deskOnColumn]}
+        canUndo={false}
+        canRedo={false}
+        selectedIds={['desk-col']}
+        onSelectIds={vi.fn()}
+        onCommitItems={vi.fn()}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        snapEnabled={true}
+        gridStepM={0.1}
+        onSnapEnabledChange={vi.fn()}
+        showLayer={true}
+        onShowLayerChange={vi.fn()}
+        opacity={0.65}
+        onOpacityChange={vi.fn()}
+        version={1}
+        auditHistory={[]}
+        onSave={vi.fn()}
+        onReload={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('furniture-validation-errors')).toHaveTextContent(
+      'cột chịu lực'
+    );
+    expect(screen.getByTestId('furniture-save-btn')).toBeDisabled();
+  });
+
+  it('Phase 3-3: Nhân bản thông minh +1 và ×3 xếp nối tiếp thẳng hàng, tránh tường/cột và tự tăng số tên', () => {
+    const p301 = TQB_ROOM_PRESETS.find((p) => p.code === 'TQB_301')!;
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+    const desk1: FurnitureItem = {
+      id: 'desk-src',
+      typeId: 'DESK',
+      label: 'Bàn dài số 1',
+      x: 0.44,
+      y: 0.11,
+      widthM: 2.4,
+      depthM: 1.0,
+      rotationDeg: 0,
+      locked: false,
+    };
+
+    const clones = duplicateFurnitureItemsSmartly(
+      [desk1],
+      ['desk-src'],
+      3,
+      p301.boundaryPolygon,
+      p301.structuralColumns,
+      0.1
+    );
+    expect(clones).toHaveLength(3);
+    expect(clones.map((c) => c.label)).toEqual([
+      'Bàn dài số 2',
+      'Bàn dài số 3',
+      'Bàn dài số 4',
+    ]);
+    const validation = validateFurnitureLayout(
+      [desk1, ...clones],
+      p301.boundaryPolygon,
+      FURNITURE_CATALOG,
+      p301.structuralColumns
+    );
+    expect(validation.valid).toBe(true);
+
+    function DuplicateRowHarness() {
+      const [items, setItems] = useState<FurnitureItem[]>([desk1]);
+      const [selectedIds, setSelectedIds] = useState<string[]>(['desk-src']);
+      return (
+        <FurnitureLayerEditor
+          room={room301}
+          roomPolygon={p301.boundaryPolygon}
+          structuralColumns={p301.structuralColumns}
+          items={items}
+          canUndo={false}
+          canRedo={false}
+          selectedIds={selectedIds}
+          onSelectIds={setSelectedIds}
+          onCommitItems={setItems}
+          onUndo={vi.fn()}
+          onRedo={vi.fn()}
+          snapEnabled={true}
+          gridStepM={0.1}
+          onSnapEnabledChange={vi.fn()}
+          showLayer={true}
+          onShowLayerChange={vi.fn()}
+          opacity={0.65}
+          onOpacityChange={vi.fn()}
+          version={1}
+          auditHistory={[]}
+          onSave={vi.fn()}
+          onReload={vi.fn()}
+        />
+      );
+    }
+
+    render(<DuplicateRowHarness />);
+    fireEvent.click(screen.getByTestId('furniture-duplicate-row-btn'));
+    expect(
+      document.querySelectorAll('[data-testid^="furniture-list-item-"]').length
+    ).toBe(4);
+    expect(screen.getByText('Bàn dài số 2')).toBeInTheDocument();
+    expect(screen.getByText('Bàn dài số 3')).toBeInTheDocument();
+    expect(screen.getByText('Bàn dài số 4')).toBeInTheDocument();
+  });
+
+  it('Phase 3-4: Tự khởi tạo phòng thật từ PRESET_ khi ADMIN bấm Lưu bố cục nội thất', async () => {
+    installCanvas2DMock();
+    setupAuthRole(
+      'ADMIN',
+      'ROLE_ADMIN VIEW_ROOMS MANAGE_ROOMS VIEW_ALERTS MANAGE_DEVICES VIEW_DEVICE_STATUS'
+    );
+    const p301 = TQB_ROOM_PRESETS.find((p) => p.code === 'TQB_301')!;
+    const createdRoom: RoomResponse = {
+      id: 'real-room-301',
+      code: p301.code,
+      name: p301.name,
+      floor: p301.floor,
+      capacity: p301.capacity,
+      type: p301.roomType,
+      boundaryPolygon: [...p301.boundaryPolygon],
+    };
+
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(devicesApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 50,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    const createSpy = vi
+      .spyOn(roomsApi, 'create')
+      .mockResolvedValue(createdRoom);
+    const updateFurnSpy = vi
+      .spyOn(roomsApi, 'updateFurniture')
+      .mockImplementation(async (roomId, body) => ({
+        roomId,
+        version: 0,
+        items: body.items,
+        updatedBy: 'user_admin',
+        updatedAt: '2026-11-25T07:00:00Z',
+        auditHistory: [],
+      }));
+
+    renderWithProviders(<FloorplanPage />);
+    const editBtn = await screen.findByTestId('furniture-edit-toggle-btn');
+    fireEvent.click(editBtn);
+
+    await screen.findByTestId('furniture-layer-editor');
+    fireEvent.click(screen.getByTestId('furniture-catalog-add-DESK'));
+
+    const saveBtn = screen.getByTestId('furniture-save-btn');
+    expect(saveBtn).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(saveBtn);
+    });
+
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(1);
+      expect(updateFurnSpy).toHaveBeenCalledTimes(1);
+    });
+    expect(updateFurnSpy.mock.calls[0][0]).toBe('real-room-301');
+  });
+
+  it('Phase 3-5: Mở khóa Zoom (wheel) và Pan (kéo vùng trống) ngay trong chế độ Sửa nội thất', () => {
+    installCanvas2DMock();
+    const hadPointerEvent = typeof window.PointerEvent !== 'undefined';
+    if (!hadPointerEvent) {
+      class MockPointerEvent extends MouseEvent {
+        pointerId: number;
+        constructor(type: string, params: PointerEventInit = {}) {
+          super(type, params);
+          this.pointerId = params.pointerId ?? 1;
+        }
+      }
+      vi.stubGlobal('PointerEvent', MockPointerEvent);
+    }
+
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+    render(
+      <FloorplanCanvas
+        rooms={[room301]}
+        devices={[]}
+        roomTelemetryMap={{ ROOM_301: makeTelemetry('ROOM_301', 88) }}
+        layer="temperature"
+        selectedRoomId={room301.id}
+        onSelectRoom={vi.fn()}
+        showFurnitureLayer={true}
+        furnitureEditMode={true}
+        furnitureItems={[]}
+      />
+    );
+
+    const wrapper = screen.getByTestId('floorplan-canvas-wrapper');
+    const overlay = screen.getByTestId('furniture-edit-overlay');
+    expect(wrapper).toHaveAttribute('data-scale', '1');
+
+    // Lăn chuột lên overlay -> phóng to vượt 1.0x
+    fireEvent.wheel(overlay, { deltaY: -120, clientX: 480, clientY: 360 });
+    const afterZoomScale = Number(wrapper.getAttribute('data-scale'));
+    expect(afterZoomScale).toBeGreaterThan(1.1);
+
+    // Kéo vùng trống trên overlay -> pan thay đổi tx/ty
+    const beforeTx = Number(wrapper.getAttribute('data-tx'));
+    fireEvent.pointerDown(overlay, { clientX: 400, clientY: 300, pointerId: 1 });
+    fireEvent.pointerMove(overlay, { clientX: 340, clientY: 260, pointerId: 1 });
+    fireEvent.pointerUp(overlay, { clientX: 340, clientY: 260, pointerId: 1 });
+    const afterTx = Number(wrapper.getAttribute('data-tx'));
+    expect(afterTx).not.toBe(beforeTx);
+
+    if (!hadPointerEvent) {
+      vi.unstubAllGlobals();
+    }
   });
 });

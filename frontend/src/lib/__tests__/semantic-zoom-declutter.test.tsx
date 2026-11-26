@@ -425,19 +425,19 @@ describe('Giai đoạn 5: Semantic Zoom 3 Cấp, Chống Đè Nhãn Ưu Tiên C�
     expect(detail.clusterSensors).toBe(false);
   });
 
-  it('TC-G5-05: Cỡ chữ [10px, 14px] và kích thước hiển thị node [10px, 32px] co giãn có min/max', () => {
+  it('TC-G5-05: Cỡ chữ [10px, 14px] và kích thước hiển thị node gọn [8px, 14px] co giãn có min/max', () => {
     for (const s of [0.5, 1.0, 1.45, 2.5, 4.0, 8.0]) {
       const font = computeScaledFontSizePx(s);
       const node = computeScaledNodeSizePx(s, 'balanced');
       const lod = getLodConfig('balanced', s);
       expect(font).toBeGreaterThanOrEqual(10);
       expect(font).toBeLessThanOrEqual(14);
-      expect(node).toBeGreaterThanOrEqual(10);
-      expect(node).toBeLessThanOrEqual(32);
+      expect(node).toBeGreaterThanOrEqual(8);
+      expect(node).toBeLessThanOrEqual(14);
       expect(lod.fontSizePx).toBeGreaterThanOrEqual(10);
       expect(lod.fontSizePx).toBeLessThanOrEqual(14);
-      expect(lod.nodeVisualSizePx).toBeGreaterThanOrEqual(10);
-      expect(lod.nodeVisualSizePx).toBeLessThanOrEqual(32);
+      expect(lod.nodeVisualSizePx).toBeGreaterThanOrEqual(8);
+      expect(lod.nodeVisualSizePx).toBeLessThanOrEqual(14);
     }
 
     installCanvas2DMock();
@@ -457,8 +457,8 @@ describe('Giai đoạn 5: Semantic Zoom 3 Cấp, Chống Đè Nhãn Ưu Tiên C�
 
     const visual = screen.getByTestId('device-visual-d1');
     const renderedSize = Number(visual.getAttribute('data-visual-size'));
-    expect(renderedSize).toBeGreaterThanOrEqual(10);
-    expect(renderedSize).toBeLessThanOrEqual(32);
+    expect(renderedSize).toBeGreaterThanOrEqual(8);
+    expect(renderedSize).toBeLessThanOrEqual(14);
   });
 
   it('TC-G5-06: clusterDeviceNodes gom 3 node gần nhau ở scale = 1.0 và tách thành 3 node ở scale = 2.2', () => {
@@ -616,5 +616,93 @@ describe('Giai đoạn 5: Semantic Zoom 3 Cấp, Chống Đè Nhãn Ưu Tiên C�
     const tooltip = screen.getByTestId('device-hover-tooltip');
     expect(tooltip.getAttribute('data-placement')).toBe('bottom');
     expect(tooltip.getAttribute('data-align')).toBe('start');
+  });
+
+  it('Phase 2: hover vào Node cảm biến hiện tên, vị trí đặt cấu hình và bảng thông số môi trường', () => {
+    installCanvas2DMock();
+    const room = makeRoom('TQB_302');
+    const devWithLoc = {
+      ...makeDevice('d-loc', room.id, 0.2, 0.5),
+      name: 'Trạm Bắc 01',
+      location: 'Cột B2 sát vách kính Tây',
+    };
+    const devNoLoc = {
+      ...makeDevice('d-noloc', room.id, 0.3, 0.5),
+      name: 'Trạm Offline 02',
+      online: false,
+      connectionState: 'OFFLINE',
+      location: '',
+    };
+
+    render(
+      <FloorplanCanvas
+        rooms={[room]}
+        devices={[devWithLoc, devNoLoc]}
+        roomTelemetryMap={{ [room.id]: makeTelemetry(room.id) }}
+        layer="temperature"
+        selectedRoomId={null}
+        onSelectRoom={vi.fn()}
+      />
+    );
+
+    fireEvent.mouseEnter(screen.getByTestId('device-pin-d-loc'));
+    expect(screen.getByTestId('device-hover-tooltip')).toHaveTextContent(
+      'Trạm Bắc 01'
+    );
+    expect(screen.getByTestId('device-tooltip-location')).toHaveTextContent(
+      'Cột B2 sát vách kính Tây'
+    );
+    expect(screen.getByTestId('device-tooltip-metrics')).toHaveTextContent(
+      'Nhiệt độ'
+    );
+
+    fireEvent.mouseLeave(screen.getByTestId('device-pin-d-loc'));
+    fireEvent.mouseEnter(screen.getByTestId('device-pin-d-noloc'));
+    expect(screen.getByTestId('device-tooltip-location')).toHaveTextContent(
+      'Chưa cấu hình vị trí đặt'
+    );
+    expect(screen.getByTestId('device-hover-tooltip')).toHaveTextContent(
+      'Mất kết nối'
+    );
+  });
+
+  it('Phase 2: hover vào Nội thất hiển thị furniture-hover-tooltip đúng tên và không làm vẽ lại DynamicHeatmapCanvas', () => {
+    const getContextSpy = installCanvas2DMock();
+    const room = makeRoom('TQB_302');
+    render(
+      <FloorplanCanvas
+        rooms={[room]}
+        devices={[]}
+        roomTelemetryMap={{ [room.id]: makeTelemetry(room.id) }}
+        layer="comfortScore"
+        selectedRoomId={null}
+        onSelectRoom={vi.fn()}
+        showFurnitureLayer={true}
+        furnitureItems={[
+          {
+            id: 'f-1',
+            typeId: 'DESK',
+            label: 'Bàn dài số 1',
+            x: 0.2,
+            y: 0.5,
+            widthM: 2.4,
+            depthM: 1.0,
+            rotationDeg: 0,
+            locked: false,
+          },
+        ]}
+      />
+    );
+
+    const dynCanvas = screen.getByTestId('dynamic-heatmap-canvas');
+    const getContextCallsBefore = getContextSpy.mock.calls.length;
+
+    // Tâm (0.2, 0.5) trên canvas mặc định 960x722 => (192, 361)
+    fireEvent.mouseMove(dynCanvas, { clientX: 192, clientY: 361 });
+    const furnTooltip = screen.getByTestId('furniture-hover-tooltip');
+    expect(furnTooltip).toHaveTextContent('Bàn dài số 1');
+
+    const getContextCallsAfter = getContextSpy.mock.calls.length;
+    expect(getContextCallsAfter).toBe(getContextCallsBefore);
   });
 });

@@ -8,12 +8,14 @@ import type { AlertResponse, RoomResponse, TelemetryResponse } from '@/types/api
  */
 export const ZOOM_CONFIG = {
   minScale: 1.0,
-  maxScale: 4.0,
+  maxScale: 8.0,
   wheelStep: 0.18,
   buttonStep: 0.35,
   minimapShowThreshold: 1.15,
-  roomFitPaddingRatio: 1.35,
-  clusterExpandScale: 1.85,
+  roomFitPaddingRatio: 1.14,
+  /** Trần mật độ pixel/mét khi auto-fit phòng nhỏ để tránh phóng đại quá cỡ */
+  maxAutoFitPxPerMeter: 48,
+  clusterExpandScale: 2.0,
   clusterScaleStep: 0.65,
   overviewMaxScale: 1.25,
   intermediateMaxScale: 1.85,
@@ -42,7 +44,7 @@ export const SUMMARY_STATUS_THRESHOLDS = {
 
 export const FLOORPLAN_INTERACTION_CONFIG = {
   minTouchTargetPx: 44,
-  clusterRadiusPx: 44,
+  clusterRadiusPx: 28,
   clusterMaxScale: 1.55,
   viewportMarginPx: 8,
   dimmedRoomOpacity: 0.22,

@@ -29,10 +29,11 @@ import { computeVisualPolygonCenter } from '@/lib/floorplan/polygon';
 import {
   alignFurnitureItems,
   clampFurnitureDimensions,
-  isFurnitureInsideRoom,
+  duplicateFurnitureItemsSmartly,
+  findNearestValidPlacement,
+  generateNextFurnitureLabel,
   metersToNormalizedPoint,
   normalizedToMetersPoint,
-  snapNormalizedPointToGrid,
   snapToGridMeters,
   validateFurnitureLayout,
   type FurnitureAlignMode,
@@ -49,6 +50,7 @@ import type {
 export interface FurnitureLayerEditorProps {
   room: RoomResponse;
   roomPolygon: readonly Point2D[];
+  structuralColumns?: readonly Point2D[];
   catalog?: readonly FurnitureCatalogEntry[];
   hideSensitive?: boolean;
   items: readonly FurnitureItem[];
@@ -61,6 +63,7 @@ export interface FurnitureLayerEditorProps {
   onRedo: () => void;
   validation?: FurnitureValidationResult;
   snapEnabled: boolean;
+  gridStepM?: number;
   onSnapEnabledChange: (enabled: boolean) => void;
   showLayer: boolean;
   onShowLayerChange: (show: boolean) => void;
@@ -88,6 +91,7 @@ function generateFurnitureId(typeId: string): string {
 export function FurnitureLayerEditor({
   room,
   roomPolygon,
+  structuralColumns,
   catalog = FURNITURE_CATALOG,
   hideSensitive = false,
   items,
@@ -100,6 +104,7 @@ export function FurnitureLayerEditor({
   onRedo,
   validation: externalValidation,
   snapEnabled,
+  gridStepM = 0.25,
   onSnapEnabledChange,
   showLayer,
   onShowLayerChange,
@@ -126,8 +131,9 @@ export function FurnitureLayerEditor({
 
   const validation = useMemo(
     () =>
-      externalValidation ?? validateFurnitureLayout(items, roomPolygon, catalog),
-    [externalValidation, items, roomPolygon, catalog]
+      externalValidation ??
+      validateFurnitureLayout(items, roomPolygon, catalog, structuralColumns),
+    [externalValidation, items, roomPolygon, catalog, structuralColumns]
   );
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -138,35 +144,6 @@ export function FurnitureLayerEditor({
   const singleItem = selectedItems.length === 1 ? selectedItems[0] : null;
   const anySelectedUnlocked = selectedItems.some((it) => !it.locked);
   const anySelectedLocked = selectedItems.some((it) => it.locked);
-
-  // Global keyboard shortcuts inside edit mode (Ctrl+Z Undo, Ctrl+Y / Ctrl+Shift+Z Redo)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const isTextInput =
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable);
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        if (isTextInput) return;
-        e.preventDefault();
-        if (e.shiftKey) {
-          if (canRedo) onRedo();
-        } else if (canUndo) {
-          onUndo();
-        }
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-        if (isTextInput) return;
-        e.preventDefault();
-        if (canRedo) onRedo();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canUndo, canRedo, onUndo, onRedo]);
 
   const handleAddItem = (entry: FurnitureCatalogEntry) => {
     const baseCenter =
@@ -180,56 +157,27 @@ export function FurnitureLayerEditor({
       catalog
     );
 
-    const offsetsM: Array<{ dx: number; dy: number }> = [
-      { dx: 0, dy: 0 },
-      { dx: 2.5, dy: 0 },
-      { dx: -2.5, dy: 0 },
-      { dx: 0, dy: 2.0 },
-      { dx: 0, dy: -2.0 },
-      { dx: 2.5, dy: 2.0 },
-      { dx: -2.5, dy: -2.0 },
-      { dx: 5.0, dy: 0 },
-      { dx: -5.0, dy: 0 },
-    ];
-    const baseM = normalizedToMetersPoint(baseCenter);
-
-    let chosenNorm = snapEnabled
-      ? snapNormalizedPointToGrid(baseCenter, 0.25)
-      : baseCenter;
-
-    for (const off of offsetsM) {
-      const candM = { x: baseM.x + off.dx, y: baseM.y + off.dy };
-      const candNormRaw = metersToNormalizedPoint(candM);
-      const candNorm = snapEnabled
-        ? snapNormalizedPointToGrid(candNormRaw, 0.25)
-        : candNormRaw;
-      const candidateItem: FurnitureItem = {
-        id: 'probe',
+    const chosenNorm = findNearestValidPlacement(
+      {
         typeId: entry.typeId,
-        label: entry.shortLabel,
-        x: Number(candNorm.x.toFixed(4)),
-        y: Number(candNorm.y.toFixed(4)),
         widthM: dims.widthM,
         depthM: dims.depthM,
         rotationDeg: 0,
-        locked: false,
-      };
-      const candidateList = [...items, candidateItem];
-      if (
-        isFurnitureInsideRoom(candidateItem, roomPolygon) &&
-        validateFurnitureLayout(candidateList, roomPolygon, catalog).valid
-      ) {
-        chosenNorm = candNorm;
-        break;
-      }
-    }
+      },
+      items,
+      roomPolygon,
+      structuralColumns,
+      baseCenter,
+      snapEnabled ? gridStepM : 0,
+      catalog
+    );
 
     const nextItem: FurnitureItem = {
       id: generateFurnitureId(entry.typeId),
       typeId: entry.typeId,
-      label: entry.shortLabel,
-      x: Number(chosenNorm.x.toFixed(4)),
-      y: Number(chosenNorm.y.toFixed(4)),
+      label: generateNextFurnitureLabel(entry.typeId, items, catalog),
+      x: chosenNorm.x,
+      y: chosenNorm.y,
       widthM: dims.widthM,
       depthM: dims.depthM,
       rotationDeg: 0,
@@ -250,34 +198,18 @@ export function FurnitureLayerEditor({
     onCommitItems(next);
   };
 
-  const handleDuplicateSelected = () => {
+  const handleDuplicateSelected = (countCopies = 1) => {
     if (selectedItems.length === 0) return;
-    const clones: FurnitureItem[] = selectedItems.map((it, idx) => {
-      const ptM = normalizedToMetersPoint({ x: it.x, y: it.y });
-      const rawOffset = metersToNormalizedPoint({
-        x: ptM.x + 1.0 + idx * 0.25,
-        y: ptM.y + 1.0 + idx * 0.25,
-      });
-      const snapped = snapEnabled
-        ? snapNormalizedPointToGrid(rawOffset, 0.25)
-        : rawOffset;
-      const clampedCenter = isFurnitureInsideRoom(
-        { ...it, x: snapped.x, y: snapped.y },
-        roomPolygon
-      )
-        ? snapped
-        : { x: it.x, y: it.y };
-
-      return {
-        ...it,
-        id: generateFurnitureId(it.typeId),
-        label: it.label ? `${it.label} (bản sao)` : undefined,
-        x: Number(clampedCenter.x.toFixed(4)),
-        y: Number(clampedCenter.y.toFixed(4)),
-        locked: false,
-      };
-    });
-
+    const clones = duplicateFurnitureItemsSmartly(
+      items,
+      selectedIds,
+      countCopies,
+      roomPolygon,
+      structuralColumns,
+      snapEnabled ? gridStepM : 0,
+      catalog
+    );
+    if (clones.length === 0) return;
     onCommitItems([...items, ...clones]);
     onSelectIds(clones.map((c) => c.id));
   };
@@ -303,6 +235,96 @@ export function FurnitureLayerEditor({
     onCommitItems(next);
     onSelectIds(remainingSelected);
   };
+
+  // Global keyboard shortcuts inside edit mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isTextInput =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (isTextInput) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (canRedo) onRedo();
+        } else if (canUndo) {
+          onUndo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        if (isTextInput) return;
+        e.preventDefault();
+        if (canRedo) onRedo();
+        return;
+      }
+      if (isTextInput) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+        if (selectedItems.length > 0) {
+          e.preventDefault();
+          handleDuplicateSelected(1);
+        }
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (anySelectedUnlocked) {
+          e.preventDefault();
+          handleDeleteSelected();
+        }
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'r' && anySelectedUnlocked) {
+        e.preventDefault();
+        const deltaDeg = e.shiftKey ? 45 : 90;
+        onCommitItems(
+          items.map((it) =>
+            selectedSet.has(it.id) && !it.locked
+              ? { ...it, rotationDeg: (it.rotationDeg + deltaDeg) % 360 }
+              : it
+          )
+        );
+        return;
+      }
+
+      if (
+        (e.key === 'ArrowUp' ||
+          e.key === 'ArrowDown' ||
+          e.key === 'ArrowLeft' ||
+          e.key === 'ArrowRight') &&
+        anySelectedUnlocked
+      ) {
+        e.preventDefault();
+        const step = e.shiftKey ? 0.5 : gridStepM;
+        const dxM = e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0;
+        const dyM = e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0;
+        onCommitItems(
+          items.map((it) => {
+            if (!selectedSet.has(it.id) || it.locked) return it;
+            const curM = normalizedToMetersPoint({ x: it.x, y: it.y });
+            const nextNorm = metersToNormalizedPoint({
+              x: curM.x + dxM,
+              y: curM.y + dyM,
+            });
+            return {
+              ...it,
+              x: Number(Math.max(0.01, Math.min(0.99, nextNorm.x)).toFixed(4)),
+              y: Number(Math.max(0.01, Math.min(0.99, nextNorm.y)).toFixed(4)),
+            };
+          })
+        );
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
 
   const handleAlign = (mode: FurnitureAlignMode) => {
     const aligned = alignFurnitureItems(items, selectedIds, mode, roomPolygon);
@@ -482,11 +504,23 @@ export function FurnitureLayerEditor({
           type="button"
           data-testid="furniture-duplicate-btn"
           disabled={selectedItems.length === 0}
-          onClick={handleDuplicateSelected}
+          onClick={() => handleDuplicateSelected(1)}
+          title={`${FLOORPLAN_I18N_VI.furniture.duplicateButton} (Ctrl+D)`}
           className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40"
         >
           <Copy className="h-3.5 w-3.5" aria-hidden="true" />
           <span>{FLOORPLAN_I18N_VI.furniture.duplicateButton}</span>
+        </button>
+
+        <button
+          type="button"
+          data-testid="furniture-duplicate-row-btn"
+          disabled={selectedItems.length === 0}
+          onClick={() => handleDuplicateSelected(3)}
+          title="Nhân bản nhanh 3 bản nối tiếp thẳng hàng"
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-40"
+        >
+          <span>{FLOORPLAN_I18N_VI.furniture.duplicateRowButton}</span>
         </button>
 
         <button
@@ -722,7 +756,7 @@ export function FurnitureLayerEditor({
               </span>
               <input
                 type="number"
-                step={snapEnabled ? 0.25 : 0.1}
+                step={snapEnabled ? gridStepM : 0.1}
                 disabled={singleItem.locked}
                 data-testid="furniture-input-xm"
                 value={Number(singleMeters.x.toFixed(2))}
@@ -730,7 +764,7 @@ export function FurnitureLayerEditor({
                   const val = Number(e.target.value);
                   if (!Number.isFinite(val)) return;
                   const nextM = snapEnabled
-                    ? snapToGridMeters(val, 0.25)
+                    ? snapToGridMeters(val, gridStepM)
                     : val;
                   const norm = metersToNormalizedPoint({
                     x: nextM,
@@ -751,7 +785,7 @@ export function FurnitureLayerEditor({
               </span>
               <input
                 type="number"
-                step={snapEnabled ? 0.25 : 0.1}
+                step={snapEnabled ? gridStepM : 0.1}
                 disabled={singleItem.locked}
                 data-testid="furniture-input-ym"
                 value={Number(singleMeters.y.toFixed(2))}
@@ -759,7 +793,7 @@ export function FurnitureLayerEditor({
                   const val = Number(e.target.value);
                   if (!Number.isFinite(val)) return;
                   const nextM = snapEnabled
-                    ? snapToGridMeters(val, 0.25)
+                    ? snapToGridMeters(val, gridStepM)
                     : val;
                   const norm = metersToNormalizedPoint({
                     x: singleMeters.x,
@@ -900,6 +934,12 @@ export function FurnitureLayerEditor({
             <p className="font-semibold">
               • {FLOORPLAN_I18N_VI.furniture.outOfBoundsError} (
               {validation.outOfBoundsIds.size} đối tượng)
+            </p>
+          )}
+          {(validation.columnConflictIds?.size ?? 0) > 0 && (
+            <p className="font-semibold">
+              • {FLOORPLAN_I18N_VI.furniture.columnOverlapError} (
+              {validation.columnConflictIds.size} đối tượng)
             </p>
           )}
           {validation.overlappingPairs.length > 0 && (

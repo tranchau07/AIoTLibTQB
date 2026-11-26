@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FloorplanPage from '@/app/(protected)/floorplan/page';
 import { AppShell } from '@/components/layout/AppShell';
 import { ToastProvider } from '@/components/ui/primitives';
+import { ZOOM_CONFIG } from '@/config/floorplan-hmi.config';
 import { TQB_ROOM_PRESETS } from '@/config/tqb-floorplan-presets';
 import { alertsApi } from '@/features/alerts/api';
 import { authApi } from '@/features/auth/api';
@@ -19,6 +20,7 @@ import { useAuthStore } from '@/features/auth/store';
 import { devicesApi } from '@/features/devices/api';
 import { roomsApi } from '@/features/rooms/api';
 import { telemetryApi } from '@/features/telemetry/api';
+import { fitPolygonToViewport } from '@/lib/floorplan/coords';
 import { buildCapabilities } from '@/lib/rbac/capabilities';
 import { parseScopeString } from '@/lib/rbac/scope-parser';
 import { stompManager } from '@/lib/realtime/stomp-client';
@@ -212,13 +214,12 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
     expect(screen.queryByTestId('floor-room-tree-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('map-alert-queue-panel')).not.toBeInTheDocument();
 
-    // Chỉ duy nhất chế độ "Tinh gọn" (xóa "Cân bằng" và "Chi tiết")
+    // Giữ chế độ nhãn sạch trên wrapper và đã dọn sạch các nút mật độ thừa (Tinh gọn / Cân bằng / Chi tiết)
     const canvasWrapper = screen.getByTestId('floorplan-canvas-wrapper');
     expect(canvasWrapper).toHaveAttribute('data-label-density', 'clean');
-    expect(screen.getByRole('button', { name: 'Tinh gọn' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    );
+    expect(
+      screen.queryByRole('button', { name: 'Tinh gọn' })
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Cân bằng' })
     ).not.toBeInTheDocument();
@@ -409,5 +410,90 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
         handlingNote: 'Đang kiểm tra phòng',
       });
     });
+  });
+
+  it('Phase 1: nâng trần zoom lên 8.0x, auto-fit TQB_301 >= 2.15x và kẹp trần mật độ <= 48 px/m cho phòng nhỏ TQB_508', () => {
+    expect(ZOOM_CONFIG.maxScale).toBe(8.0);
+    expect(ZOOM_CONFIG.roomFitPaddingRatio).toBe(1.14);
+    expect(ZOOM_CONFIG.maxAutoFitPxPerMeter).toBe(48);
+
+    const p301 = TQB_ROOM_PRESETS.find((p) => p.code === 'TQB_301')!;
+    const p508 = TQB_ROOM_PRESETS.find((p) => p.code === 'TQB_508')!;
+    const width = 960;
+    const height = 722;
+
+    const vp301 = fitPolygonToViewport(
+      p301.boundaryPolygon,
+      width,
+      height,
+      ZOOM_CONFIG.roomFitPaddingRatio,
+      ZOOM_CONFIG.maxScale
+    );
+    const vp508 = fitPolygonToViewport(
+      p508.boundaryPolygon,
+      width,
+      height,
+      ZOOM_CONFIG.roomFitPaddingRatio,
+      ZOOM_CONFIG.maxScale
+    );
+
+    expect(vp301.scale).toBeGreaterThanOrEqual(2.15);
+    expect(vp508.scale).toBeGreaterThan(vp301.scale);
+    // 48 px/m trên canvas 960px (12.63 px/m) => kẹp ở ~3.80x thay vì phóng vọt lên 8.0x
+    expect(vp508.scale).toBeLessThanOrEqual(4.0);
+  });
+
+  it('Phase 1: bấm phím Escape tự động thoát trạng thái chọn phòng và đặt lại zoom 1.0x', async () => {
+    const room301 = makeRoomFromPreset('TQB_301', 'ROOM_301');
+    vi.spyOn(roomsApi, 'list').mockResolvedValue({
+      content: [room301],
+      page: 0,
+      size: 100,
+      totalElements: 1,
+      totalPages: 1,
+      last: true,
+    });
+    vi.spyOn(devicesApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 100,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(alertsApi, 'list').mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 50,
+      totalElements: 0,
+      totalPages: 0,
+      last: true,
+    });
+    vi.spyOn(telemetryApi, 'getRoomLatest').mockResolvedValue(
+      makeTelemetry('ROOM_301')
+    );
+    vi.spyOn(roomsApi, 'getFurniture').mockResolvedValue({
+      roomId: 'ROOM_301',
+      version: 1,
+      items: [],
+      auditHistory: [],
+    });
+
+    window.history.replaceState({}, '', '/floorplan?floor=3&roomId=ROOM_301');
+    renderWithProviders(<FloorplanPage />);
+
+    await screen.findByTestId('room-detail-drawer');
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('room-detail-drawer')
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('floorplan-canvas-wrapper')).toHaveAttribute(
+      'data-scale',
+      '1'
+    );
+    window.history.replaceState({}, '', '/floorplan');
   });
 });

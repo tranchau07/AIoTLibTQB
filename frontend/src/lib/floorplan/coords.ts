@@ -1,4 +1,5 @@
 import { ZOOM_CONFIG } from '@/config/floorplan-hmi.config';
+import { TQB_BUILDING_WIDTH_M } from '@/config/tqb-floorplan-presets';
 import type { Point2D } from '@/types/api';
 
 /**
@@ -145,7 +146,9 @@ export function fitPolygonToViewport(
   }
 
   const safePadding =
-    Number.isFinite(paddingRatio) && paddingRatio >= 1 ? paddingRatio : 1.35;
+    Number.isFinite(paddingRatio) && paddingRatio >= 1
+      ? paddingRatio
+      : ZOOM_CONFIG.roomFitPaddingRatio;
   const spanX = Math.max(0.01, (maxX - minX) * safePadding);
   const spanY = Math.max(0.01, (maxY - minY) * safePadding);
   const rawScale = 1 / Math.max(spanX, spanY);
@@ -153,8 +156,20 @@ export function fitPolygonToViewport(
     Number.isFinite(maxScale) && maxScale >= ZOOM_CONFIG.minScale
       ? maxScale
       : ZOOM_CONFIG.maxScale;
+  const basePxPerMeter = canvasWidth / TQB_BUILDING_WIDTH_M;
+  const densityCapScale =
+    basePxPerMeter > 0
+      ? Math.max(
+          ZOOM_CONFIG.intermediateMaxScale,
+          ZOOM_CONFIG.maxAutoFitPxPerMeter / basePxPerMeter
+        )
+      : safeMax;
+  const effectiveAutoMax = Math.min(safeMax, densityCapScale);
   const targetScale = Number(
-    Math.max(ZOOM_CONFIG.minScale, Math.min(safeMax, rawScale)).toFixed(3)
+    Math.max(
+      ZOOM_CONFIG.minScale,
+      Math.min(effectiveAutoMax, rawScale)
+    ).toFixed(3)
   );
 
   if (targetScale <= 1.001) {

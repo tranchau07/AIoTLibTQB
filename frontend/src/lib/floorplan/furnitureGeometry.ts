@@ -11,6 +11,7 @@ import { FLOORPLAN_I18N_VI } from '@/messages/vi';
 import type { FurnitureItem, Point2D } from '@/types/api';
 
 const GEOMETRY_EPS = 1e-4;
+export const STRUCTURAL_COLUMN_SIZE_M = 0.6;
 
 export interface FurnitureNormalizedSize {
   readonly widthNorm: number;
@@ -37,9 +38,15 @@ export type FurnitureAlignMode =
 export interface FurnitureValidationResult {
   readonly valid: boolean;
   readonly outOfBoundsIds: Set<string>;
+  readonly columnConflictIds: Set<string>;
   readonly overlappingPairs: Array<[string, string]>;
   readonly invalidIds: Set<string>;
   readonly errorsByItemId: Record<string, string[]>;
+}
+
+export interface AlignmentGuide {
+  readonly orientation: 'vertical' | 'horizontal';
+  readonly posNorm: number;
 }
 
 export interface FurnitureHistoryState<T = FurnitureItem[]> {
@@ -157,6 +164,45 @@ export function getFurnitureObbCornersNorm(
     metersToNormalizedPoint(cornersM[2]),
     metersToNormalizedPoint(cornersM[3]),
   ];
+}
+
+export function isPointInsideFurnitureItem(
+  pointNorm: Point2D,
+  item: Pick<FurnitureItem, 'x' | 'y' | 'widthM' | 'depthM' | 'rotationDeg'>,
+  hitPaddingM = 0
+): boolean {
+  const ptM = normalizedToMetersPoint(pointNorm);
+  const cx = item.x * TQB_BUILDING_WIDTH_M;
+  const cy = item.y * TQB_BUILDING_DEPTH_M;
+  const dx = ptM.x - cx;
+  const dy = ptM.y - cy;
+  const rad = ((item.rotationDeg ?? 0) * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+  const vx = -Math.sin(rad);
+  const vy = Math.cos(rad);
+  const projU = dx * ux + dy * uy;
+  const projV = dx * vx + dy * vy;
+  const hw = item.widthM * 0.5 + hitPaddingM;
+  const hd = item.depthM * 0.5 + hitPaddingM;
+  return Math.abs(projU) <= hw && Math.abs(projV) <= hd;
+}
+
+export function findTopmostFurnitureAtPoint<T extends FurnitureItem>(
+  pointNorm: Point2D,
+  items: readonly T[],
+  hitPaddingM = 0.08
+): T | null {
+  if (!items || items.length === 0) return null;
+  const sorted = [...items].sort(
+    (a, b) => a.widthM * a.depthM - b.widthM * b.depthM
+  );
+  for (const item of sorted) {
+    if (isPointInsideFurnitureItem(pointNorm, item, hitPaddingM)) {
+      return item;
+    }
+  }
+  return null;
 }
 
 function pointOnSegmentMeters(p: Point2D, a: Point2D, b: Point2D): boolean {
@@ -330,12 +376,74 @@ export function doFurnitureItemsOverlap(
   return true;
 }
 
+/**
+ * Kiểm tra xem vật thể nội thất có đè lên Cột chịu lực BTCT (0.60m × 0.60m) trong phòng không.
+ * Bỏ qua các đối tượng không chắn lối đi (IOT_NODE, DOOR).
+ */
+export function doesFurnitureOverlapColumn(
+  item: Pick<FurnitureItem, 'typeId' | 'x' | 'y' | 'widthM' | 'depthM' | 'rotationDeg'>,
+  columnsNorm?: readonly Point2D[] | null,
+  columnSizeM = STRUCTURAL_COLUMN_SIZE_M,
+  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG
+): boolean {
+  if (!columnsNorm || columnsNorm.length === 0) {
+    return false;
+  }
+  const entry = resolveFurnitureCatalogEntry(item.typeId, catalog);
+  if (!entry.blocksWalkway) {
+    return false;
+  }
+
+  const cornersItem = getFurnitureObbCornersMeters(item);
+  const itemAxes: Point2D[] = [
+    edgeNormal(cornersItem[0], cornersItem[1]),
+    edgeNormal(cornersItem[1], cornersItem[2]),
+  ];
+
+  for (const colNorm of columnsNorm) {
+    const colBox: Pick<
+      FurnitureItem,
+      'x' | 'y' | 'widthM' | 'depthM' | 'rotationDeg'
+    > = {
+      x: colNorm.x,
+      y: colNorm.y,
+      widthM: columnSizeM,
+      depthM: columnSizeM,
+      rotationDeg: 0,
+    };
+    const cornersCol = getFurnitureObbCornersMeters(colBox);
+    const axes: Point2D[] = [
+      ...itemAxes,
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+    ];
+    let separated = false;
+    for (const axis of axes) {
+      const projA = projectPolygonOnAxis(cornersItem, axis);
+      const projB = projectPolygonOnAxis(cornersCol, axis);
+      if (
+        projA.max <= projB.min + GEOMETRY_EPS ||
+        projB.max <= projA.min + GEOMETRY_EPS
+      ) {
+        separated = true;
+        break;
+      }
+    }
+    if (!separated) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function validateFurnitureLayout(
   items: readonly FurnitureItem[],
   polygonNorm?: readonly Point2D[] | null,
-  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG
+  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG,
+  structuralColumnsNorm?: readonly Point2D[] | null
 ): FurnitureValidationResult {
   const outOfBoundsIds = new Set<string>();
+  const columnConflictIds = new Set<string>();
   const overlappingPairs: Array<[string, string]> = [];
   const invalidIds = new Set<string>();
   const errorsByItemId: Record<string, string[]> = {};
@@ -352,6 +460,20 @@ export function validateFurnitureLayout(
       outOfBoundsIds.add(item.id);
       invalidIds.add(item.id);
       pushErr(item.id, FLOORPLAN_I18N_VI.furniture.outOfBoundsError);
+    }
+    if (
+      structuralColumnsNorm &&
+      structuralColumnsNorm.length > 0 &&
+      doesFurnitureOverlapColumn(
+        item,
+        structuralColumnsNorm,
+        STRUCTURAL_COLUMN_SIZE_M,
+        catalog
+      )
+    ) {
+      columnConflictIds.add(item.id);
+      invalidIds.add(item.id);
+      pushErr(item.id, FLOORPLAN_I18N_VI.furniture.columnOverlapError);
     }
   }
 
@@ -370,6 +492,7 @@ export function validateFurnitureLayout(
   return {
     valid: invalidIds.size === 0,
     outOfBoundsIds,
+    columnConflictIds,
     overlappingPairs,
     invalidIds,
     errorsByItemId,
@@ -519,5 +642,408 @@ export function redoFurnitureHistory<T>(
     past: [...state.past, state.present],
     present: next,
     future: nextFuture,
+  };
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function makeUniqueFurnitureId(typeId: string): string {
+  const slug = typeId.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const rand = Math.random().toString(36).slice(2, 7);
+  return `furn_${slug}_${Date.now().toString(36)}_${rand}`;
+}
+
+/**
+ * Tự động đánh số tên chuẩn cho nội thất mới thêm vào phòng:
+ * "Bàn dài số 1", "Bàn dài số 2", "Ghế đơn số 1"...
+ */
+export function generateNextFurnitureLabel(
+  typeId: string,
+  existingItems: readonly FurnitureItem[],
+  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG
+): string {
+  const entry = resolveFurnitureCatalogEntry(typeId, catalog);
+  const base = entry.shortLabel.trim() || entry.labelVi.trim() || 'Nội thất';
+  const pattern = new RegExp(`^${escapeRegExp(base)}\\s+số\\s+(\\d+)$`, 'i');
+  const trailingNum = /(\d+)$/;
+
+  let maxIdx = 0;
+  const normalizedTarget = typeId.trim().toUpperCase();
+  for (const it of existingItems) {
+    const lbl = (it.label ?? '').trim();
+    if (!lbl) continue;
+    const match = lbl.match(pattern);
+    if (match) {
+      const n = Number.parseInt(match[1], 10);
+      if (Number.isFinite(n) && n > maxIdx) maxIdx = n;
+    } else if (it.typeId.trim().toUpperCase() === normalizedTarget) {
+      const numMatch = lbl.match(trailingNum);
+      if (numMatch) {
+        const n = Number.parseInt(numMatch[1], 10);
+        if (Number.isFinite(n) && n > maxIdx) maxIdx = n;
+      }
+    }
+  }
+  return `${base} số ${maxIdx + 1}`;
+}
+
+/**
+ * Tăng số thứ tự khi nhân bản một món đồ (VD: "Bàn dài số 1" -> "Bàn dài số 2").
+ */
+export function incrementFurnitureLabel(
+  baseLabel: string | undefined,
+  existingLabels: readonly (string | undefined)[],
+  fallbackPrefix = 'Nội thất'
+): string {
+  const used = new Set(
+    existingLabels
+      .map((l) => (l ?? '').trim().toLowerCase())
+      .filter((l) => l.length > 0)
+  );
+  const clean = (baseLabel ?? '').trim() || fallbackPrefix;
+  const trailingMatch = clean.match(/^(.*?)(\d+)$/);
+  if (trailingMatch) {
+    const prefix = trailingMatch[1];
+    const rawNum = trailingMatch[2];
+    const width = rawNum.length;
+    let nextNum = Number.parseInt(rawNum, 10) + 1;
+    while (nextNum < 10000) {
+      const formatted =
+        rawNum.startsWith('0') && String(nextNum).length < width
+          ? String(nextNum).padStart(width, '0')
+          : String(nextNum);
+      const cand = `${prefix}${formatted}`;
+      if (!used.has(cand.toLowerCase())) {
+        return cand;
+      }
+      nextNum += 1;
+    }
+  }
+  let suffix = 2;
+  while (suffix < 10000) {
+    const cand = `${clean} (${suffix})`;
+    if (!used.has(cand.toLowerCase())) {
+      return cand;
+    }
+    suffix += 1;
+  }
+  return `${clean} (${Date.now()})`;
+}
+
+function isPlacementCandidateValid(
+  candidate: FurnitureItem,
+  existingItems: readonly FurnitureItem[],
+  polygonNorm?: readonly Point2D[] | null,
+  structuralColumnsNorm?: readonly Point2D[] | null,
+  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG
+): boolean {
+  if (!isFurnitureInsideRoom(candidate, polygonNorm)) {
+    return false;
+  }
+  if (
+    structuralColumnsNorm &&
+    structuralColumnsNorm.length > 0 &&
+    doesFurnitureOverlapColumn(
+      candidate,
+      structuralColumnsNorm,
+      STRUCTURAL_COLUMN_SIZE_M,
+      catalog
+    )
+  ) {
+    return false;
+  }
+  for (const other of existingItems) {
+    if (doFurnitureItemsOverlap(candidate, other, catalog)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Quét xoắn ốc theo mét (step 0.4m, bán kính tới 28m) để tìm vị trí hợp lệ gần nhất
+ * thỏa mãn đồng thời: trong ranh giới tường, không đè cột BTCT, không chồng đồ có sẵn.
+ */
+export function findNearestValidPlacement(
+  candidateTemplate: Pick<
+    FurnitureItem,
+    'typeId' | 'widthM' | 'depthM' | 'rotationDeg'
+  >,
+  existingItems: readonly FurnitureItem[],
+  polygonNorm?: readonly Point2D[] | null,
+  structuralColumnsNorm?: readonly Point2D[] | null,
+  preferredCenterNorm: Point2D = { x: 0.5, y: 0.5 },
+  snapStepM = 0.1,
+  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG
+): Point2D {
+  const prefM = normalizedToMetersPoint(preferredCenterNorm);
+  const stepM = 0.4;
+  const maxSteps = Math.ceil(28 / stepM);
+
+  const testPt = (xM: number, yM: number): Point2D | null => {
+    const rawNorm = metersToNormalizedPoint({
+      x: Math.max(0.2, Math.min(TQB_BUILDING_WIDTH_M - 0.2, xM)),
+      y: Math.max(0.2, Math.min(TQB_BUILDING_DEPTH_M - 0.2, yM)),
+    });
+    const snapped =
+      snapStepM > 0 ? snapNormalizedPointToGrid(rawNorm, snapStepM) : rawNorm;
+    const probe: FurnitureItem = {
+      id: '__probe__',
+      typeId: candidateTemplate.typeId,
+      x: Number(snapped.x.toFixed(4)),
+      y: Number(snapped.y.toFixed(4)),
+      widthM: candidateTemplate.widthM,
+      depthM: candidateTemplate.depthM,
+      rotationDeg: candidateTemplate.rotationDeg ?? 0,
+      locked: false,
+    };
+    if (
+      isPlacementCandidateValid(
+        probe,
+        existingItems,
+        polygonNorm,
+        structuralColumnsNorm,
+        catalog
+      )
+    ) {
+      return { x: probe.x, y: probe.y };
+    }
+    return null;
+  };
+
+  const centerHit = testPt(prefM.x, prefM.y);
+  if (centerHit) return centerHit;
+
+  for (let r = 1; r <= maxSteps; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      for (let dy = -r; dy <= r; dy++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const hit = testPt(prefM.x + dx * stepM, prefM.y + dy * stepM);
+        if (hit) return hit;
+      }
+    }
+  }
+
+  const fallback =
+    snapStepM > 0
+      ? snapNormalizedPointToGrid(preferredCenterNorm, snapStepM)
+      : preferredCenterNorm;
+  return {
+    x: Number(fallback.x.toFixed(4)),
+    y: Number(fallback.y.toFixed(4)),
+  };
+}
+
+/**
+ * Nhân bản thẳng hàng thông minh (+1 hoặc x3) dọc theo hướng xoay của vật thể gốc,
+ * tự nhảy hàng song song hoặc dò vị trí trống nếu chạm tường/cột/đồ khác.
+ */
+export function duplicateFurnitureItemsSmartly(
+  allItems: readonly FurnitureItem[],
+  selectedIds: readonly string[],
+  countCopies = 1,
+  polygonNorm?: readonly Point2D[] | null,
+  structuralColumnsNorm?: readonly Point2D[] | null,
+  snapStepM = 0.1,
+  catalog: readonly FurnitureCatalogEntry[] = FURNITURE_CATALOG
+): FurnitureItem[] {
+  const selectedSet = new Set(selectedIds);
+  const sources = allItems.filter((it) => selectedSet.has(it.id));
+  if (sources.length === 0 || countCopies <= 0) return [];
+
+  const workingItems: FurnitureItem[] = [...allItems];
+  const clones: FurnitureItem[] = [];
+
+  for (const src of sources) {
+    const entry = resolveFurnitureCatalogEntry(src.typeId, catalog);
+    const rotRad = ((src.rotationDeg ?? 0) * Math.PI) / 180;
+    const ux = Math.cos(rotRad);
+    const uy = Math.sin(rotRad);
+    const vx = -Math.sin(rotRad);
+    const vy = Math.cos(rotRad);
+
+    const gapM = entry.typeId.toUpperCase() === 'CHAIR' ? 0.15 : 0.4;
+    const stepAlongM = src.widthM + gapM;
+    const stepRowM = src.depthM + 0.6;
+
+    let anchorM = normalizedToMetersPoint({ x: src.x, y: src.y });
+
+    for (let copyIdx = 0; copyIdx < countCopies; copyIdx++) {
+      let chosenNorm: Point2D | null = null;
+
+      // Thử xếp nối tiếp dọc trục chính và dịch hàng song song khi cần
+      const candidateOffsets: Array<{ along: number; across: number }> = [
+        { along: stepAlongM, across: 0 },
+        { along: -stepAlongM, across: 0 },
+        { along: 0, across: stepRowM },
+        { along: 0, across: -stepRowM },
+        { along: stepAlongM * 2, across: 0 },
+        { along: stepAlongM, across: stepRowM },
+      ];
+
+      for (const off of candidateOffsets) {
+        const rawNorm = metersToNormalizedPoint({
+          x: anchorM.x + off.along * ux + off.across * vx,
+          y: anchorM.y + off.along * uy + off.across * vy,
+        });
+        const snapped =
+          snapStepM > 0 ? snapNormalizedPointToGrid(rawNorm, snapStepM) : rawNorm;
+        const probe: FurnitureItem = {
+          id: '__dup_probe__',
+          typeId: src.typeId,
+          x: Number(snapped.x.toFixed(4)),
+          y: Number(snapped.y.toFixed(4)),
+          widthM: src.widthM,
+          depthM: src.depthM,
+          rotationDeg: src.rotationDeg ?? 0,
+          locked: false,
+        };
+        if (
+          isPlacementCandidateValid(
+            probe,
+            workingItems,
+            polygonNorm,
+            structuralColumnsNorm,
+            catalog
+          )
+        ) {
+          chosenNorm = { x: probe.x, y: probe.y };
+          break;
+        }
+      }
+
+      if (!chosenNorm) {
+        const preferred = metersToNormalizedPoint({
+          x: anchorM.x + stepAlongM * ux,
+          y: anchorM.y + stepAlongM * uy,
+        });
+        chosenNorm = findNearestValidPlacement(
+          src,
+          workingItems,
+          polygonNorm,
+          structuralColumnsNorm,
+          preferred,
+          snapStepM,
+          catalog
+        );
+      }
+
+      const nextLabel = incrementFurnitureLabel(
+        src.label || entry.shortLabel,
+        workingItems.map((it) => it.label),
+        entry.shortLabel
+      );
+
+      const clone: FurnitureItem = {
+        ...src,
+        id: makeUniqueFurnitureId(src.typeId),
+        label: nextLabel,
+        x: chosenNorm.x,
+        y: chosenNorm.y,
+        locked: false,
+      };
+      workingItems.push(clone);
+      clones.push(clone);
+      anchorM = normalizedToMetersPoint({ x: clone.x, y: clone.y });
+    }
+  }
+
+  return clones;
+}
+
+/**
+ * Tính vị trí kéo thả thông minh:
+ * 1) Hút lưới snapStepM (0.10m) nếu snapEnabled = true
+ * 2) Hút gióng hàng tự động (< 0.12m) theo tâm hoặc mép các món lân cận và trả về các đường AlignmentGuide.
+ */
+export function computeSmartDragPosition(
+  draggedItem: Pick<FurnitureItem, 'id' | 'x' | 'y' | 'widthM' | 'depthM' | 'rotationDeg'>,
+  rawNorm: Point2D,
+  otherItems: readonly FurnitureItem[],
+  snapEnabled: boolean,
+  snapStepM = 0.1
+): { x: number; y: number; guides: AlignmentGuide[] } {
+  const basePos = snapEnabled
+    ? snapNormalizedPointToGrid(rawNorm, snapStepM)
+    : rawNorm;
+
+  const baseM = normalizedToMetersPoint(basePos);
+  const candItem = {
+    x: basePos.x,
+    y: basePos.y,
+    widthM: draggedItem.widthM,
+    depthM: draggedItem.depthM,
+    rotationDeg: draggedItem.rotationDeg ?? 0,
+  };
+  const candCornersM = getFurnitureObbCornersMeters(candItem);
+  const candMinX = Math.min(...candCornersM.map((c) => c.x));
+  const candMaxX = Math.max(...candCornersM.map((c) => c.x));
+  const candMinY = Math.min(...candCornersM.map((c) => c.y));
+  const candMaxY = Math.max(...candCornersM.map((c) => c.y));
+
+  const ALIGN_THRESHOLD_M = 0.12;
+  let bestDxM = ALIGN_THRESHOLD_M + 1;
+  let bestDyM = ALIGN_THRESHOLD_M + 1;
+  let alignedXNorm = basePos.x;
+  let alignedYNorm = basePos.y;
+  let guideXNorm: number | null = null;
+  let guideYNorm: number | null = null;
+
+  for (const other of otherItems) {
+    if (other.id === draggedItem.id) continue;
+    const otherCornersM = getFurnitureObbCornersMeters(other);
+    const oMinX = Math.min(...otherCornersM.map((c) => c.x));
+    const oMaxX = Math.max(...otherCornersM.map((c) => c.x));
+    const oMinY = Math.min(...otherCornersM.map((c) => c.y));
+    const oMaxY = Math.max(...otherCornersM.map((c) => c.y));
+    const oCenterM = normalizedToMetersPoint({ x: other.x, y: other.y });
+
+    const xMatches: Array<{ delta: number; guideM: number }> = [
+      { delta: oCenterM.x - baseM.x, guideM: oCenterM.x },
+      { delta: oMinX - candMinX, guideM: oMinX },
+      { delta: oMaxX - candMaxX, guideM: oMaxX },
+    ];
+    for (const m of xMatches) {
+      if (Math.abs(m.delta) <= ALIGN_THRESHOLD_M && Math.abs(m.delta) < Math.abs(bestDxM)) {
+        bestDxM = m.delta;
+        alignedXNorm = (baseM.x + m.delta) / TQB_BUILDING_WIDTH_M;
+        guideXNorm = m.guideM / TQB_BUILDING_WIDTH_M;
+      }
+    }
+
+    const yMatches: Array<{ delta: number; guideM: number }> = [
+      { delta: oCenterM.y - baseM.y, guideM: oCenterM.y },
+      { delta: oMinY - candMinY, guideM: oMinY },
+      { delta: oMaxY - candMaxY, guideM: oMaxY },
+    ];
+    for (const m of yMatches) {
+      if (Math.abs(m.delta) <= ALIGN_THRESHOLD_M && Math.abs(m.delta) < Math.abs(bestDyM)) {
+        bestDyM = m.delta;
+        alignedYNorm = (baseM.y + m.delta) / TQB_BUILDING_DEPTH_M;
+        guideYNorm = m.guideM / TQB_BUILDING_DEPTH_M;
+      }
+    }
+  }
+
+  const guides: AlignmentGuide[] = [];
+  if (guideXNorm !== null) {
+    guides.push({
+      orientation: 'vertical',
+      posNorm: Number(guideXNorm.toFixed(4)),
+    });
+  }
+  if (guideYNorm !== null) {
+    guides.push({
+      orientation: 'horizontal',
+      posNorm: Number(guideYNorm.toFixed(4)),
+    });
+  }
+
+  return {
+    x: Number(Math.max(0.005, Math.min(0.995, alignedXNorm)).toFixed(4)),
+    y: Number(Math.max(0.005, Math.min(0.995, alignedYNorm)).toFixed(4)),
+    guides,
   };
 }

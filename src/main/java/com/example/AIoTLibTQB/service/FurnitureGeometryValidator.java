@@ -15,6 +15,7 @@ public final class FurnitureGeometryValidator {
 
     public static final double TQB_BUILDING_WIDTH_M = 76.0;
     public static final double TQB_BUILDING_DEPTH_M = 57.2;
+    public static final double STRUCTURAL_COLUMN_SIZE_M = 0.60;
 
     private static final double EPS = 1e-4;
     private static final Set<String> NON_BLOCKING_TYPES = Set.of("DOOR", "IOT_NODE");
@@ -106,6 +107,41 @@ public final class FurnitureGeometryValidator {
         }
 
         return true;
+    }
+
+    public static boolean doesFurnitureOverlapColumn(
+            FurnitureItemDoc item,
+            List<Point2D> columnsNorm) {
+        return doesFurnitureOverlapColumn(item, columnsNorm, STRUCTURAL_COLUMN_SIZE_M);
+    }
+
+    public static boolean doesFurnitureOverlapColumn(
+            FurnitureItemDoc item,
+            List<Point2D> columnsNorm,
+            double columnSizeM) {
+        if (item == null || columnsNorm == null || columnsNorm.isEmpty()) {
+            return false;
+        }
+        if (!blocksWalkway(item.getTypeId())) {
+            return false;
+        }
+        for (Point2D colNorm : columnsNorm) {
+            if (colNorm == null || colNorm.getX() == null || colNorm.getY() == null) {
+                continue;
+            }
+            FurnitureItemDoc colBox = FurnitureItemDoc.builder()
+                    .typeId("DESK")
+                    .x(colNorm.getX())
+                    .y(colNorm.getY())
+                    .widthM(columnSizeM)
+                    .depthM(columnSizeM)
+                    .rotationDeg(0.0)
+                    .build();
+            if (doFurnitureItemsOverlap(item, colBox)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static boolean doFurnitureItemsOverlap(FurnitureItemDoc a, FurnitureItemDoc b) {

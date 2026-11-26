@@ -81,6 +81,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  useEffect(() => {
+    const onRequestCollapse = (ev: Event) => {
+      const custom = ev as CustomEvent<{ collapsed?: boolean }>;
+      if (typeof custom.detail?.collapsed === 'boolean') {
+        setDesktopCollapsed(custom.detail.collapsed);
+      }
+    };
+    window.addEventListener('tqb:sidebar-collapse', onRequestCollapse);
+    return () =>
+      window.removeEventListener('tqb:sidebar-collapse', onRequestCollapse);
+  }, []);
+
   const toggleDesktopSidebar = useCallback(() => {
     setDesktopCollapsed((prev) => {
       const next = !prev;
@@ -577,8 +589,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className={`sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur transition-[padding] duration-200 ${
-            desktopCollapsed || pathname?.startsWith('/floorplan') ? 'lg:px-4' : 'lg:px-8'
+          className={`sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur transition-[padding] duration-200 ${
+            pathname?.startsWith('/floorplan')
+              ? 'h-11 lg:px-3'
+              : desktopCollapsed
+                ? 'h-14 lg:px-4'
+                : 'h-14 lg:px-8'
           }`}
         >
           <div className="flex min-w-0 items-center gap-2">
@@ -651,7 +667,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main
           className={
             pathname?.startsWith('/floorplan')
-              ? 'flex-1 px-2.5 py-2 lg:px-3 lg:py-2'
+              ? 'flex-1 px-2 py-1.5 lg:px-2.5 lg:py-1.5'
               : desktopCollapsed
                 ? 'flex-1 px-4 py-6 lg:px-5 lg:py-6'
                 : 'flex-1 px-4 py-6 lg:px-8 lg:py-8'

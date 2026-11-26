@@ -384,6 +384,7 @@ public class RoomService {
     }
 
     private List<FurnitureItemDoc> sanitizeAndValidateFurnitureItems(Room room, List<FurnitureItemDoc> rawItems) {
+        List<Point2D> structuralColumns = TqbPresetColumnsRegistry.getColumnsForRoomCode(room.getCode());
         List<FurnitureItemDoc> normalized = new ArrayList<>(rawItems.size());
         for (FurnitureItemDoc raw : rawItems) {
             if (raw == null || raw.getId() == null || raw.getId().isBlank()
@@ -411,6 +412,10 @@ public class RoomService {
                     .build();
 
             if (!FurnitureGeometryValidator.isFurnitureInsideRoom(item, room.getBoundaryPolygon())) {
+                throw new AppException(ErrorCode.FURNITURE_OUT_OF_BOUNDS);
+            }
+            if (FurnitureGeometryValidator.doesFurnitureOverlapColumn(
+                    item, structuralColumns, FurnitureGeometryValidator.STRUCTURAL_COLUMN_SIZE_M)) {
                 throw new AppException(ErrorCode.FURNITURE_OUT_OF_BOUNDS);
             }
             normalized.add(item);
