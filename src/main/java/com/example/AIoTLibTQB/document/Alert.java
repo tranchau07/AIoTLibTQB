@@ -81,8 +81,6 @@ public class Alert {
 
     String message;
 
-    String recommendedAction;
-
     @CreatedDate
     Instant startedAt;
 

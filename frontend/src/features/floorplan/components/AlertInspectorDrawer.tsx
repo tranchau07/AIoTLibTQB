@@ -227,15 +227,6 @@ export function AlertWorkflowCard({
         </p>
       )}
 
-      {/* SOP Guidance */}
-      <div
-        data-testid={`alert-sop-${alert.id}`}
-        className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-950"
-      >
-        <span className="font-bold">SOP khuyến nghị: </span>
-        <span>{summary.sopVi}</span>
-      </div>
-
       {/* Current Assignee & Resolution Tag Display */}
       {(alert.assignedTo || tagLabel) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">

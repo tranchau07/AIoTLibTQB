@@ -181,7 +181,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 86,
     threshold: 75,
     message: 'Noise exceeded',
-    recommendedAction: 'SOP Trật tự',
     startedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
     acknowledgedAt: null,
     resolvedAt: null,

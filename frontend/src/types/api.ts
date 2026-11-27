@@ -483,7 +483,6 @@ export interface AlertResponse {
   currentValue: number | null;
   threshold: number | null;
   message: string;
-  recommendedAction?: string | null;
   startedAt: string;
   acknowledgedAt: string | null;
   resolvedAt: string | null;

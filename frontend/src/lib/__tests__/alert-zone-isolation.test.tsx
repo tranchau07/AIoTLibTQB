@@ -80,7 +80,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 72.5,
     threshold: 55.0,
     message: 'Độ ồn vượt ngưỡng tại phòng đọc',
-    recommendedAction: 'Kiểm tra khu vực đọc',
     startedAt: '2026-11-17T05:00:00Z',
     acknowledgedAt: null,
     resolvedAt: null,

@@ -286,7 +286,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 86.0,
     threshold: 75.0,
     message: 'Average noise level exceeded threshold',
-    recommendedAction: 'Nhắc nhở giữ trật tự khu vực phòng đọc',
     startedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
     acknowledgedAt: null,
     resolvedAt: null,

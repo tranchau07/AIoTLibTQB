@@ -1,6 +1,4 @@
 package com.example.AIoTLibTQB.service;
-
-import com.example.AIoTLibTQB.configuration.AlertSopCatalog;
 import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.document.Device;
 import com.example.AIoTLibTQB.document.Role;
@@ -310,7 +308,6 @@ class AlertServiceTest {
         assertThat(captor.getValue().getSeverityRank()).isEqualTo(4);
         assertThat(captor.getValue().getCurrentValue()).isEqualTo(88.0);
         assertThat(captor.getValue().getThreshold()).isEqualTo(85.0);
-        assertThat(captor.getValue().getRecommendedAction()).isNotBlank();
     }
 
     @Test
@@ -445,7 +442,6 @@ class AlertServiceTest {
         assertThat(saved.getCurrentValue()).isEqualTo(82.0);
         assertThat(saved.getThreshold()).isEqualTo(75.0);
         assertThat(saved.getMessage()).contains("Peak noise spike");
-        assertThat(saved.getRecommendedAction()).isNotBlank();
 
         verify(realtimePublisher, times(1)).publishAlert(any(AlertResponse.class));
 
@@ -497,11 +493,10 @@ class AlertServiceTest {
         assertThat(saved.getStatus()).isEqualTo(AlertStatus.FIRING);
         assertThat(saved.getSeverity()).isEqualTo(AlertSeverity.HIGH);
         assertThat(saved.getThreshold()).isEqualTo(60.0);
-        assertThat(saved.getRecommendedAction()).contains("SOP Kho sách");
     }
 
     @Test
-    @DisplayName("Kịch bản heat/humid (35.5°C + 85.0%RH): BOOK_STORAGE kích hoạt HIGH HUMIDITY_HIGH + SOP Kho sách & TEMPERATURE; STUDY_ROOM chỉ kích hoạt MEDIUM TEMPERATURE")
+    @DisplayName("Kịch bản heat/humid (35.5°C + 85.0%RH): BOOK_STORAGE kích hoạt HIGH HUMIDITY_HIGH & TEMPERATURE; STUDY_ROOM chỉ kích hoạt MEDIUM TEMPERATURE")
     void evaluate_heatHumidScenario_differentiatesBookStorageAndStudyRoom() {
         Room storageRoom = Room.builder()
                 .id("room-storage-103")
@@ -568,7 +563,6 @@ class AlertServiceTest {
         assertThat(storageHumidityAlert.getStatus()).isEqualTo(AlertStatus.FIRING);
         assertThat(storageHumidityAlert.getSeverity()).isEqualTo(AlertSeverity.HIGH);
         assertThat(storageHumidityAlert.getThreshold()).isEqualTo(60.0);
-        assertThat(storageHumidityAlert.getRecommendedAction()).contains("SOP Kho sách");
 
         Alert storageTempAlert = storageAlerts.stream()
                 .filter(a -> "TEMPERATURE".equals(a.getMetricType()))
@@ -629,7 +623,6 @@ class AlertServiceTest {
         assertThat(firstRun).isEqualTo(1);
         assertThat(legacy.getSeverity()).isEqualTo(AlertSeverity.MEDIUM);
         assertThat(legacy.getSeverityRank()).isEqualTo(2);
-        assertThat(legacy.getRecommendedAction()).isNotBlank();
 
         // Chạy lần 2 không ghi lại DB
         int secondRun = alertRuleEngine.migrateLegacyAlertsSeverity();
@@ -672,7 +665,6 @@ class AlertServiceTest {
                 .currentValue(62.0)
                 .threshold(50.0)
                 .message("PM2.5 particulate level (62.0 µg/m³) exceeded threshold (50.0 µg/m³)")
-                .recommendedAction("Kiểm tra lọc không khí")
                 .startedAt(mutableClock.instant().minusSeconds(120))
                 .build();
 
@@ -816,7 +808,6 @@ class AlertServiceTest {
                     .severity(AlertSeverity.MEDIUM)
                     .severityRank(2)
                     .status(AlertStatus.FIRING)
-                    .recommendedAction("Check noise")
                     .startedAt(mutableClock.instant())
                     .build();
 
@@ -1864,7 +1855,6 @@ class AlertServiceTest {
             AlertResponse tempRes = AlertRuleEngine.toAlertResponse(legacyTemp);
             assertThat(tempRes.getMetricType()).isEqualTo("TEMPERATURE");
             assertThat(tempRes.getUnit()).isEqualTo("°C");
-            assertThat(tempRes.getRecommendedAction()).contains("Điều hòa");
 
             AlertResponse humHighRes = AlertRuleEngine.toAlertResponse(legacyHumHigh);
             assertThat(humHighRes.getMetricType()).isEqualTo("HUMIDITY_HIGH");
@@ -2585,9 +2575,6 @@ class AlertServiceTest {
             assertThat(persistedHolder[0].getStatus()).isEqualTo(AlertStatus.FIRING);
             assertThat(persistedHolder[0].getZoneId()).isEqualTo("ZONE_A");
             assertThat(persistedHolder[0].getMessage()).contains("env.temperature");
-            assertThat(persistedHolder[0].getRecommendedAction()).isEqualTo(
-                    "SOP Kỹ thuật Cảm biến: Giá trị đo vượt ngoài dải vật lý hợp lệ liên tục; kiểm tra dây tín hiệu I2C/UART và hiệu chuẩn hoặc thay thế module cảm biến."
-            );
 
             ArgumentCaptor<AlertResponse> publishedCaptor = ArgumentCaptor.forClass(AlertResponse.class);
             verify(realtimePublisher, times(1)).publishAlert(publishedCaptor.capture());
@@ -2687,7 +2674,6 @@ class AlertServiceTest {
                     .status(AlertStatus.FIRING)
                     .severity(null)
                     .metricType(null)
-                    .recommendedAction(null)
                     .build();
 
             when(mongoTemplate.find(any(Query.class), eq(Alert.class)))
@@ -2700,8 +2686,6 @@ class AlertServiceTest {
             assertThat(legacySensorAlert.getSeverity()).isEqualTo(AlertSeverity.MEDIUM);
             assertThat(legacySensorAlert.getSeverityRank()).isEqualTo(2);
             assertThat(legacySensorAlert.getMetricType()).isEqualTo("SENSOR_MALFUNCTION");
-            assertThat(legacySensorAlert.getRecommendedAction()).isEqualTo(
-                    AlertSopCatalog.resolveSop("SENSOR_MALFUNCTION", AlertType.SENSOR_MALFUNCTION, RoomType.STUDY_ROOM));
 
             ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
             verify(mongoTemplate, times(1)).find(queryCaptor.capture(), eq(Alert.class));
@@ -2710,8 +2694,7 @@ class AlertServiceTest {
                     .contains("$or")
                     .contains("severity")
                     .contains("severityRank")
-                    .contains("metricType")
-                    .contains("recommendedAction");
+                    .contains("metricType");
 
             // Chạy lần 2: query lọc trả rỗng -> không lưu thêm bản ghi nào và tuyệt đối không gọi findAll()
             int secondRun = engineWithMongo.migrateLegacyAlertsSeverity();
@@ -2735,15 +2718,8 @@ class AlertServiceTest {
         }
 
         @Test
-        @DisplayName("Test 3 (SOP & Response SENSOR_MALFUNCTION): AlertSopCatalog và toAlertResponse trả về đúng quy trình xử lý chuẩn")
-        void alertSopCatalog_andToAlertResponse_returnExpectedSensorMalfunctionSop() {
-            String expectedSop = "SOP Kỹ thuật Cảm biến: Giá trị đo vượt ngoài dải vật lý hợp lệ liên tục; kiểm tra dây tín hiệu I2C/UART và hiệu chuẩn hoặc thay thế module cảm biến.";
-
-            assertThat(AlertSopCatalog.resolveSop("SENSOR_MALFUNCTION", AlertType.SENSOR_MALFUNCTION, RoomType.STUDY_ROOM))
-                    .isEqualTo(expectedSop);
-            assertThat(AlertSopCatalog.resolveSop(null, AlertType.SENSOR_MALFUNCTION, RoomType.BOOK_STORAGE))
-                    .isEqualTo(expectedSop);
-
+        @DisplayName("Test 3 (Response SENSOR_MALFUNCTION): toAlertResponse trả về đúng metricType và unit")
+        void toAlertResponse_returnsExpectedSensorMalfunctionFields() {
             AlertResponse res = AlertRuleEngine.toAlertResponse(Alert.builder()
                     .id("sm-resp-1")
                     .type(AlertType.SENSOR_MALFUNCTION)
@@ -2751,7 +2727,6 @@ class AlertServiceTest {
                     .build());
             assertThat(res.getMetricType()).isEqualTo("SENSOR_MALFUNCTION");
             assertThat(res.getUnit()).isNull();
-            assertThat(res.getRecommendedAction()).isEqualTo(expectedSop);
         }
     }
 

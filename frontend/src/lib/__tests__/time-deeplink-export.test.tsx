@@ -248,7 +248,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 86.0,
     threshold: 85.0,
     message: 'Độ ồn 86.0 dBA vượt ngưỡng',
-    recommendedAction: 'Nhắc nhở giữ trật tự khu vực phòng nhóm.',
     startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
     acknowledgedAt: null,
     resolvedAt: null,

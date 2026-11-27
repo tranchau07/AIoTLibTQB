@@ -300,7 +300,6 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
       currentValue: 74.5,
       threshold: 55.0,
       message: 'Noise average (74.5 dBA) exceeded threshold (55.0 dBA)',
-      recommendedAction: 'Nhắc giữ trật tự tại phòng đọc tầng 3.',
       startedAt: new Date().toISOString(),
       acknowledgedAt: null,
       resolvedAt: null,
@@ -365,7 +364,7 @@ describe('Streamlined AppShell Sidebar & Floorplan Layout', () => {
     expect(item).toHaveTextContent('ESP32_TQB_301');
     expect(item).toHaveTextContent('74.5 dBA');
     expect(item).toHaveTextContent('55.0 dBA');
-    expect(item).toHaveTextContent('Nhắc giữ trật tự tại phòng đọc tầng 3.');
+    expect(item).not.toHaveTextContent('Nhắc giữ trật tự tại phòng đọc tầng 3.');
 
     // Tap 1: Nhận xử lý (gộp Tiếp nhận + Đang xử lý + auto-assign)
     fireEvent.click(screen.getByTestId('bell-ack-alert-bell-1'));

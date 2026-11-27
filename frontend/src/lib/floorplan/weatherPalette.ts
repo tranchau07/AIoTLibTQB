@@ -87,7 +87,6 @@ export interface MetricStatusEvaluation {
   readonly labelVi: string;
   readonly isExceedingThreshold: boolean;
   readonly thresholdSummaryVi: string;
-  readonly sopRecommendationVi: string;
 }
 
 export interface MetricLayerDisplayMeta {
@@ -181,27 +180,21 @@ export function getMetricStatusSymbol(
       labelVi: 'Chưa có dữ liệu',
       isExceedingThreshold: false,
       thresholdSummaryVi: METRIC_LAYER_META[layer].normalRangeVi,
-      sopRecommendationVi: 'Kiểm tra trạng thái trạm cảm biến trong phòng.',
     };
   }
 
   let level: 'NORMAL' | 'WARNING' | 'CRITICAL' = 'NORMAL';
   let labelVi = 'Đạt chuẩn';
   let thresholdSummaryVi = METRIC_LAYER_META[layer].normalRangeVi;
-  let sopRecommendationVi = 'Duy trì chế độ vận hành hiện tại.';
 
   switch (layer) {
     case 'comfortScore': {
       if (value < 60) {
         level = 'CRITICAL';
         labelVi = 'Vượt ngưỡng tiện nghi (< 60đ)';
-        sopRecommendationVi =
-          'Kiểm tra chỉ số gây giảm điểm (Độ ồn, Nhiệt độ, Độ ẩm hoặc Bụi PM2.5) và cử nhân sự hỗ trợ ngay.';
       } else if (value < 75) {
         level = 'WARNING';
         labelVi = 'Cần lưu ý (60–74đ)';
-        sopRecommendationVi =
-          'Theo dõi biến động môi trường trong phòng và kiểm tra hệ thống điều hòa/trật tự.';
       } else {
         labelVi = 'Tiện nghi tốt (≥ 75đ)';
       }
@@ -217,13 +210,9 @@ export function getMetricStatusSymbol(
       if (value >= critMax) {
         level = 'CRITICAL';
         labelVi = `Quá ồn (≥ ${critMax} dBA)`;
-        sopRecommendationVi =
-          'Cử thủ thư nhắc nhở trật tự ngay hoặc mời nhóm trao đổi sang phòng thảo luận Tầng 5.';
       } else if (value >= warnMax) {
         level = 'WARNING';
         labelVi = `Ồn nhẹ (≥ ${warnMax} dBA)`;
-        sopRecommendationVi =
-          'Quan sát khu vực cửa ra vào / bàn nhóm để điều tiết âm lượng kịp thời.';
       } else {
         labelVi = 'Yên tĩnh đạt chuẩn';
       }
@@ -237,13 +226,9 @@ export function getMetricStatusSymbol(
       if (value >= tMaxCrit || value < 17.0) {
         level = 'CRITICAL';
         labelVi = value >= tMaxCrit ? `Quá nóng (≥ ${tMaxCrit}°C)` : 'Quá lạnh (< 17°C)';
-        sopRecommendationVi =
-          'Kiểm tra dàn lạnh AHU/chiller khu vực, hạ rèm chắn nắng hướng Tây ngay.';
       } else if (value >= tMaxWarn || value < tMin) {
         level = 'WARNING';
         labelVi = value >= tMaxWarn ? `Hơi ấm (≥ ${tMaxWarn}°C)` : `Hơi lạnh (< ${tMin}°C)`;
-        sopRecommendationVi =
-          'Điều chỉnh điểm đặt nhiệt độ điều hòa hoặc kéo mành che nắng vách kính.';
       } else {
         labelVi = 'Nhiệt độ lý tưởng';
       }
@@ -259,15 +244,9 @@ export function getMetricStatusSymbol(
             value > hMaxStorage
               ? `Vượt ngưỡng bảo quản (> ${hMaxStorage}%RH)`
               : 'Quá khô cho bảo quản sách (< 32%RH)';
-          sopRecommendationVi =
-            value > hMaxStorage
-              ? 'Bật ngay máy hút ẩm chuyên dụng Kho sách và kiểm tra đóng kín cửa chống nồm ẩm.'
-              : 'Bù ẩm nhẹ cho kho lưu trữ tài liệu giấy tránh giòn gãy gáy sách.';
         } else if (value >= 57.5 || value < 38) {
           level = 'WARNING';
           labelVi = `Sát ngưỡng bảo quản (${value.toFixed(1)}%RH)`;
-          sopRecommendationVi =
-            'Chuẩn bị kích hoạt máy hút ẩm phòng Kho sách để giữ dưới 60%RH.';
         } else {
           labelVi = 'Đạt chuẩn bảo quản sách';
         }
@@ -277,12 +256,9 @@ export function getMetricStatusSymbol(
         if (value > hMax || value < 30) {
           level = 'CRITICAL';
           labelVi = value > hMax ? `Ẩm quá cao (> ${hMax}%RH)` : 'Quá khô (< 30%RH)';
-          sopRecommendationVi =
-            'Điều chỉnh chế độ hút ẩm HVAC hoặc tăng thông gió cưỡng bức.';
         } else if (value > 65 || value < 35) {
           level = 'WARNING';
           labelVi = value > 65 ? 'Hơi ẩm (> 65%RH)' : 'Hơi khô (< 35%RH)';
-          sopRecommendationVi = 'Theo dõi độ ẩm và cân bằng gió tươi điều hòa.';
         } else {
           labelVi = 'Độ ẩm dễ chịu';
         }
@@ -294,15 +270,9 @@ export function getMetricStatusSymbol(
       if (value < 120 || value >= 850) {
         level = 'CRITICAL';
         labelVi = value < 120 ? 'Thiếu sáng nghiêm trọng' : 'Chói nắng gắt (≥ 850 lx)';
-        sopRecommendationVi =
-          value < 120
-            ? 'Bật toàn bộ hệ thống đèn trần LED khu bàn đọc.'
-            : 'Kéo rèm cuốn chống chói tại vách kính hướng nắng.';
       } else if (value < 220 || value > 650) {
         level = 'WARNING';
         labelVi = value < 220 ? 'Hơi tối (< 220 lx)' : 'Ánh sáng hơi gắt (> 650 lx)';
-        sopRecommendationVi =
-          value < 220 ? 'Bật thêm dãy đèn chiếu sáng bàn học.' : 'Hạ nhẹ mành chắn nắng cửa sổ.';
       } else {
         labelVi = 'Ánh sáng đạt chuẩn';
       }
@@ -314,13 +284,9 @@ export function getMetricStatusSymbol(
       if (value >= pmMaxCrit) {
         level = 'CRITICAL';
         labelVi = `Ô nhiễm bụi cao (≥ ${pmMaxCrit} µg/m³)`;
-        sopRecommendationVi =
-          'Bật cấp khí tươi lọc HEPA AHU mức cao và kiểm tra đóng cửa ngoài sảnh.';
       } else if (value >= 25.0) {
         level = 'WARNING';
         labelVi = 'Bụi mịn tăng (≥ 25 µg/m³)';
-        sopRecommendationVi =
-          'Tăng tốc độ quạt thông gió cấp khí sạch hành lang.';
       } else {
         labelVi = 'Không khí trong lành';
       }
@@ -331,13 +297,9 @@ export function getMetricStatusSymbol(
       if (value < -75) {
         level = 'CRITICAL';
         labelVi = 'Sóng rất yếu / mất kết nối';
-        sopRecommendationVi =
-          'Báo Kỹ thuật viên kiểm tra Access Point hoặc nguồn PoE trạm ESP32.';
       } else if (value < -67) {
         level = 'WARNING';
         labelVi = 'Suy hao tín hiệu (-68..-75 dBm)';
-        sopRecommendationVi =
-          'Kiểm tra độ ổn định gói tin từ các trạm khu vực góc khuất tường BTCT.';
       } else {
         labelVi = 'Kết nối Wi-Fi mạnh';
       }
@@ -354,7 +316,6 @@ export function getMetricStatusSymbol(
     labelVi,
     isExceedingThreshold: level !== 'NORMAL',
     thresholdSummaryVi,
-    sopRecommendationVi,
   };
 }
 

@@ -214,7 +214,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 86.0,
     threshold: 85.0,
     message: 'Độ ồn đạt 86.0 dBA vượt ngưỡng cho phép 75.0 dBA',
-    recommendedAction: 'Nhắc nhở nhóm sinh viên khu vực đa phương tiện giảm âm lượng.',
     startedAt: new Date(Date.now() - 3 * 60_000).toISOString(),
     acknowledgedAt: null,
     resolvedAt: null,
@@ -312,7 +311,6 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
           roomId: 'ROOM_302',
           type: 'NOISE_EXCEEDED',
           message: 'Noise spike 86.0 dBA exceeds 75.0 dBA',
-          recommendedAction: null,
         }),
       ],
       page: 0,
@@ -341,10 +339,8 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
     expect(inspector).toHaveTextContent(/86\.0 dBA/);
     expect(inspector).toHaveTextContent(/Cần nhắc nhở độc giả giữ trật tự/i);
 
-    // Hiển thị SOP khuyến nghị & đầy đủ nút Xác nhận / Giao việc / Ghi chú
-    expect(within(inspector).getByTestId('alert-sop-alert-302-noise')).toHaveTextContent(
-      /SOP khuyến nghị/i
-    );
+    // Không hiển thị hộp SOP khuyến nghị & đầy đủ nút Xác nhận / Giao việc / Ghi chú
+    expect(within(inspector).queryByTestId('alert-sop-alert-302-noise')).not.toBeInTheDocument();
     expect(within(inspector).getByTestId('alert-ack-btn-alert-302-noise')).toHaveTextContent(
       'Xác nhận'
     );
@@ -627,7 +623,6 @@ describe('Phase 6 — Xử lý Cảnh báo Trực tiếp Trên Bản Đồ (TC-G
           metricType: 'TEMPERATURE',
           severity: 'HIGH',
           message: 'Temperature 34.5 °C exceeds threshold',
-          recommendedAction: 'Hạ rèm nắng hướng Tây và mở thêm điều hòa phòng nhóm.',
         }),
       ],
       page: 0,

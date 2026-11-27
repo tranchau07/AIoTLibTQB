@@ -40,7 +40,6 @@ public class AlertResponse {
     Double currentValue;
     Double threshold;
     String message;
-    String recommendedAction;
     Instant startedAt;
     Instant acknowledgedAt;
     Instant resolvedAt;

@@ -654,7 +654,7 @@ describe('Phase 3 (GĐ3): Metric selector, ISA-101 & Colorblind-safe Palette, 45
     expect(popover).toHaveTextContent('TQB_103');
     expect(popover).toHaveTextContent('64 %RH');
     expect(popover).toHaveTextContent('Vượt ngưỡng bảo quản (> 60%RH)');
-    expect(popover).toHaveTextContent(/máy hút ẩm/i);
+    expect(popover).not.toHaveTextContent(/Khuyến nghị SOP/i);
 
     const sparkline = screen.getByTestId('popover-sparkline');
     expect(sparkline.tagName.toLowerCase()).toBe('svg');

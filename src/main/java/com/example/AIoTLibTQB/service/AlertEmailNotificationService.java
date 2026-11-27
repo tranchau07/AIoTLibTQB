@@ -1,6 +1,5 @@
 package com.example.AIoTLibTQB.service;
 
-import com.example.AIoTLibTQB.configuration.AlertSopCatalog;
 import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.document.Role;
 import com.example.AIoTLibTQB.document.Room;
@@ -8,7 +7,6 @@ import com.example.AIoTLibTQB.document.User;
 import com.example.AIoTLibTQB.enums.AlertSeverity;
 import com.example.AIoTLibTQB.enums.AlertStatus;
 import com.example.AIoTLibTQB.enums.AlertType;
-import com.example.AIoTLibTQB.enums.RoomType;
 import com.example.AIoTLibTQB.repository.AlertRepository;
 import com.example.AIoTLibTQB.repository.RoomRepository;
 import com.example.AIoTLibTQB.repository.UserRepository;
@@ -445,9 +443,6 @@ public class AlertEmailNotificationService {
         String unit = AlertRuleEngine.resolveUnit(metricType, alert.getType());
         String measuredText = formatValue(alert.getCurrentValue(), unit, alert.getType() == AlertType.DEVICE_OFFLINE, true);
         String thresholdText = formatValue(alert.getThreshold(), unit, alert.getType() == AlertType.DEVICE_OFFLINE, false);
-        String sop = (alert.getRecommendedAction() != null && !alert.getRecommendedAction().isBlank())
-                ? alert.getRecommendedAction()
-                : AlertSopCatalog.resolveSop(metricType, alert.getType(), RoomType.STUDY_ROOM);
         String startedText = alert.getStartedAt() != null
                 ? DISPLAY_TIME_FORMAT.format(alert.getStartedAt())
                 : "--";
@@ -466,8 +461,6 @@ public class AlertEmailNotificationService {
                 .append("Ngưỡng quy định : ").append(thresholdText).append('\n')
                 .append("Thời điểm       : ").append(startedText).append('\n')
                 .append("Chi tiết        : ").append(safeText(alert.getMessage())).append("\n\n")
-                .append("HƯỚNG DẪN XỬ LÝ CHUẨN (SOP):\n")
-                .append(sop).append("\n\n")
                 .append("(Email được gửi tự động từ AIoTLibTQB; giới hạn tối đa 01 email mở sự cố / ")
                 .append(cooldownDuration.toMinutes())
                 .append(" phút / phòng để tránh làm phiền.)\n")

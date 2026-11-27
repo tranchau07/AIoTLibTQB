@@ -575,14 +575,6 @@ export function AlertBellPopover({
                         )}
                     </div>
 
-                    {/* SOP Recommended Action */}
-                    {alert.recommendedAction && !isResolved && (
-                      <div className="rounded-lg border border-amber-200/80 bg-amber-50/70 px-2.5 py-1.5 text-[11px] leading-snug text-amber-950">
-                        <span className="font-semibold">Khuyến nghị: </span>
-                        {alert.recommendedAction}
-                      </div>
-                    )}
-
                     {/* Assignee / Tag / Note metadata */}
                     {(alert.assignedTo ||
                       tagLabel ||

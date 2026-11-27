@@ -232,7 +232,7 @@ class AlertEmailNotificationServiceTest {
         assertThat(sent1.getTo()).doesNotContain("lib-b@lib.edu.vn", "inactive@lib.edu.vn", "device-a@lib.edu.vn");
         assertThat(sent1.getFrom()).isEqualTo("noreply@aiotlibtqb.edu.vn");
         assertThat(sent1.getSubject()).contains("CRITICAL").contains("P201 - Phòng đọc yên tĩnh 201");
-        assertThat(sent1.getText()).contains("88.0 dBA").contains("85.0 dBA").contains("SOP");
+        assertThat(sent1.getText()).contains("88.0 dBA").contains("85.0 dBA").doesNotContain("SOP");
 
         // 5 phút sau, phòng room-1 phát sinh cảnh báo CRITICAL thứ 2 -> Bị khóa cooldown 30p chặn
         clock.advance(Duration.ofMinutes(5));

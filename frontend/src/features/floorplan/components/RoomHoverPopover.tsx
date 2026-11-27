@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { ArrowUpRight, Sparkles } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import type { HeatmapLayerMetric } from '@/config/thresholds';
 import { formatLayerMetricValue } from '@/features/floorplan/components/FloorplanCanvas';
 import type { RoomReliabilitySummary } from '@/lib/floorplan/reliability';
@@ -256,17 +256,6 @@ export function RoomHoverPopover({
           </p>
         </div>
       )}
-
-      {/* SOP Recommendation & Quick Action */}
-      <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900/75 p-2 text-[11px] text-slate-200">
-        <div className="flex items-center gap-1 font-semibold text-amber-300">
-          <Sparkles className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span>Khuyến nghị SOP</span>
-        </div>
-        <p className="mt-0.5 leading-snug text-slate-100">
-          {status.sopRecommendationVi}
-        </p>
-      </div>
 
       {onInspectRoom && (
         <button

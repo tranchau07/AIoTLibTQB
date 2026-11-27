@@ -81,7 +81,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 68.4,
     threshold: 65.0,
     message: 'Average noise level (68.4 dBA) exceeded threshold (65.0 dBA)',
-    recommendedAction: 'SOP Tiếng ồn',
     startedAt: '2026-11-17T06:00:00Z',
     acknowledgedAt: null,
     resolvedAt: null,

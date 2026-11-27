@@ -456,7 +456,7 @@ export default function AlertsCenterPage() {
                     <th>Loại sự cố</th>
                     <th>Phòng đọc &amp; Tâm điểm</th>
                     <th>Giá trị / Ngưỡng</th>
-                    <th>Nội dung, SOP &amp; Nhật ký ca trực</th>
+                    <th>Nội dung &amp; Nhật ký ca trực</th>
                     <th>Thời gian</th>
                     <th className="text-right">Thao tác 2 chạm</th>
                   </tr>
@@ -582,12 +582,6 @@ export default function AlertsCenterPage() {
                               formatBottleneckReasonVi(alert.message)) ||
                               '--'}
                           </div>
-                          {alert.recommendedAction && !isResolved && (
-                            <div className="mt-1 rounded border border-amber-200 bg-amber-50/70 px-2 py-1 text-2xs text-amber-900">
-                              <strong className="font-semibold">SOP:</strong>{' '}
-                              {alert.recommendedAction}
-                            </div>
-                          )}
                           {(alert.assignedTo ||
                             tagLabel ||
                             alert.handlingNote) && (

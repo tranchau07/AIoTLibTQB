@@ -63,7 +63,6 @@ function buildAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 34.2,
     threshold: 32.0,
     message: 'Temperature (34.2 °C) exceeded threshold (32.0 °C)',
-    recommendedAction: 'SOP Điều hòa',
     startedAt: '2026-11-17T06:00:00Z',
     acknowledgedAt: null,
     resolvedAt: null,

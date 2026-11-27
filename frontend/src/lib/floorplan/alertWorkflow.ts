@@ -12,7 +12,6 @@ import type {
   AlertSeverity,
   AlertWorkflowStatus,
   RoomResponse,
-  RoomType,
 } from '@/types/api';
 
 export const ALERT_SEVERITY_RANK: Record<AlertSeverity, number> = {
@@ -90,45 +89,9 @@ export function formatAlertAgeVi(
   };
 }
 
-function buildFallbackSopVi(
-  alert: Pick<AlertResponse, 'type' | 'message' | 'recommendedAction'>,
-  roomType?: RoomType
-): string {
-  const rec = alert.recommendedAction?.trim();
-  if (rec) {
-    return rec;
-  }
-  const msg = (alert.message ?? '').toLowerCase();
-  if (alert.type === 'NOISE_EXCEEDED' || msg.includes('noise') || msg.includes('ồn')) {
-    return 'Nhắc nhở độc giả giữ trật tự; hướng dẫn nhóm thảo luận chuyển lên khu phòng nhóm Tầng 5.';
-  }
-  if (alert.type === 'DEVICE_OFFLINE') {
-    return 'Kiểm tra nguồn điện PoE/USB, tín hiệu Wi-Fi và khởi động lại trạm cảm biến.';
-  }
-  if (alert.type === 'SENSOR_MALFUNCTION') {
-    return 'Kiểm tra kết nối phần cứng, vệ sinh đầu đo cảm biến và hiệu chuẩn lại thiết bị.';
-  }
-  if (
-    msg.includes('humidity') ||
-    msg.includes('%rh') ||
-    msg.includes('ẩm') ||
-    roomType === 'BOOK_STORAGE'
-  ) {
-    return 'Bật máy hút ẩm kho tài liệu và kiểm tra cửa đóng kín để ngăn ẩm mốc sách.';
-  }
-  if (msg.includes('temperature') || msg.includes('°c') || msg.includes('nhiệt')) {
-    return 'Hạ rèm chắn nắng vách kính, tăng công suất điều hòa hoặc quạt lưu thông khí.';
-  }
-  if (msg.includes('pm2.5') || msg.includes('pm2_5') || msg.includes('bụi')) {
-    return 'Kích hoạt quạt cấp khí tươi AHU / tăng thông gió hành lang.';
-  }
-  return 'Kiểm tra trực tiếp khu vực phòng đọc và cập nhật phân công xử lý.';
-}
-
 export interface ManagerAlertSummary {
   headlineVi: string;
   detailVi: string;
-  sopVi: string;
 }
 
 export function summarizeAlertForManagerVi(
@@ -167,7 +130,6 @@ export function summarizeAlertForManagerVi(
   return {
     headlineVi,
     detailVi: localizedRaw || msg || headlineVi,
-    sopVi: buildFallbackSopVi(alert, room?.type),
   };
 }
 

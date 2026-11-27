@@ -326,8 +326,6 @@ function makeAlert(overrides: Partial<AlertResponse> = {}): AlertResponse {
     currentValue: 86.0,
     threshold: 85.0,
     message: 'Peak noise spike (86.0 dBA) exceeded threshold (85.0 dBA)',
-    recommendedAction:
-      'SOP Trật tự: Xuất hiện xung tiếng ồn đột ngột cường độ cao; cán bộ tuần tra kiểm tra khu vực bàn đọc và nhắc nhở giữ yên lặng.',
     startedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
     acknowledgedAt: null,
     resolvedAt: null,
@@ -1101,8 +1099,8 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
       expect(drawer).toHaveTextContent('Khẩn cấp');
       expect(drawer).toHaveTextContent('86.0 dBA');
       expect(
-        screen.getByTestId(`alert-sop-${spikeAlert.id}`)
-      ).toHaveTextContent(/nhắc nhở|giữ yên lặng|trật tự/i);
+        screen.queryByTestId(`alert-sop-${spikeAlert.id}`)
+      ).not.toBeInTheDocument();
     });
 
     it('Kịch bản #3 (pm25-high): PM2.5 = 68.0–80.0 µg/m³ (> 50 µg/m³) -> HIGH AIR_UNHEALTHY, lớp PM2.5 hiển thị ký hiệu ◆ kèm SOP cấp khí tươi AHU', () => {
@@ -1124,7 +1122,6 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
       expect(statusEval.level).toBe('CRITICAL');
       expect(statusEval.symbol).toBe('◆');
       expect(statusEval.isExceedingThreshold).toBe(true);
-      expect(statusEval.sopRecommendationVi).toMatch(/khí tươi|AHU/i);
 
       const [r, g, b] = getContinuousMetricColor('pm2_5', mod.pm25Override);
       expect(r).toBeGreaterThan(220);
@@ -1139,8 +1136,6 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
         currentValue: mod.pm25Override,
         threshold: 50.0,
         message: `PM2.5 particulate level (${mod.pm25Override.toFixed(1)} µg/m³) exceeded threshold (50.0 µg/m³)`,
-        recommendedAction:
-          'SOP Khí tươi IAQ: Tăng công suất quạt cấp khí tươi có lọc HEPA (AHU), hạn chế mở cửa sổ trực tiếp ra mặt đường Giải Phóng - Trần Đại Nghĩa.',
       });
 
       render(
@@ -1164,8 +1159,8 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
 
       expect(screen.getByTestId('room-hover-popover')).toHaveTextContent('◆');
       expect(
-        screen.getByTestId(`alert-sop-${pmAlert.id}`)
-      ).toHaveTextContent(/cấp khí tươi|AHU/i);
+        screen.queryByTestId(`alert-sop-${pmAlert.id}`)
+      ).not.toBeInTheDocument();
     });
 
     it('Kịch bản #4 (heat/humid): Nhiệt độ 35.5–36.5°C, độ ẩm 85–88%RH -> HIGH tại Kho sách (TQB_103) và MEDIUM tại Phòng đọc (TQB_301), cây điều hướng báo đỏ, Drawer hiện SOP máy hút ẩm chống mốc sách', () => {
@@ -1189,8 +1184,6 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
         currentValue: mod.humidityOverride,
         threshold: 60.0,
         message: `Book storage humidity (${mod.humidityOverride.toFixed(1)} %RH) exceeded max threshold (60.0 %RH)`,
-        recommendedAction:
-          'SOP Kho sách: Kích hoạt ngay máy hút ẩm công nghiệp về dải 45–55%RH; đóng kín cửa thông gió tự nhiên để ngăn bào tử nấm mốc phát triển trên giấy.',
       });
 
       const studyTempAlert = makeAlert({
@@ -1202,8 +1195,6 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
         currentValue: mod.tempOverride,
         threshold: 32.0,
         message: `Temperature (${mod.tempOverride.toFixed(1)} °C) exceeded threshold (32.0 °C)`,
-        recommendedAction:
-          'SOP Điều hòa: Hạ nhiệt độ setpoint FCU/AHU thêm 1.5°C và kéo rèm chắn bức xạ mặt trời tại các dãy bàn sát vách kính.',
       });
 
       const treeNodes = buildBuildingFloorTree(
@@ -1254,8 +1245,8 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
       expect(screen.getByTestId('tree-floor-1')).toHaveTextContent('◆');
       expect(screen.getByTestId('tree-floor-1')).toHaveTextContent('!1');
       expect(
-        screen.getByTestId(`alert-sop-${storageHumidityAlert.id}`)
-      ).toHaveTextContent(/máy hút ẩm.*nấm mốc/i);
+        screen.queryByTestId(`alert-sop-${storageHumidityAlert.id}`)
+      ).not.toBeInTheDocument();
     });
 
     it('Kịch bản #5 (device-dropout): trạm ngừng gửi > 120s -> OFFLINE (✕), vùng mù gạch chéo, cảnh báo DEVICE_OFFLINE (HIGH) và banner cảm biến im lặng', async () => {
@@ -1280,8 +1271,6 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
         metricType: 'DEVICE_OFFLINE',
         severity: 'HIGH',
         message: 'Device ESP32_T3_01 has not reported telemetry for > 120s',
-        recommendedAction:
-          'SOP Kỹ thuật IoT: Kiểm tra nguồn cấp 5V DC của trạm ESP32, tín hiệu Wi-Fi RSSI tại phòng và kết nối MQTT Broker.',
       });
 
       const rel = evaluateRoomReliability({
@@ -1488,13 +1477,10 @@ describe('Bước 4 (Hạng Mục 9): Kiểm Thử Nghiệm Thu Tổng Thể 9.1
         severity: 'MEDIUM',
         message:
           'Lỗi cảm biến phần cứng (temperature, noise): giá trị đo vượt ngoài dải vật lý hợp lệ liên tục',
-        recommendedAction:
-          'SOP Kỹ thuật Cảm biến: Giá trị đo vượt ngoài dải vật lý hợp lệ liên tục; kiểm tra dây tín hiệu I2C/UART và hiệu chuẩn hoặc thay thế module cảm biến.',
       });
 
       const summaryVi = summarizeAlertForManagerVi(malfunctionAlert, room301);
       expect(summaryVi.headlineVi).toMatch(/số liệu bất thường/i);
-      expect(summaryVi.sopVi).toMatch(/I2C\/UART|hiệu chuẩn/i);
 
       render(
         <div>

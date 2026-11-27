@@ -1,6 +1,5 @@
 package com.example.AIoTLibTQB.service;
 
-import com.example.AIoTLibTQB.configuration.AlertSopCatalog;
 import com.example.AIoTLibTQB.document.AffectedNodeSnapshot;
 import com.example.AIoTLibTQB.document.Alert;
 import com.example.AIoTLibTQB.document.Room;
@@ -333,7 +332,7 @@ public class AlertRuleEngine {
 
     /**
      * Idempotent startup migration (M3 & M7): Chỉ truy vấn các bản ghi cũ còn thiếu trường dữ liệu
-     * (severity, severityRank, metricType, recommendedAction) thay vì tải toàn bộ bảng alerts lên RAM;
+     * (severity, severityRank, metricType) thay vì tải toàn bộ bảng alerts lên RAM;
      * fallback về alertRepository.findAll() khi chạy unit test không có MongoTemplate.
      */
     public int migrateLegacyAlertsSeverity() {
@@ -349,9 +348,7 @@ public class AlertRuleEngine {
                         Criteria.where("severity").is(null),
                         Criteria.where("severityRank").is(null),
                         Criteria.where("metricType").is(null),
-                        Criteria.where("metricType").is(""),
-                        Criteria.where("recommendedAction").is(null),
-                        Criteria.where("recommendedAction").is("")
+                        Criteria.where("metricType").is("")
                 ));
                 candidates = mongoTemplate.find(legacyQuery, Alert.class);
             } else {
@@ -380,20 +377,13 @@ public class AlertRuleEngine {
                     alert.setMetricType(resolveMetricType(alert));
                     changed = true;
                 }
-                if (alert.getRecommendedAction() == null || alert.getRecommendedAction().isBlank()) {
-                    alert.setRecommendedAction(AlertSopCatalog.resolveSop(
-                            alert.getMetricType() != null ? alert.getMetricType() : "",
-                            alert.getType(),
-                            RoomType.STUDY_ROOM));
-                    changed = true;
-                }
                 if (changed) {
                     alertRepository.save(alert);
                     updatedCount++;
                 }
             }
             if (updatedCount > 0) {
-                log.info("Migrated {} legacy alert(s) with default severity/severityRank/metricType/SOP", updatedCount);
+                log.info("Migrated {} legacy alert(s) with default severity/severityRank/metricType", updatedCount);
             }
             return updatedCount;
         } catch (Exception e) {
@@ -418,7 +408,6 @@ public class AlertRuleEngine {
         AlertSeverity severity;
         String metricType;
         String message;
-        String recommendedAction;
         String deviceId;
         String hardwareId;
         String roomId;
@@ -455,11 +444,10 @@ public class AlertRuleEngine {
             double noiseAvg = data.getAcoustics().getNoiseAvg();
             boolean isBreached = noiseAvg > noiseAvgMax;
             boolean isRecovered = noiseAvg <= (noiseAvgMax - DEADBAND_NOISE);
-            String sop = AlertSopCatalog.resolveSop("NOISE_AVG", AlertType.NOISE_EXCEEDED, roomType);
             evaluateMetric(targetId, "NOISE_AVG", isBreached, isRecovered, noiseAvg,
                     noiseAvgMax, AlertType.NOISE_EXCEEDED, AlertSeverity.MEDIUM,
                     String.format(Locale.US, "Average noise level (%.1f dBA) exceeded threshold (%.1f dBA)", noiseAvg, noiseAvgMax),
-                    sop, deviceId, hardwareId, roomId, zoneId, false, noisePendingWindow, tier1NoiseRoom);
+                    deviceId, hardwareId, roomId, zoneId, false, noisePendingWindow, tier1NoiseRoom);
         } else {
             resolveStaleMetricIfAbsent(targetId, "NOISE_AVG", now);
         }
@@ -524,12 +512,11 @@ public class AlertRuleEngine {
             boolean immediatePeakFire = immediateSevere || !tier1NoiseRoom;
             AlertSeverity peakSeverity = immediateSevere ? AlertSeverity.CRITICAL : AlertSeverity.HIGH;
             double activeThreshold = immediateSevere ? noisePeakImmediate : noisePeakMax;
-            String sop = AlertSopCatalog.resolveSop("NOISE_PEAK", AlertType.NOISE_EXCEEDED, roomType);
 
             evaluateMetric(targetId, "NOISE_PEAK", shouldBreachPeak, isRecoveredPeak, noisePeak,
                     activeThreshold, AlertType.NOISE_EXCEEDED, peakSeverity,
                     String.format(Locale.US, "Peak noise spike (%.1f dBA) exceeded threshold (%.1f dBA)", noisePeak, activeThreshold),
-                    sop, deviceId, hardwareId, roomId, zoneId, immediatePeakFire, noisePendingWindow, tier1NoiseRoom);
+                    deviceId, hardwareId, roomId, zoneId, immediatePeakFire, noisePendingWindow, tier1NoiseRoom);
         } else {
             resolveStaleMetricIfAbsent(targetId, "NOISE_PEAK", now);
         }
@@ -539,11 +526,10 @@ public class AlertRuleEngine {
             double temp = data.getEnvironment().getTemperature();
             boolean isBreached = temp > tempMax;
             boolean isRecovered = temp <= (tempMax - DEADBAND_TEMP);
-            String sop = AlertSopCatalog.resolveSop("TEMPERATURE", AlertType.AIR_UNHEALTHY, roomType);
             evaluateMetric(targetId, "TEMPERATURE", isBreached, isRecovered, temp,
                     tempMax, AlertType.AIR_UNHEALTHY, AlertSeverity.MEDIUM,
                     String.format(Locale.US, "Temperature (%.1f °C) exceeded threshold (%.1f °C)", temp, tempMax),
-                    sop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
+                    deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
         } else {
             resolveStaleMetricIfAbsent(targetId, "TEMPERATURE", now);
         }
@@ -557,19 +543,17 @@ public class AlertRuleEngine {
 
                 boolean highBreach = rh > rhMax;
                 boolean highRecovered = rh <= (rhMax - DEADBAND_HUMIDITY);
-                String highSop = AlertSopCatalog.resolveSop("HUMIDITY_HIGH", AlertType.AIR_UNHEALTHY, roomType);
                 evaluateMetric(targetId, "HUMIDITY_HIGH", highBreach, highRecovered, rh,
                         rhMax, AlertType.AIR_UNHEALTHY, AlertSeverity.HIGH,
                         String.format(Locale.US, "Book storage humidity (%.1f %%RH) exceeded max threshold (%.1f %%RH)", rh, rhMax),
-                        highSop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
+                        deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
 
                 boolean lowBreach = rh < rhMin;
                 boolean lowRecovered = rh >= (rhMin + DEADBAND_HUMIDITY);
-                String lowSop = AlertSopCatalog.resolveSop("HUMIDITY_LOW", AlertType.AIR_UNHEALTHY, roomType);
                 evaluateMetric(targetId, "HUMIDITY_LOW", lowBreach, lowRecovered, rh,
                         rhMin, AlertType.AIR_UNHEALTHY, AlertSeverity.MEDIUM,
                         String.format(Locale.US, "Book storage humidity (%.1f %%RH) dropped below min threshold (%.1f %%RH)", rh, rhMin),
-                        lowSop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
+                        deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
             } else {
                 resolveStaleMetricIfAbsent(targetId, "HUMIDITY_HIGH", now);
                 resolveStaleMetricIfAbsent(targetId, "HUMIDITY_LOW", now);
@@ -584,11 +568,10 @@ public class AlertRuleEngine {
             double pm25 = data.getAirQuality().getPm2_5();
             boolean isBreached = pm25 > pm25Max;
             boolean isRecovered = pm25 <= (pm25Max - DEADBAND_PM25);
-            String sop = AlertSopCatalog.resolveSop("PM2_5", AlertType.AIR_UNHEALTHY, roomType);
             evaluateMetric(targetId, "PM2_5", isBreached, isRecovered, pm25,
                     pm25Max, AlertType.AIR_UNHEALTHY, AlertSeverity.HIGH,
                     String.format(Locale.US, "PM2.5 particulate level (%.1f µg/m³) exceeded threshold (%.1f µg/m³)", pm25, pm25Max),
-                    sop, deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
+                    deviceId, hardwareId, roomId, zoneId, false, PENDING_WINDOW, false);
         } else {
             resolveStaleMetricIfAbsent(targetId, "PM2_5", now);
         }
@@ -624,8 +607,6 @@ public class AlertRuleEngine {
             return;
         }
 
-        RoomAlertContext ctx = resolveRoomContext(roomId);
-        String sop = AlertSopCatalog.resolveSop("SENSOR_MALFUNCTION", AlertType.SENSOR_MALFUNCTION, ctx.roomType());
         boolean isBreached = hasInvalidSensorReading;
         boolean isRecovered = !hasInvalidSensorReading && allValidReadings;
         double currentValue = hasInvalidSensorReading
@@ -649,7 +630,6 @@ public class AlertRuleEngine {
                 AlertType.SENSOR_MALFUNCTION,
                 AlertSeverity.MEDIUM,
                 message,
-                sop,
                 deviceId,
                 hardwareId,
                 roomId,
@@ -705,7 +685,6 @@ public class AlertRuleEngine {
             AlertType alertType,
             AlertSeverity severity,
             String message,
-            String recommendedAction,
             String deviceId,
             String hardwareId,
             String roomId,
@@ -741,7 +720,6 @@ public class AlertRuleEngine {
                     newState.setSeverity(severity);
                     newState.setMetricType(metricType);
                     newState.setMessage(message);
-                    newState.setRecommendedAction(recommendedAction);
                     newState.setDeviceId(deviceId);
                     newState.setHardwareId(hardwareId);
                     newState.setRoomId(roomId);
@@ -775,7 +753,6 @@ public class AlertRuleEngine {
                     state.setLastValue(currentValue);
                     state.setLastEvaluatedAt(now);
                     state.setMessage(message);
-                    state.setRecommendedAction(recommendedAction);
                     if (zoneId != null) {
                         state.setZoneId(zoneId);
                     }
@@ -1088,7 +1065,6 @@ public class AlertRuleEngine {
                 .currentValue(epicenter.getLastValue())
                 .threshold(epicenter.getThreshold())
                 .message(formatMergedMessage(epicenter, snapshots))
-                .recommendedAction(epicenter.getRecommendedAction())
                 .startedAt(now)
                 .build();
 
@@ -1355,8 +1331,6 @@ public class AlertRuleEngine {
         String targetId = deviceId != null && !deviceId.isBlank() ? deviceId : hardwareId;
         String key = targetId + ":DEVICE_OFFLINE";
         Instant now = clock.instant();
-        RoomAlertContext ctx = resolveRoomContext(roomId);
-        String sop = AlertSopCatalog.resolveSop("DEVICE_OFFLINE", AlertType.DEVICE_OFFLINE, ctx.roomType());
 
         final Alert[] alertToSave = { null };
         final boolean[] reopened = { false };
@@ -1417,7 +1391,6 @@ public class AlertRuleEngine {
                         .currentValue(0.0)
                         .threshold(0.0)
                         .message("Device is offline: hardwareId=" + hardwareId)
-                        .recommendedAction(sop)
                         .startedAt(now)
                         .build();
             }
@@ -2093,13 +2066,6 @@ public class AlertRuleEngine {
         Integer rank = alert.getSeverityRank() != null ? alert.getSeverityRank() : AlertSeverity.rankOf(sev);
         String metricType = resolveMetricType(alert);
         String unit = resolveUnit(metricType, alert.getType());
-        String sop = alert.getRecommendedAction();
-        if (sop == null || sop.isBlank()) {
-            sop = AlertSopCatalog.resolveSop(
-                    metricType,
-                    alert.getType(),
-                    RoomType.STUDY_ROOM);
-        }
         AlertWorkflowStatus workflowStatus;
         if (alert.getStatus() == AlertStatus.RESOLVED) {
             workflowStatus = AlertWorkflowStatus.RESOLVED;
@@ -2133,7 +2099,6 @@ public class AlertRuleEngine {
                 .currentValue(alert.getCurrentValue())
                 .threshold(alert.getThreshold())
                 .message(alert.getMessage())
-                .recommendedAction(sop)
                 .startedAt(alert.getStartedAt())
                 .acknowledgedAt(alert.getAcknowledgedAt())
                 .resolvedAt(alert.getResolvedAt())
