@@ -22,7 +22,11 @@ import {
   type TqbRoomPreset,
 } from '@/config/tqb-floorplan-presets';
 import {
+  formatDevicePositionMetersVi,
+  getRoomBoundsMeters,
+  normalizedToFloorMeters,
   normalizedToPixel,
+  normalizedToRoomLocalMeters,
   pixelToNormalized,
 } from '@/lib/floorplan/coords';
 import {
@@ -714,6 +718,80 @@ export default function RoomPolygonEditorPage() {
                     strokeDasharray="4 4"
                   />
                 )}
+
+                {/* Live West/North meter dimension lines for selected/dragged sensor in device mode */}
+                {mode === 'device' &&
+                  selectedDeviceId &&
+                  deviceDrafts[selectedDeviceId] &&
+                  vertices.length >= 3 &&
+                  (() => {
+                    const selPos = deviceDrafts[selectedDeviceId];
+                    const roomBounds = getRoomBoundsMeters(vertices);
+                    const localM = normalizedToRoomLocalMeters(selPos, vertices);
+                    if (!roomBounds || !localM) return null;
+
+                    const pinPx = normalizedToPixel(
+                      selPos,
+                      workspaceSize.width,
+                      workspaceSize.height
+                    );
+                    const minXNorm = Math.min(...vertices.map((v) => v.x));
+                    const minYNorm = Math.min(...vertices.map((v) => v.y));
+                    const westPx = normalizedToPixel(
+                      { x: minXNorm, y: selPos.y },
+                      workspaceSize.width,
+                      workspaceSize.height
+                    );
+                    const northPx = normalizedToPixel(
+                      { x: selPos.x, y: minYNorm },
+                      workspaceSize.width,
+                      workspaceSize.height
+                    );
+
+                    return (
+                      <g data-testid="polygon-device-dimension-lines">
+                        <line
+                          x1={westPx.x}
+                          y1={pinPx.y}
+                          x2={pinPx.x}
+                          y2={pinPx.y}
+                          stroke="#34D399"
+                          strokeWidth={1.5}
+                          strokeDasharray="4 3"
+                        />
+                        <line
+                          x1={pinPx.x}
+                          y1={northPx.y}
+                          x2={pinPx.x}
+                          y2={pinPx.y}
+                          stroke="#34D399"
+                          strokeWidth={1.5}
+                          strokeDasharray="4 3"
+                        />
+                        <text
+                          x={(westPx.x + pinPx.x) / 2}
+                          y={pinPx.y - 6}
+                          textAnchor="middle"
+                          fill="#6EE7B7"
+                          fontSize={11}
+                          fontFamily="monospace"
+                          fontWeight={700}
+                        >
+                          {`Tây ${localM.localXM.toFixed(1)}m`}
+                        </text>
+                        <text
+                          x={pinPx.x + 8}
+                          y={(northPx.y + pinPx.y) / 2 + 4}
+                          fill="#6EE7B7"
+                          fontSize={11}
+                          fontFamily="monospace"
+                          fontWeight={700}
+                        >
+                          {`Bắc ${localM.localYM.toFixed(1)}m`}
+                        </text>
+                      </g>
+                    );
+                  })()}
               </svg>
 
               {/* Interactive Vertices */}
@@ -747,6 +825,7 @@ export default function RoomPolygonEditorPage() {
                 const isSelected = selectedDeviceId === d.id;
                 const inPoly =
                   vertices.length >= 3 && isPointInPolygon(pos, vertices);
+                const formattedPos = formatDevicePositionMetersVi(pos, vertices);
 
                 return (
                   <div
@@ -773,9 +852,7 @@ export default function RoomPolygonEditorPage() {
                         : 'cursor-pointer'
                     }`}
                     style={{ left: `${px.x}px`, top: `${px.y}px` }}
-                    title={`${d.name} (${pos.x.toFixed(3)}, ${pos.y.toFixed(
-                      3
-                    )})`}
+                    title={`${d.name} · ${formattedPos.primary}`}
                   >
                     <MapPin className="h-4 w-4" />
                   </div>
@@ -804,24 +881,27 @@ export default function RoomPolygonEditorPage() {
                 </p>
               ) : (
                 <div className="mt-3 max-h-72 space-y-1.5 overflow-y-auto pr-1">
-                  {vertices.map((v, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5 text-xs"
-                    >
-                      <span className="font-mono text-slate-600">
-                        #{i + 1}: ({v.x.toFixed(3)}, {v.y.toFixed(3)})
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveVertex(i)}
-                        className="btn-icon h-6 w-6 text-slate-400 hover:text-red-600"
-                        title="Xóa đỉnh này"
+                  {vertices.map((v, i) => {
+                    const vm = normalizedToFloorMeters(v);
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5 text-xs"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                        <span className="font-mono text-slate-600 tabular-nums">
+                          #{i + 1}: {vm.x.toFixed(1)} m, {vm.y.toFixed(1)} m
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveVertex(i)}
+                          className="btn-icon h-6 w-6 text-slate-400 hover:text-red-600"
+                          title="Xóa đỉnh này"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -846,6 +926,10 @@ export default function RoomPolygonEditorPage() {
                     vertices.length >= 3 &&
                     isPointInPolygon(pos, vertices);
                   const isSelected = selectedDeviceId === d.id;
+                  const formattedPos = formatDevicePositionMetersVi(
+                    pos,
+                    vertices
+                  );
 
                   return (
                     <div
@@ -869,12 +953,17 @@ export default function RoomPolygonEditorPage() {
                         <ConnectionBadge online={d.online} />
                       </div>
 
-                      <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-2 text-xs">
-                        <span className="tabular text-2xs text-slate-500">
-                          {pos
-                            ? `(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)})`
-                            : 'Chưa có tọa độ'}
-                        </span>
+                      <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 text-xs">
+                        <div className="min-w-0">
+                          <span className="block truncate font-mono text-2xs font-medium text-slate-700 tabular-nums">
+                            {formattedPos.primary}
+                          </span>
+                          {formattedPos.secondary && (
+                            <span className="block truncate font-mono text-[10px] text-slate-400 tabular-nums">
+                              {formattedPos.secondary}
+                            </span>
+                          )}
+                        </div>
 
                         {capabilities.canManageRooms && (
                           <button

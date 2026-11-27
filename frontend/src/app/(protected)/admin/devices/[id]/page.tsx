@@ -18,14 +18,21 @@ import {
 } from '@/components/ui/primitives';
 import { useAuthStore } from '@/features/auth/store';
 import { OneTimeKeyDialog } from '@/features/devices/components/OneTimeKeyDialog';
+import { RoomSensorPositionPicker } from '@/features/devices/components/RoomSensorPositionPicker';
 import {
   useDeleteDeviceMutation,
   useDeviceDetailQuery,
+  useDevicesQuery,
   useRegenerateDeviceKeyMutation,
   useToggleDeviceStatusMutation,
   useUpdateDeviceMutation,
 } from '@/features/devices/queries';
 import { useRoomsQuery } from '@/features/rooms/queries';
+import { resolveRoomPolygon } from '@/config/tqb-floorplan-presets';
+import {
+  formatDevicePositionMetersVi,
+  getDefaultDevicePositionForRoom,
+} from '@/lib/floorplan/coords';
 import {
   formatRelativeTimeVi,
   formatVietnamDateTime,
@@ -62,6 +69,11 @@ export default function DeviceDetailPage() {
   const deviceQuery = useDeviceDetailQuery(deviceId);
   const roomsQuery = useRoomsQuery({ page: 0, size: 100 });
   const rooms = roomsQuery.data?.content ?? [];
+  const allDevicesQuery = useDevicesQuery(
+    { page: 0, size: 100 },
+    capabilities.canViewDevices
+  );
+  const allDevices = allDevicesQuery.data?.content ?? [];
 
   const updateMutation = useUpdateDeviceMutation();
   const toggleStatusMutation = useToggleDeviceStatusMutation();
@@ -136,11 +148,11 @@ export default function DeviceDetailPage() {
     const posY = form.posY ? parseFloat(form.posY) : undefined;
 
     if (posX !== undefined && (posX < 0 || posX > 1)) {
-      setFormError('Tọa độ tương đối X phải nằm trong khoảng [0.0 - 1.0].');
+      setFormError('Vị trí trục Đông–Tây (X) phải nằm trong phạm vi sàn [0.0 – 76.0 m].');
       return;
     }
     if (posY !== undefined && (posY < 0 || posY > 1)) {
-      setFormError('Tọa độ tương đối Y phải nằm trong khoảng [0.0 - 1.0].');
+      setFormError('Vị trí trục Bắc–Nam (Y) phải nằm trong phạm vi sàn [0.0 – 57.2 m].');
       return;
     }
 
@@ -374,14 +386,30 @@ export default function DeviceDetailPage() {
 
         <div className="card p-4">
           <span className="metric-label">Vị trí lắp đặt mặt bằng</span>
-          <div className="mt-1 text-sm font-semibold text-slate-900">
-            {device.posX !== null && device.posY !== null
-              ? `X: ${device.posX} · Y: ${device.posY}`
-              : 'Chưa chấm tọa độ'}
-          </div>
-          <div className="text-2xs text-slate-400 truncate">
-            {device.location || 'Chưa ghi chú'}
-          </div>
+          {(() => {
+            const currentRoom =
+              rooms.find((r) => r.id === device.roomId) ?? null;
+            const poly = currentRoom ? resolveRoomPolygon(currentRoom, 0) : null;
+            const formattedPos = formatDevicePositionMetersVi(
+              typeof device.posX === 'number' && typeof device.posY === 'number'
+                ? { x: device.posX, y: device.posY }
+                : null,
+              poly
+            );
+            return (
+              <>
+                <div
+                  data-testid="device-detail-position-meters"
+                  className="mt-1 text-sm font-semibold text-slate-900 tabular-nums"
+                >
+                  {formattedPos.primary}
+                </div>
+                <div className="text-2xs text-slate-400 truncate">
+                  {device.location || formattedPos.secondary || 'Chưa ghi chú'}
+                </div>
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -390,7 +418,7 @@ export default function DeviceDetailPage() {
         <div className="border-b border-slate-100 pb-3">
           <h2 className="section-title">Cấu hình & Thuộc tính thiết bị</h2>
           <p className="text-xs text-slate-500">
-            Cập nhật tên trạm, phân vùng phụ trách, phòng đọc và vị trí tương đối
+            Cập nhật tên trạm, phân vùng phụ trách, phòng đọc và vị trí lắp đặt theo mét thực tế
           </p>
         </div>
 
@@ -436,7 +464,23 @@ export default function DeviceDetailPage() {
                 id="dev-room"
                 disabled={!capabilities.canManageDevices}
                 value={form.roomId}
-                onChange={(e) => setForm((p) => ({ ...p, roomId: e.target.value }))}
+                onChange={(e) => {
+                  const nextRoomId = e.target.value;
+                  const targetRoom =
+                    rooms.find((r) => r.id === nextRoomId) ?? null;
+                  const shouldAutoCenter =
+                    (!form.posX || !form.posY) && Boolean(targetRoom);
+                  const nextPos = shouldAutoCenter
+                    ? getDefaultDevicePositionForRoom(targetRoom)
+                    : null;
+                  setForm((p) => ({
+                    ...p,
+                    roomId: nextRoomId,
+                    ...(nextPos
+                      ? { posX: String(nextPos.x), posY: String(nextPos.y) }
+                      : {}),
+                  }));
+                }}
                 className="select text-xs"
               >
                 <option value="">-- Chưa gán phòng --</option>
@@ -463,55 +507,43 @@ export default function DeviceDetailPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div>
-              <label htmlFor="dev-location" className="label">
-                Vị trí lắp đặt
-              </label>
-              <input
-                id="dev-location"
-                type="text"
-                disabled={!capabilities.canManageDevices}
-                value={form.location}
-                onChange={(e) => setForm((p) => ({ ...p, location: e.target.value }))}
-                className="input text-xs"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="dev-posx" className="label">
-                Tọa độ tương đối X [0.0 - 1.0]
-              </label>
-              <input
-                id="dev-posx"
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                disabled={!capabilities.canManageDevices}
-                value={form.posX}
-                onChange={(e) => setForm((p) => ({ ...p, posX: e.target.value }))}
-                className="input text-xs tabular"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="dev-posy" className="label">
-                Tọa độ tương đối Y [0.0 - 1.0]
-              </label>
-              <input
-                id="dev-posy"
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                disabled={!capabilities.canManageDevices}
-                value={form.posY}
-                onChange={(e) => setForm((p) => ({ ...p, posY: e.target.value }))}
-                className="input text-xs tabular"
-              />
-            </div>
+          <div>
+            <label htmlFor="dev-location" className="label">
+              Ghi chú vị trí lắp đặt
+            </label>
+            <input
+              id="dev-location"
+              type="text"
+              disabled={!capabilities.canManageDevices}
+              value={form.location}
+              onChange={(e) => setForm((p) => ({ ...p, location: e.target.value }))}
+              placeholder="VD: Bàn đọc số 4 gần cửa sổ Bắc"
+              className="input text-xs"
+            />
           </div>
+
+          <RoomSensorPositionPicker
+            idPrefix="dev-pos"
+            disabled={!capabilities.canManageDevices}
+            room={rooms.find((r) => r.id === form.roomId) ?? null}
+            value={
+              form.posX !== '' &&
+              form.posY !== '' &&
+              Number.isFinite(parseFloat(form.posX)) &&
+              Number.isFinite(parseFloat(form.posY))
+                ? { x: parseFloat(form.posX), y: parseFloat(form.posY) }
+                : null
+            }
+            onChange={(next) =>
+              setForm((p) => ({
+                ...p,
+                posX: String(next.x),
+                posY: String(next.y),
+              }))
+            }
+            siblingDevices={allDevices}
+            currentDeviceId={device.id}
+          />
 
           {capabilities.canManageDevices && (
             <div className="flex justify-end border-t border-slate-100 pt-3">

@@ -39,6 +39,7 @@ import {
   computePinchScale,
   fitFloorToViewport,
   fitPolygonToViewport,
+  formatDevicePositionMetersVi,
   normalizedToPixel,
   pixelToNormalized,
   zoomViewportAtPoint,
@@ -4239,14 +4240,33 @@ export function FloorplanCanvas({
                 {hoveredDeviceTooltipData.device.location?.trim() ||
                   'Chưa cấu hình vị trí đặt'}
               </p>
-              <p className="mt-0.5 truncate text-[10px] text-slate-500 tabular-nums">
+              <p className="mt-0.5 truncate text-[10px] text-slate-500">
                 {hoveredDeviceTooltipData.room
                   ? `${hoveredDeviceTooltipData.room.code} — ${hoveredDeviceTooltipData.room.name}`
                   : hoveredDeviceTooltipData.device.zoneId}
-                {typeof hoveredDeviceTooltipData.device.posX === 'number' &&
-                  typeof hoveredDeviceTooltipData.device.posY === 'number' &&
-                  ` · (${(hoveredDeviceTooltipData.device.posX * TQB_BUILDING_WIDTH_M).toFixed(1)}m, ${(hoveredDeviceTooltipData.device.posY * TQB_BUILDING_DEPTH_M).toFixed(1)}m)`}
               </p>
+              {typeof hoveredDeviceTooltipData.device.posX === 'number' &&
+                typeof hoveredDeviceTooltipData.device.posY === 'number' &&
+                (() => {
+                  const roomPoly = hoveredDeviceTooltipData.room
+                    ? resolveRoomPolygon(hoveredDeviceTooltipData.room, 0)
+                    : null;
+                  const posText = formatDevicePositionMetersVi(
+                    {
+                      x: hoveredDeviceTooltipData.device.posX!,
+                      y: hoveredDeviceTooltipData.device.posY!,
+                    },
+                    roomPoly
+                  ).primary;
+                  return (
+                    <p
+                      data-testid="device-tooltip-coords"
+                      className="mt-0.5 font-mono text-[10px] font-medium text-sky-700 tabular-nums"
+                    >
+                      Tọa độ: {posText}
+                    </p>
+                  );
+                })()}
             </div>
 
             <div

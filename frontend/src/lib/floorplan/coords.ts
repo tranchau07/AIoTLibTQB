@@ -1,6 +1,11 @@
 import { ZOOM_CONFIG } from '@/config/floorplan-hmi.config';
-import { TQB_BUILDING_WIDTH_M } from '@/config/tqb-floorplan-presets';
-import type { Point2D } from '@/types/api';
+import {
+  TQB_BUILDING_DEPTH_M,
+  TQB_BUILDING_WIDTH_M,
+  resolveRoomPolygon,
+} from '@/config/tqb-floorplan-presets';
+import { computeVisualPolygonCenter } from '@/lib/floorplan/polygon';
+import type { Point2D, RoomResponse } from '@/types/api';
 
 /**
  * Coordinate conversion between normalized [0.0, 1.0] space and Canvas pixels (FE-VIZ-02, FE-VIZ-06).
@@ -293,4 +298,179 @@ export function minimapClickToViewport(
     safeMax
   );
 }
+
+/**
+ * Real-world bounding box of a room polygon in meters (based on 76.0m × 57.2m TQB CAD scale).
+ */
+export interface RoomBoundsMeters {
+  minXM: number;
+  minYM: number;
+  maxXM: number;
+  maxYM: number;
+  widthM: number;
+  depthM: number;
+}
+
+function clampUnit(n: number): number {
+  if (!Number.isFinite(n)) return 0.5;
+  return Math.max(0, Math.min(1, n));
+}
+
+/**
+ * Convert a normalized [0.0, 1.0] floor coordinate into real-world building floor meters
+ * (origin 0,0 at North-West corner of the 76.0m × 57.2m floorplate).
+ */
+export function normalizedToFloorMeters(point: Point2D): Point2D {
+  return {
+    x: Number((clampUnit(point.x) * TQB_BUILDING_WIDTH_M).toFixed(2)),
+    y: Number((clampUnit(point.y) * TQB_BUILDING_DEPTH_M).toFixed(2)),
+  };
+}
+
+/**
+ * Convert real-world building floor meters back into normalized [0.0, 1.0] coordinates for API/DB storage.
+ */
+export function floorMetersToNormalized(pointM: Point2D): Point2D {
+  const safeX = Number.isFinite(pointM.x) ? pointM.x : TQB_BUILDING_WIDTH_M * 0.5;
+  const safeY = Number.isFinite(pointM.y) ? pointM.y : TQB_BUILDING_DEPTH_M * 0.5;
+  return {
+    x: Number(clampUnit(safeX / TQB_BUILDING_WIDTH_M).toFixed(4)),
+    y: Number(clampUnit(safeY / TQB_BUILDING_DEPTH_M).toFixed(4)),
+  };
+}
+
+/**
+ * Compute real-world bounding box in meters for a room polygon (returns null if < 3 vertices).
+ */
+export function getRoomBoundsMeters(
+  polygon: readonly Point2D[] | undefined | null
+): RoomBoundsMeters | null {
+  if (!polygon || polygon.length < 3) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (const pt of polygon) {
+    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+    const xM = clampUnit(pt.x) * TQB_BUILDING_WIDTH_M;
+    const yM = clampUnit(pt.y) * TQB_BUILDING_DEPTH_M;
+    if (xM < minX) minX = xM;
+    if (xM > maxX) maxX = xM;
+    if (yM < minY) minY = yM;
+    if (yM > maxY) maxY = yM;
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  const widthM = maxX - minX;
+  const depthM = maxY - minY;
+  if (widthM <= 0.05 || depthM <= 0.05) return null;
+
+  return {
+    minXM: Number(minX.toFixed(2)),
+    minYM: Number(minY.toFixed(2)),
+    maxXM: Number(maxX.toFixed(2)),
+    maxYM: Number(maxY.toFixed(2)),
+    widthM: Number(widthM.toFixed(2)),
+    depthM: Number(depthM.toFixed(2)),
+  };
+}
+
+/**
+ * Convert a normalized [0.0, 1.0] sensor coordinate into room-local meters measured from
+ * the North-West corner of the room's bounding box.
+ */
+export function normalizedToRoomLocalMeters(
+  point: Point2D,
+  polygon: readonly Point2D[] | undefined | null
+): { localXM: number; localYM: number; bounds: RoomBoundsMeters } | null {
+  const bounds = getRoomBoundsMeters(polygon);
+  if (!bounds) return null;
+  const floorM = normalizedToFloorMeters(point);
+  return {
+    localXM: Number((floorM.x - bounds.minXM).toFixed(2)),
+    localYM: Number((floorM.y - bounds.minYM).toFixed(2)),
+    bounds,
+  };
+}
+
+/**
+ * Convert room-local meters (distance from room's West & North edges) back into normalized [0.0, 1.0].
+ */
+export function roomLocalMetersToNormalized(
+  localXM: number,
+  localYM: number,
+  polygon: readonly Point2D[] | undefined | null
+): Point2D {
+  const bounds = getRoomBoundsMeters(polygon);
+  if (!bounds) {
+    return floorMetersToNormalized({ x: localXM, y: localYM });
+  }
+  const safeLocalX = Number.isFinite(localXM) ? localXM : bounds.widthM * 0.5;
+  const safeLocalY = Number.isFinite(localYM) ? localYM : bounds.depthM * 0.5;
+  return floorMetersToNormalized({
+    x: bounds.minXM + safeLocalX,
+    y: bounds.minYM + safeLocalY,
+  });
+}
+
+/**
+ * Resolve a sensible default normalized sensor coordinate for a room:
+ * visual polygon interior center when available, falling back to floor center (0.5, 0.5).
+ */
+export function getDefaultDevicePositionForRoom(
+  room: RoomResponse | null | undefined
+): Point2D {
+  if (!room) return { x: 0.5, y: 0.5 };
+  const poly = resolveRoomPolygon(room, 0);
+  if (Array.isArray(poly) && poly.length >= 3) {
+    const center = computeVisualPolygonCenter(poly);
+    return {
+      x: Number(clampUnit(center.x).toFixed(4)),
+      y: Number(clampUnit(center.y).toFixed(4)),
+    };
+  }
+  return { x: 0.5, y: 0.5 };
+}
+
+export interface FormattedDevicePositionVi {
+  primary: string;
+  secondary: string | null;
+  isRoomLocal: boolean;
+}
+
+/**
+ * Format a normalized sensor coordinate into human-readable Vietnamese real-world meters.
+ */
+export function formatDevicePositionMetersVi(
+  point: Point2D | null | undefined,
+  polygon?: readonly Point2D[] | null
+): FormattedDevicePositionVi {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return {
+      primary: 'Chưa chấm tọa độ',
+      secondary: null,
+      isRoomLocal: false,
+    };
+  }
+
+  const floorM = normalizedToFloorMeters(point);
+  const floorLabel = `Sàn: ${floorM.x.toFixed(1)} m × ${floorM.y.toFixed(1)} m`;
+  const roomLocal = normalizedToRoomLocalMeters(point, polygon);
+
+  if (roomLocal) {
+    return {
+      primary: `Tây ${roomLocal.localXM.toFixed(1)} m · Bắc ${roomLocal.localYM.toFixed(1)} m`,
+      secondary: floorLabel,
+      isRoomLocal: true,
+    };
+  }
+
+  return {
+    primary: `X: ${floorM.x.toFixed(1)} m · Y: ${floorM.y.toFixed(1)} m`,
+    secondary: `Toàn sàn ${TQB_BUILDING_WIDTH_M.toFixed(0)} × ${TQB_BUILDING_DEPTH_M.toFixed(1)} m`,
+    isRoomLocal: false,
+  };
+}
+
 

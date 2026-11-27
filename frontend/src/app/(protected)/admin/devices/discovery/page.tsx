@@ -12,11 +12,14 @@ import {
 } from '@/components/ui/primitives';
 import { useAuthStore } from '@/features/auth/store';
 import { OneTimeKeyDialog } from '@/features/devices/components/OneTimeKeyDialog';
+import { RoomSensorPositionPicker } from '@/features/devices/components/RoomSensorPositionPicker';
 import {
+  useDevicesQuery,
   useDiscoveredDevicesQuery,
   useRegisterDeviceMutation,
 } from '@/features/devices/queries';
 import { useRoomsQuery } from '@/features/rooms/queries';
+import { getDefaultDevicePositionForRoom } from '@/lib/floorplan/coords';
 import {
   formatRelativeTimeVi,
   formatVietnamDateTime,
@@ -52,9 +55,14 @@ export default function DeviceDiscoveryPage() {
     capabilities.canManageDevices
   );
   const roomsQuery = useRoomsQuery({ page: 0, size: 100 });
+  const existingDevicesQuery = useDevicesQuery(
+    { page: 0, size: 100 },
+    capabilities.canViewDevices
+  );
   const registerMutation = useRegisterDeviceMutation();
 
   const rooms = roomsQuery.data?.content ?? [];
+  const existingDevices = existingDevicesQuery.data?.content ?? [];
   const discoveredList = discoveryQuery.data ?? [];
 
   const [claimingDevice, setClaimingDevice] =
@@ -86,16 +94,18 @@ export default function DeviceDiscoveryPage() {
   });
 
   const openClaimModal = (item: DiscoveredDeviceResponse) => {
+    const initialRoom = rooms[0] ?? null;
+    const defaultPos = getDefaultDevicePositionForRoom(initialRoom);
     setClaimingDevice(item);
     setClaimForm({
       hardwareId: item.hardwareId,
       name: `Trạm đo ${item.hardwareId}`,
       zoneId: 'ZONE_FLOOR_1',
-      roomId: rooms[0]?.id ?? '',
+      roomId: initialRoom?.id ?? '',
       deviceType: 'ESP32_MULTI_SENSOR',
       location: '',
-      posX: '0.5',
-      posY: '0.5',
+      posX: String(defaultPos.x),
+      posY: String(defaultPos.y),
     });
     setClaimError(null);
   };
@@ -352,9 +362,18 @@ export default function DeviceDiscoveryPage() {
               <select
                 id="claim-room"
                 value={claimForm.roomId}
-                onChange={(e) =>
-                  setClaimForm((p) => ({ ...p, roomId: e.target.value }))
-                }
+                onChange={(e) => {
+                  const nextRoomId = e.target.value;
+                  const targetRoom =
+                    rooms.find((r) => r.id === nextRoomId) ?? null;
+                  const defaultPos = getDefaultDevicePositionForRoom(targetRoom);
+                  setClaimForm((p) => ({
+                    ...p,
+                    roomId: nextRoomId,
+                    posX: String(defaultPos.x),
+                    posY: String(defaultPos.y),
+                  }));
+                }}
                 className="select text-xs"
               >
                 <option value="">-- Chọn phòng đọc --</option>
@@ -401,43 +420,26 @@ export default function DeviceDiscoveryPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="claim-x" className="label">
-                Tọa độ tương đối X [0.0 - 1.0]
-              </label>
-              <input
-                id="claim-x"
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                value={claimForm.posX}
-                onChange={(e) =>
-                  setClaimForm((p) => ({ ...p, posX: e.target.value }))
-                }
-                className="input text-xs tabular"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="claim-y" className="label">
-                Tọa độ tương đối Y [0.0 - 1.0]
-              </label>
-              <input
-                id="claim-y"
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                value={claimForm.posY}
-                onChange={(e) =>
-                  setClaimForm((p) => ({ ...p, posY: e.target.value }))
-                }
-                className="input text-xs tabular"
-              />
-            </div>
-          </div>
+          <RoomSensorPositionPicker
+            idPrefix="claim-pos"
+            room={rooms.find((r) => r.id === claimForm.roomId) ?? null}
+            value={{
+              x: Number.isFinite(parseFloat(claimForm.posX))
+                ? parseFloat(claimForm.posX)
+                : 0.5,
+              y: Number.isFinite(parseFloat(claimForm.posY))
+                ? parseFloat(claimForm.posY)
+                : 0.5,
+            }}
+            onChange={(next) =>
+              setClaimForm((p) => ({
+                ...p,
+                posX: String(next.x),
+                posY: String(next.y),
+              }))
+            }
+            siblingDevices={existingDevices}
+          />
 
           <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
             <button

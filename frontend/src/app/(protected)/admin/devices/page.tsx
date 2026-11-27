@@ -20,12 +20,14 @@ import {
 } from '@/components/ui/primitives';
 import { useAuthStore } from '@/features/auth/store';
 import { OneTimeKeyDialog } from '@/features/devices/components/OneTimeKeyDialog';
+import { RoomSensorPositionPicker } from '@/features/devices/components/RoomSensorPositionPicker';
 import {
   useDevicesQuery,
   useRegisterDeviceMutation,
   useToggleDeviceStatusMutation,
 } from '@/features/devices/queries';
 import { useRoomsQuery } from '@/features/rooms/queries';
+import { getDefaultDevicePositionForRoom } from '@/lib/floorplan/coords';
 import {
   formatRelativeTimeVi,
   formatVietnamDateTime,
@@ -542,9 +544,18 @@ function AdminDevicesPageContent() {
               <select
                 id="reg-room"
                 value={registerForm.roomId}
-                onChange={(e) =>
-                  setRegisterForm((p) => ({ ...p, roomId: e.target.value }))
-                }
+                onChange={(e) => {
+                  const nextRoomId = e.target.value;
+                  const targetRoom =
+                    rooms.find((r) => r.id === nextRoomId) ?? null;
+                  const defaultPos = getDefaultDevicePositionForRoom(targetRoom);
+                  setRegisterForm((p) => ({
+                    ...p,
+                    roomId: nextRoomId,
+                    posX: String(defaultPos.x),
+                    posY: String(defaultPos.y),
+                  }));
+                }}
                 className="select text-xs"
               >
                 <option value="">-- Chưa chọn phòng --</option>
@@ -591,43 +602,26 @@ function AdminDevicesPageContent() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor="reg-posx" className="label">
-                Tọa độ X [0.0 - 1.0]
-              </label>
-              <input
-                id="reg-posx"
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                value={registerForm.posX}
-                onChange={(e) =>
-                  setRegisterForm((p) => ({ ...p, posX: e.target.value }))
-                }
-                className="input text-xs tabular"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="reg-posy" className="label">
-                Tọa độ Y [0.0 - 1.0]
-              </label>
-              <input
-                id="reg-posy"
-                type="number"
-                step="0.01"
-                min={0}
-                max={1}
-                value={registerForm.posY}
-                onChange={(e) =>
-                  setRegisterForm((p) => ({ ...p, posY: e.target.value }))
-                }
-                className="input text-xs tabular"
-              />
-            </div>
-          </div>
+          <RoomSensorPositionPicker
+            idPrefix="reg-pos"
+            room={rooms.find((r) => r.id === registerForm.roomId) ?? null}
+            value={{
+              x: Number.isFinite(parseFloat(registerForm.posX))
+                ? parseFloat(registerForm.posX)
+                : 0.5,
+              y: Number.isFinite(parseFloat(registerForm.posY))
+                ? parseFloat(registerForm.posY)
+                : 0.5,
+            }}
+            onChange={(next) =>
+              setRegisterForm((p) => ({
+                ...p,
+                posX: String(next.x),
+                posY: String(next.y),
+              }))
+            }
+            siblingDevices={devices}
+          />
 
           <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
             <button
