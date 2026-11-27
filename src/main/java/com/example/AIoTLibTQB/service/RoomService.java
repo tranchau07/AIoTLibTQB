@@ -2,6 +2,7 @@ package com.example.AIoTLibTQB.service;
 
 import com.example.AIoTLibTQB.document.FurnitureAuditEntry;
 import com.example.AIoTLibTQB.document.FurnitureItemDoc;
+import com.example.AIoTLibTQB.document.Point2D;
 import com.example.AIoTLibTQB.document.Room;
 import com.example.AIoTLibTQB.document.RoomFurnitureLayout;
 import com.example.AIoTLibTQB.document.RoomThresholdConfig;
