@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LogIn, UserPlus, Info, CheckCircle2, AlertCircle } from 'lucide-react';
+import { LogIn, UserPlus, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useLoginMutation, useRegisterMutation } from '@/features/auth/queries';
 import { useAuthStore } from '@/features/auth/store';
 import { ApiError } from '@/lib/http/error-mapper';
@@ -14,12 +14,11 @@ export default function LoginPage() {
   const loginMutation = useLoginMutation();
   const registerMutation = useRegisterMutation();
 
-  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register'>('login');
 
   // Login form state
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [kioskMode, setKioskMode] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
 
@@ -38,6 +37,17 @@ export default function LoginPage() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [cooldownSeconds]);
+
+  const switchToRegister = () => {
+    setMode('register');
+    setRegError(null);
+    setRegSuccess(null);
+  };
+
+  const switchToLogin = () => {
+    setMode('login');
+    setErrorMessage(null);
+  };
 
   const handleLoginSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -58,8 +68,8 @@ export default function LoginPage() {
       { username: trimmedUsername, password },
       {
         onSuccess: (res) => {
-          setTokens(res.token, res.refreshToken, kioskMode);
-          router.push(kioskMode ? '/kiosk' : '/dashboard');
+          setTokens(res.token, res.refreshToken, false);
+          router.push('/dashboard');
         },
         onError: (err) => {
           if (err instanceof ApiError) {
@@ -117,9 +127,9 @@ export default function LoginPage() {
                 router.push('/dashboard');
               },
               onError: () => {
-                // If auto-login fails, switch back to login tab with username prefilled
+                // If auto-login fails, switch back to login mode with username prefilled
                 setUsername(trimmedUsername);
-                setActiveTab('login');
+                setMode('login');
               },
             }
           );
@@ -152,37 +162,13 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Tab Switcher: Đăng nhập | Đăng ký */}
-        <div className="segmented mb-5">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('login');
-              setErrorMessage(null);
-            }}
-            className={`segmented-item flex-1 justify-center ${
-              activeTab === 'login' ? 'segmented-item-active' : ''
-            }`}
-          >
-            <LogIn className="h-3.5 w-3.5" />
-            <span>Đăng nhập</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('register');
-              setRegError(null);
-            }}
-            className={`segmented-item flex-1 justify-center ${
-              activeTab === 'register' ? 'segmented-item-active' : ''
-            }`}
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            <span>Đăng ký</span>
-          </button>
+        <div className="mb-4 border-t border-slate-100 pt-4">
+          <h2 className="text-sm font-semibold text-slate-800">
+            {mode === 'login' ? 'Đăng nhập' : 'Đăng ký tài khoản'}
+          </h2>
         </div>
 
-        {activeTab === 'login' ? (
+        {mode === 'login' ? (
           <div>
             {errorMessage && (
               <div
@@ -190,7 +176,7 @@ export default function LoginPage() {
                 aria-live="assertive"
                 className="mb-4 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-800"
               >
-                <AlertCircle className="h-4 w-4 shrink-0 text-red-600 mt-0.5" />
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
                 <div>
                   <p>{errorMessage}</p>
                   {cooldownSeconds > 0 && (
@@ -235,23 +221,6 @@ export default function LoginPage() {
                 />
               </div>
 
-              <div className="flex items-center gap-2 pt-0.5">
-                <input
-                  id="login-kiosk-mode"
-                  type="checkbox"
-                  checked={kioskMode}
-                  onChange={(e) => setKioskMode(e.target.checked)}
-                  disabled={isLocked}
-                  className="checkbox"
-                />
-                <label
-                  htmlFor="login-kiosk-mode"
-                  className="cursor-pointer text-xs text-slate-600 select-none"
-                >
-                  Chế độ Kiosk TV (sảnh thư viện)
-                </label>
-              </div>
-
               <button
                 type="submit"
                 disabled={isLocked}
@@ -268,20 +237,15 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {/* Helper Info Box */}
-            <div className="mt-5 rounded-md border border-slate-200 bg-slate-50/80 p-3 text-2xs text-slate-600 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
-              <div className="flex items-center gap-1.5 font-medium text-slate-800 dark:text-slate-200">
-                <Info className="h-3.5 w-3.5 text-brand-600" />
-                <span>Thông tin tài khoản hệ thống</span>
-              </div>
-              <ul className="mt-1.5 space-y-1 list-disc list-inside">
-                <li>
-                  Tài khoản Quản trị viên khởi tạo: <code className="font-mono font-semibold text-slate-900 dark:text-slate-100">admin</code>
-                </li>
-                <li>
-                  Chưa có tài khoản? Nhấn tab <strong className="text-brand-600 font-medium">Đăng ký</strong> phía trên để tạo tài khoản mới tức thì.
-                </li>
-              </ul>
+            <div className="mt-3 flex items-center justify-end gap-1 text-xs">
+              <span className="text-slate-500">Chưa có tài khoản?</span>
+              <button
+                type="button"
+                onClick={switchToRegister}
+                className="font-medium text-brand-600 hover:text-brand-700 hover:underline"
+              >
+                Đăng ký
+              </button>
             </div>
           </div>
         ) : (
@@ -385,16 +349,16 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <p className="mt-4 text-center text-2xs text-slate-500">
-              Đã có tài khoản?{' '}
+            <div className="mt-3 flex items-center justify-end gap-1 text-xs">
+              <span className="text-slate-500">Đã có tài khoản?</span>
               <button
                 type="button"
-                onClick={() => setActiveTab('login')}
-                className="font-medium text-brand-600 hover:underline"
+                onClick={switchToLogin}
+                className="font-medium text-brand-600 hover:text-brand-700 hover:underline"
               >
-                Đăng nhập tại đây
+                Đăng nhập
               </button>
-            </p>
+            </div>
           </div>
         )}
       </div>
